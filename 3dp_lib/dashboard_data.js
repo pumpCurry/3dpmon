@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
- * @version 1.390.1543 (PR #439)
+ * @version 1.390.1580 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 19:10:36
+ * @lastModified 2026-09-01 13:38:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -31,6 +31,7 @@
 
 // プリセットフィラメント情報を取り込む
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
+import { createEmptyMaterialAccountingSpoolMountStore } from "./printer_core/dashboard_material_accounting_mount_store.js";
 
 
 /**
@@ -426,6 +427,15 @@ export const monitorData = {
       materialSourceLedgerWrites: "shadow-only",
     },
   },
+  /**
+   * Gate 18.9H: operator-managed MaterialSource SpoolMount production store。
+   * CFS/CFS-C/外部スプールを含む任意のMaterialSourceへ、3DPmon管理スプールを
+   * operator確認付きでmount/unmount/replaceするための権威storeである。
+   * ここへ保存してもlegacy hostSpoolMap、usageHistory、スプール残量、print bindingへは
+   * 自動投影しない。production操作の成功判定はIndexedDB CAS成功時だけ行う。
+   * @type {{schemaVersion:number, authority:string, storeRevision:number, storeDigest:string, spoolMounts:Array<Object>, events:Array<Object>, conflicts:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
+   */
+  materialAccountingSpoolMountStore: createEmptyMaterialAccountingSpoolMountStore(),
    /**
    * Gate 19 prep: 物理コマンド復旧ラッチ。
    * CFS select/load/unloadなど物理状態を変えるコマンドがsubmitted/post-observed/unknownで終わった場合に、

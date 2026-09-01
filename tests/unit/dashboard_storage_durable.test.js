@@ -1,8 +1,33 @@
 /**
- * @fileoverview dashboard_storage.js の耐久保存 API テスト
- * O4 candidate 保存後に baseline commit へ進む前、IndexedDB flush 完了を待つ契約を検証する。
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 storage durable API 単体テスト
+ * @file dashboard_storage_durable.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_storage_durable_test
+ *
+ * 【機能内容サマリ】
+ * - IndexedDB flush完了を待つ耐久保存契約を検証
+ * - Gate 18.9H SpoolMount production storeのCAS commit境界を検証
+ *
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1580 (PR #440)
+ * @since   1.390.1580 (PR #440)
+ * @lastModified 2026-09-01 13:38:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+import {
+  createEmptyMaterialAccountingSpoolMountStore,
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
+  normalizeStoredMaterialAccountingSpoolMountStore,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
 
 class LocalStorageStub {
   constructor() { this._m = new Map(); }
@@ -56,13 +81,45 @@ const mocks = vi.hoisted(() => ({
         migrationJournalIsEvidenceOnly: true,
       },
     },
+    materialAccountingMigrationShadowStore: {},
+    materialAccountingPrintBindingStore: {},
+    materialAccountingSpoolMountStore: {
+      schemaVersion: 1,
+      authority: "material-accounting-spool-mount-store",
+      storeRevision: 0,
+      storeDigest: "",
+      spoolMounts: [],
+      events: [],
+      conflicts: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        operatorManaged: true,
+        deviceObservationWrites: false,
+        physicalCommandWrites: false,
+        legacyHostSpoolMapWrites: false,
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        filamentLedgerWrites: false,
+        printBindingWrites: false,
+      },
+    },
+    physicalCommandRecoveryLatch: {},
     hostSpoolMap: {},
     hostCameraToggle: {},
     spoolSerialCounter: 0
   },
   queueSharedWrite: vi.fn((key) => { mocks.events.push(`queue:${key}`); }),
   queueMachineWrite: vi.fn((host) => { mocks.events.push(`machine:${host}`); }),
-  flushIdb: vi.fn(async () => { mocks.events.push("flush"); })
+  flushIdb: vi.fn(async () => { mocks.events.push("flush"); }),
+  compareAndSwapSharedValue: vi.fn(async () => ({
+    ok: true,
+    casApplied: true,
+    backend: "indexedDB",
+    key: "materialAccountingSpoolMountStore",
+    reason: "cas-applied",
+    currentDigest: "digest:base",
+    nextDigest: "digest:next",
+  }))
 }));
 
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({
@@ -84,10 +141,15 @@ vi.mock("../../3dp_lib/dashboard_storage_idb.js", () => ({
   flushIdb: mocks.flushIdb,
   exportAllIdb: vi.fn(),
   importAllIdb: vi.fn(),
+  compareAndSwapSharedValue: mocks.compareAndSwapSharedValue,
   setIdbDbName: vi.fn()
 }));
 
-const { initStorage, saveUnifiedStorageDurably } = await import("../../3dp_lib/dashboard_storage.js");
+const {
+  initStorage,
+  saveUnifiedStorageDurably,
+  commitMaterialAccountingSpoolMountStoreDurably,
+} = await import("../../3dp_lib/dashboard_storage.js");
 
 beforeEach(async () => {
   mocks.events.length = 0;
@@ -116,10 +178,27 @@ beforeEach(async () => {
       migrationJournalIsEvidenceOnly: true,
     },
   };
+  mocks.monitorData.materialAccountingMigrationShadowStore = {};
+  mocks.monitorData.materialAccountingPrintBindingStore = {};
+  mocks.monitorData.materialAccountingSpoolMountStore = createEmptyMaterialAccountingSpoolMountStore();
+  mocks.monitorData.physicalCommandRecoveryLatch = {};
+  mocks.monitorData.hostSpoolMap = {};
+  mocks.monitorData.usageHistory = [];
+  mocks.monitorData.filamentSpools = [];
   mocks.queueSharedWrite.mockClear();
   mocks.queueMachineWrite.mockClear();
   mocks.flushIdb.mockClear();
   mocks.flushIdb.mockImplementation(async () => { mocks.events.push("flush"); });
+  mocks.compareAndSwapSharedValue.mockClear();
+  mocks.compareAndSwapSharedValue.mockResolvedValue({
+    ok: true,
+    casApplied: true,
+    backend: "indexedDB",
+    key: "materialAccountingSpoolMountStore",
+    reason: "cas-applied",
+    currentDigest: "digest:base",
+    nextDigest: "digest:next",
+  });
   await initStorage();
 });
 
@@ -135,6 +214,7 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("hostObservationWatermark", mocks.monitorData.hostObservationWatermark);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialSourceObservations", mocks.monitorData.materialSourceObservations);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialAccountingMigrationJournal", mocks.monitorData.materialAccountingMigrationJournal);
+    expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialAccountingSpoolMountStore", mocks.monitorData.materialAccountingSpoolMountStore);
     expect(mocks.events.indexOf("queue:inferredCandidateStore")).toBeGreaterThanOrEqual(0);
     expect(mocks.events[mocks.events.length - 1]).toBe("flush");
   });
@@ -171,4 +251,107 @@ describe("saveUnifiedStorageDurably", () => {
       globalThis.localStorage.setItem = originalSetItem;
     }
   });
+
+  it("SpoolMount production commitはCAS成功後だけmonitorDataを更新する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const operation = createMountOperationEvent();
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+    });
+
+    expect(result).toMatchObject({ ok: true, casApplied: true, reason: "cas-applied" });
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+      expectedDigest: baseStore.storeDigest,
+      nextValue: nextStore,
+    }));
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(nextStore);
+    expect(mocks.monitorData.hostSpoolMap).toEqual({});
+    expect(mocks.monitorData.usageHistory).toEqual([]);
+    expect(mocks.monitorData.filamentSpools).toEqual([]);
+  });
+
+  it("SpoolMount production commitはCAS不一致ならメモリを更新しない", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const operation = createMountOperationEvent();
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.compareAndSwapSharedValue.mockResolvedValueOnce({
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingSpoolMountStore",
+      reason: "cas-mismatch",
+      currentDigest: "digest:other",
+      nextDigest: nextStore.storeDigest,
+    });
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "cas-mismatch" });
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+  });
+
+  it("SpoolMount production commitはlocalStorage fallbackでは成功扱いにしない", async () => {
+    mocks.idbAvailable = false;
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const operation = createMountOperationEvent();
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore: normalizeStoredMaterialAccountingSpoolMountStore({ events: [operation] }),
+      operation,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      casApplied: false,
+      reason: "production-cas-unavailable",
+    });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
 });
+
+/**
+ * テスト用SpoolMount operation eventを生成する。
+ *
+ * @function createMountOperationEvent
+ * @param {Object} overrides - 上書き値。
+ * @returns {Object} operation event。
+ */
+function createMountOperationEvent(overrides = {}) {
+  const payload = overrides.payload || {
+    kind: "operator-mount",
+    operatorActionId: "action:mount:test",
+    materialSourceId: "source:k2:cfs:1a",
+    spoolId: "spool:a",
+  };
+  return {
+    eventId: overrides.eventId || "event:mount:test",
+    kind: overrides.kind || "operator-mount",
+    operatorActionId: overrides.operatorActionId || "action:mount:test",
+    operationId: overrides.operationId || "operation:mount:test",
+    payload,
+    payloadDigest: overrides.payloadDigest || createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+    recordRefs: overrides.recordRefs || [],
+    createdAt: overrides.createdAt || "2026-09-01T04:40:00.000Z",
+    actor: overrides.actor || "operator",
+  };
+}

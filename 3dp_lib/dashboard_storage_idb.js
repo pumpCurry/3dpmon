@@ -22,10 +22,11 @@
  * - {@link flushIdb}：キューを即時書き込み
  * - {@link exportAllIdb}：全データを単一オブジェクトとして読み出し
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
+ * - {@link compareAndSwapSharedValue}：shared keyを同一transaction内でCAS更新する
  *
- * @version 1.390.1516 (PR #438)
+ * @version 1.390.1580 (PR #440)
  * @since   1.390.787 (PR #366)
- * @lastModified 2026-08-31 14:40:00
+ * @lastModified 2026-09-01 13:38:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -125,6 +126,8 @@ const SHARED_KEYS = [
   "materialAccountingMigrationShadowStore",
   // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを保存する。
   "materialAccountingPrintBindingStore",
+  // ★ Gate 18.9H: operator-managed MaterialSource SpoolMount production storeを保存する。
+  "materialAccountingSpoolMountStore",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap",
   "hostCameraToggle",
@@ -356,6 +359,141 @@ export async function importAllIdb(data) {
   }
 
   await _txComplete(tx);
+}
+
+/**
+ * shared store内の単一keyをcompare-and-swapで更新する。
+ *
+ * 【詳細説明】
+ * - side-effectを伴うproduction authority storeは、通常の非同期キュー保存では成功境界にできない。
+ * - 本関数は同一IndexedDB transaction内で現在値を読み、呼び出し元が渡したdigestと一致した場合だけ
+ *   次値を書き込む。digest不一致の場合は値を書き換えず`casApplied:false`を返す。
+ * - 同一keyに未flushのキュー書き込みが残っているとCAS直後に古い値で上書きされ得るため、
+ *   CAS開始時にそのkeyのpending shared writeを破棄する。
+ *
+ * @function compareAndSwapSharedValue
+ * @param {Object} input - CAS入力。
+ * @param {string} input.key - shared store key。
+ * @param {string} input.expectedDigest - 期待する現在値digest。
+ * @param {Function} input.createDigest - 値からdigestを生成する関数。
+ * @param {*} input.nextValue - 書き込む次値。
+ * @returns {Promise<{ok:boolean, casApplied:boolean, backend:string, key:string, reason:string, currentDigest?:string, nextDigest?:string, error?:string}>} CAS結果。
+ * @example
+ * const result = await compareAndSwapSharedValue({ key, expectedDigest, createDigest, nextValue });
+ */
+export async function compareAndSwapSharedValue(input = {}) {
+  const key = String(input.key || "").trim();
+  const expectedDigest = String(input.expectedDigest || "").trim();
+  const createDigest = input.createDigest;
+  if (!key || !SHARED_KEYS.includes(key)) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "invalid-shared-key" };
+  }
+  if (!expectedDigest || typeof createDigest !== "function") {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "invalid-cas-input" };
+  }
+  if (!_useIdb || !_db) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "indexeddb-unavailable" };
+  }
+
+  _pendingShared.delete(key);
+
+  try {
+    const nextValue = _cloneForStorageQueue(input.nextValue);
+    const nextDigest = createDigest(nextValue);
+    return await new Promise((resolve) => {
+      let settledResult = null;
+      const tx = _db.transaction([STORE_SHARED], "readwrite");
+      const sharedStore = tx.objectStore(STORE_SHARED);
+      const req = sharedStore.get(key);
+
+      req.onsuccess = () => {
+        try {
+          const currentValue = req.result ? req.result.value : undefined;
+          const currentDigest = createDigest(currentValue);
+          if (currentDigest !== expectedDigest) {
+            settledResult = {
+              ok: false,
+              casApplied: false,
+              backend: "indexedDB",
+              key,
+              reason: "cas-mismatch",
+              currentDigest,
+              nextDigest,
+            };
+            return;
+          }
+          sharedStore.put({ key, value: nextValue });
+          settledResult = {
+            ok: true,
+            casApplied: true,
+            backend: "indexedDB",
+            key,
+            reason: "cas-applied",
+            currentDigest,
+            nextDigest,
+          };
+        } catch (error) {
+          settledResult = {
+            ok: false,
+            casApplied: false,
+            backend: "indexedDB",
+            key,
+            reason: "digest-or-write-failed",
+            error: error?.message || String(error),
+          };
+          try { tx.abort(); } catch { /* transaction may already be finishing */ }
+        }
+      };
+      req.onerror = () => {
+        settledResult = {
+          ok: false,
+          casApplied: false,
+          backend: "indexedDB",
+          key,
+          reason: "indexeddb-read-failed",
+          error: req.error?.message || String(req.error || ""),
+        };
+      };
+      tx.oncomplete = () => {
+        resolve(settledResult || {
+          ok: false,
+          casApplied: false,
+          backend: "indexedDB",
+          key,
+          reason: "indexeddb-write-failed",
+        });
+      };
+      tx.onerror = () => {
+        resolve({
+          ok: false,
+          casApplied: false,
+          backend: "indexedDB",
+          key,
+          reason: "indexeddb-write-failed",
+          error: tx.error?.message || String(tx.error || ""),
+        });
+      };
+      tx.onabort = () => {
+        resolve({
+          ok: false,
+          casApplied: false,
+          backend: "indexedDB",
+          key,
+          reason: "indexeddb-write-failed",
+          error: tx.error?.message || String(tx.error || ""),
+        });
+      };
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key,
+      reason: "digest-or-write-failed",
+      error: error?.message || String(error),
+    };
+  }
 }
 
 // ==============================

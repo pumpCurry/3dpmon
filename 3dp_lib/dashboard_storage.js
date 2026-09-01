@@ -17,6 +17,7 @@
  * - {@link setStorageLogEnabled}：ログ出力有効化
  * - {@link saveUnifiedStorage}：全データ保存
  * - {@link saveUnifiedStorageDurably}：全データを耐久保存完了まで待つ
+ * - {@link commitMaterialAccountingSpoolMountStoreDurably}：SpoolMount storeをCAS境界で耐久保存
  * - {@link restoreUnifiedStorage}：全データ復元
  * - {@link restoreLegacyStoredData}：レガシーデータ読込
  * - {@link cleanupLegacy}：レガシー削除
@@ -27,9 +28,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1543 (PR #439)
+ * @version 1.390.1580 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 19:10:36
+ * @lastModified 2026-09-01 13:38:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -47,6 +48,10 @@ import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashbo
 import { normalizeStoredMaterialAccountingMigrationJournal } from "./printer_core/dashboard_material_accounting_migration_journal.js";
 import { normalizeStoredMaterialAccountingMigrationShadowCommitStore } from "./printer_core/dashboard_material_accounting_migration_shadow_commit.js";
 import { normalizeStoredMaterialAccountingPrintBindingStore } from "./printer_core/dashboard_material_accounting_print_binding.js";
+import {
+  createMaterialAccountingSpoolMountStoreDigest,
+  normalizeStoredMaterialAccountingSpoolMountStore,
+} from "./printer_core/dashboard_material_accounting_mount_store.js";
 import { normalizeStoredPhysicalCommandRecoveryLatchStore } from "./printer_core/dashboard_physical_command_recovery_latch.js";
 import {
   initIdb,
@@ -57,6 +62,7 @@ import {
   flushIdb,
   exportAllIdb,
   importAllIdb,
+  compareAndSwapSharedValue,
   setIdbDbName
 } from "./dashboard_storage_idb.js";
 
@@ -218,6 +224,64 @@ function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
     (restoredStore.ledgerEvents || []).length >= (currentStore.ledgerEvents || []).length
       ? restoredStore
       : currentStore;
+  return true;
+}
+
+/**
+ * operator-managed SpoolMount production storeを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - このstoreはGate 18.9Hで初めてproduction authorityになるが、restore/import時に
+ *   legacy `hostSpoolMap`、`usageHistory`、管理スプール残量、print binding storeへ投影しない。
+ * - 起動時の空storeへ保存済みstoreを復元する場合は正規化済みstoreをそのまま採用する。
+ * - 既に別の非空storeが存在する状態で異なるstoreをimportした場合はfirst-winせず、
+ *   incoming store全体をretainedUnsupportedEntriesへ隔離して既存authorityを維持する。
+ *
+ * @private
+ * @function _mergeMaterialAccountingSpoolMountStore
+ * @param {Object|null|undefined} incomingStore - 復元またはimportされたSpoolMount store候補。
+ * @returns {boolean} 有効なstore候補を処理した場合はtrue。
+ */
+function _mergeMaterialAccountingSpoolMountStore(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return false;
+  }
+  const currentStore = normalizeStoredMaterialAccountingSpoolMountStore(
+    monitorData.materialAccountingSpoolMountStore
+  );
+  const restoredStore = normalizeStoredMaterialAccountingSpoolMountStore(incomingStore);
+  const currentDigest = createMaterialAccountingSpoolMountStoreDigest(currentStore);
+  const restoredDigest = createMaterialAccountingSpoolMountStoreDigest(restoredStore);
+  const currentIsEmpty = (currentStore.spoolMounts || []).length === 0
+    && (currentStore.events || []).length === 0
+    && (currentStore.conflicts || []).length === 0
+    && (currentStore.retainedUnsupportedEntries || []).length === 0;
+
+  if (currentIsEmpty || currentDigest === restoredDigest) {
+    monitorData.materialAccountingSpoolMountStore = restoredStore;
+    return true;
+  }
+
+  monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
+    ...currentStore,
+    conflicts: [
+      ...(currentStore.conflicts || []),
+      {
+        type: "spool-mount-store-import-conflict",
+        reason: "divergent-non-empty-spool-mount-store",
+        currentDigest,
+        incomingDigest: restoredDigest,
+      },
+    ],
+    retainedUnsupportedEntries: [
+      ...(currentStore.retainedUnsupportedEntries || []),
+      {
+        kind: "spoolMountStore",
+        reason: "divergent-non-empty-spool-mount-store",
+        record: restoredStore,
+      },
+    ],
+  });
   return true;
 }
 
@@ -654,6 +718,12 @@ export async function importAllData(data) {
     _mergeMaterialAccountingPrintBindingStore(data.materialAccountingPrintBindingStore);
   }
 
+  // ── Gate 18.9H: operator-managed SpoolMount production storeをimportする ──
+  //    importしてもlegacy hostSpoolMap / usageHistory / spool残量 / print bindingへは投影しない。
+  if (data.materialAccountingSpoolMountStore && typeof data.materialAccountingSpoolMountStore === "object") {
+    _mergeMaterialAccountingSpoolMountStore(data.materialAccountingSpoolMountStore);
+  }
+
   // ── Gate 19 prep: 物理コマンド復旧ラッチをimportする ──
   //    submitted/post-observed/unknownの未解決証跡だけを保持し、コマンド再送・legacy ledger投影は行わない。
   if (data.physicalCommandRecoveryLatch && typeof data.physicalCommandRecoveryLatch === "object") {
@@ -1030,6 +1100,7 @@ const LS_GLOBAL_FIELDS = [
   "materialAccountingMigrationJournal",
   "materialAccountingMigrationShadowStore",
   "materialAccountingPrintBindingStore",
+  "materialAccountingSpoolMountStore",
   "physicalCommandRecoveryLatch",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
@@ -1180,6 +1251,71 @@ export async function saveUnifiedStorageDurably() {
 }
 
 /**
+ * MaterialAccounting SpoolMount storeをproduction CAS境界で耐久保存する。
+ *
+ * 【詳細説明】
+ * - operator mount/unmount/replaceは物理運用上の権威操作なので、通常のthrottled saveや
+ *   localStorage fallbackを成功境界として扱わない。
+ * - IndexedDB shared store上の現在digestが`baseStoreDigest`と一致した場合だけ`nextStore`を書き込み、
+ *   transaction完了後に初めて`monitorData.materialAccountingSpoolMountStore`を更新する。
+ * - CAS不一致、IndexedDB未使用、operation証跡欠落、保存失敗ではメモリ上のstoreも変更しない。
+ *
+ * @function commitMaterialAccountingSpoolMountStoreDurably
+ * @param {Object} input - commit入力。
+ * @param {string} input.baseStoreDigest - serviceが準備時に見たbase store digest。
+ * @param {Object} input.nextStore - CAS成功時に保存する次store。
+ * @param {Object} input.operation - mount/unmount/replace operation event証跡。
+ * @returns {Promise<{ok:boolean, casApplied:boolean, backend:string, reason:string, key:string, currentDigest?:string, nextDigest?:string, error?:string}>} commit結果。
+ * @example
+ * const result = await commitMaterialAccountingSpoolMountStoreDurably({ baseStoreDigest, nextStore, operation });
+ */
+export async function commitMaterialAccountingSpoolMountStoreDurably(input = {}) {
+  const key = "materialAccountingSpoolMountStore";
+  const baseStoreDigest = String(input.baseStoreDigest || "").trim();
+  const operation = input.operation && typeof input.operation === "object" ? input.operation : null;
+  if (!baseStoreDigest) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "base-store-digest-required" };
+  }
+  if (!operation || !String(operation.eventId || "").trim() || !String(operation.payloadDigest || "").trim()) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "operation-evidence-required" };
+  }
+  if (!_idbInitialized || !isIdbAvailable()) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "production-cas-unavailable" };
+  }
+
+  const normalizedNextStore = normalizeStoredMaterialAccountingSpoolMountStore(input.nextStore);
+  const result = await compareAndSwapSharedValue({
+    key,
+    expectedDigest: baseStoreDigest,
+    createDigest: createMaterialAccountingSpoolMountStoreDigest,
+    nextValue: normalizedNextStore,
+  });
+  if (!result || result.ok !== true || result.casApplied !== true) {
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key,
+      reason: result?.reason || "durable-cas-not-applied",
+      currentDigest: result?.currentDigest,
+      nextDigest: result?.nextDigest,
+      error: result?.error,
+    };
+  }
+
+  monitorData.materialAccountingSpoolMountStore = normalizedNextStore;
+  return {
+    ok: true,
+    casApplied: true,
+    backend: "indexedDB",
+    key,
+    reason: "cas-applied",
+    currentDigest: result.currentDigest,
+    nextDigest: result.nextDigest,
+  };
+}
+
+/**
  * monitorData を per-host 分割形式で localStorage に書き込む。
  * グローバルデータは LS_KEY_GLOBAL に、per-host データは LS_KEY_HOST_PREFIX+hostname に書き込む。
  * 前回書き込みと同一ならスキップする。
@@ -1297,6 +1433,8 @@ function _flushStorage() {
       queueSharedWrite("materialAccountingMigrationShadowStore", monitorData.materialAccountingMigrationShadowStore);
       // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを証跡として保存する。
       queueSharedWrite("materialAccountingPrintBindingStore", monitorData.materialAccountingPrintBindingStore);
+      // ★ Gate 18.9H: operator-managed SpoolMount storeを保存する。production成功判定は専用CASのみで行う。
+      queueSharedWrite("materialAccountingSpoolMountStore", monitorData.materialAccountingSpoolMountStore);
       // ★ Gate 19 prep: 物理コマンド復旧ラッチは未解決確認の証跡のみ保存し、自動再送材料は保存しない。
       queueSharedWrite("physicalCommandRecoveryLatch", monitorData.physicalCommandRecoveryLatch);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
@@ -1841,6 +1979,16 @@ function _restoreFromData(shared, machines) {
   } else {
     monitorData.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(
       monitorData.materialAccountingPrintBindingStore
+    );
+  }
+
+  // ★ Gate 18.9H: operator-managed SpoolMount production storeを復元する。
+  //   復元してもlegacy hostSpoolMapやusage ledgerへは投影せず、専用storeとしてだけ保持する。
+  if (shared?.materialAccountingSpoolMountStore && typeof shared.materialAccountingSpoolMountStore === "object") {
+    _mergeMaterialAccountingSpoolMountStore(shared.materialAccountingSpoolMountStore);
+  } else {
+    monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore(
+      monitorData.materialAccountingSpoolMountStore
     );
   }
 

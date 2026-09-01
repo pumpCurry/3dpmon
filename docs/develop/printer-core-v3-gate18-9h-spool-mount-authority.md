@@ -53,7 +53,7 @@ Status: implemented and tested in `719c69e` + `90ad774`.
 
 H-1b では H-1a の contract を `monitorData` / shared storage / IndexedDB へ接続する。
 
-Status: pending.
+Status: implemented and tested in PR #440 after `335d287`.
 
 対象:
 
@@ -73,6 +73,33 @@ Status: pending.
   `materialAccountingPrintBindingStore` へ投影しない。
 - conflicting open mount は first-win で片方を採用せず、active authority から
   conflict set 全体を外して quarantine する。
+
+実装境界:
+
+- `monitorData.materialAccountingSpoolMountStore` は production mount store の runtime copy
+  として追加済み。
+- 通常の throttled storage flush は backup / export 可視性のために同storeをqueueするが、
+  operator mount / unmount / replace のproduction成功判定には使わない。
+- production write は `commitMaterialAccountingSpoolMountStoreDurably()` だけを通り、
+  IndexedDB の `compareAndSwapSharedValue()` が `casApplied:true` を返した場合のみ
+  runtime store を更新する。
+- localStorage fallback は restore/export 用に正規化済みstoreを保持できるが、
+  production write では `production-cas-unavailable` として失敗させる。
+- import時に既存storeと異なる非空storeが来た場合は、自動mergeやfirst-winを行わず、
+  conflict evidence として `retainedUnsupportedEntries` へ隔離する。
+
+### Gate 18.9H-2: Operator Mount UI
+
+H-2 では、H-1b で永続化された `SpoolMount` をフィラメント管理UIへ接続する。
+
+Status: pending.
+
+対象:
+
+- CFS / CFS-C / external / direct source行から、3DPmon管理スプールを明示mountするUI。
+- restart / reconnect 後に、保存済みmountと現在観測sourceを照合して表示するread-only join。
+- conflict / stale / unknown / provisional source の警告表示。
+- 本番physical CFS command、ledger debit、ItemKeeper projectionはこの段階でも別Gateへ残す。
 
 ## Store Shape
 

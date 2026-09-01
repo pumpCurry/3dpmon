@@ -1,6 +1,24 @@
 /**
- * @fileoverview スモークテスト: データ整合性
- * ストレージの保存/復元/マージで壊れないことを検証
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 data integrity smoke test
+ * @file data_integrity.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module data_integrity_smoke_test
+ *
+ * 【機能内容サマリ】
+ * - ストレージの保存/復元/マージで主要データが壊れないことを検証
+ *
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1580 (PR #440)
+ * @since   1.390.1580 (PR #440)
+ * @lastModified 2026-09-01 13:38:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -35,7 +53,8 @@ vi.doMock("../../3dp_lib/dashboard_storage_idb.js", () => ({
   isIdbAvailable: () => false,
   getIdbCache: () => null,
   queueSharedWrite: vi.fn(),
-  queueMachineWrite: vi.fn()
+  queueMachineWrite: vi.fn(),
+  compareAndSwapSharedValue: vi.fn()
 }));
 
 vi.doMock("../../3dp_lib/dashboard_log_util.js", () => ({

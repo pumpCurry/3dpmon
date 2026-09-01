@@ -1,5 +1,25 @@
 /**
- * @fileoverview dashboard_storage.js の per-host localStorage 分割テスト
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 storage key 単体テスト
+ * @file dashboard_storage.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_storage_test
+ *
+ * 【機能内容サマリ】
+ * - per-host localStorage分割のキー変換を検証
+ * - shared storageへ保存するglobal fieldの網羅性を検証
+ *
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1580 (PR #440)
+ * @since   1.390.1580 (PR #440)
+ * @lastModified 2026-09-01 13:38:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import { describe, it, expect } from "vitest";
 
@@ -65,16 +85,24 @@ describe("ホスト名エンコード/デコード", () => {
 describe("LS_GLOBAL_FIELDS 完全性", () => {
   const LS_GLOBAL_FIELDS = [
     "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
-    "userPresets", "hiddenPresets", "filamentInventory", "currentSpoolId",
-    "materialSourceObservations", "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
+    "userPresets", "hiddenPresets", "favoritePresets", "filamentInventory",
+    "mountHistory", "mountHistorySeq", "mountHistoryRejectedEvents",
+    "hostObservationWatermark", "hostObservationCurrent",
+    "inferredCandidateStore", "inferredDecisionRecoveryRequired",
+    "inferredRecoveryOperationRecoveryRequired", "inferredRecoveryEvents",
+    "pendingUnattributedUsage", "pendingUnattributedUsageArchive",
+    "ledgerRepairRequired", "filamentEventContext", "materialSourceObservations",
+    "materialAccountingMigrationJournal", "materialAccountingMigrationShadowStore",
+    "materialAccountingPrintBindingStore", "materialAccountingSpoolMountStore",
+    "physicalCommandRecoveryLatch", "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
   ];
 
   it("IndexedDB の queueSharedWrite 対象を全て含む", () => {
     // _flushStorage で queueSharedWrite される全キー
     const idbWriteKeys = [
       "appSettings", "filamentSpools", "usageHistory", "filamentPresets",
-      "filamentInventory", "currentSpoolId", "materialSourceObservations", "hostSpoolMap",
-      "hostCameraToggle", "spoolSerialCounter"
+      "filamentInventory", "materialSourceObservations", "materialAccountingSpoolMountStore",
+      "physicalCommandRecoveryLatch", "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
     ];
     idbWriteKeys.forEach(key => {
       expect(LS_GLOBAL_FIELDS).toContain(key);
@@ -86,6 +114,7 @@ describe("LS_GLOBAL_FIELDS 完全性", () => {
     expect(LS_GLOBAL_FIELDS).toContain("hiddenPresets");
     expect(LS_GLOBAL_FIELDS).toContain("hostSpoolMap");
     expect(LS_GLOBAL_FIELDS).toContain("materialSourceObservations");
+    expect(LS_GLOBAL_FIELDS).toContain("materialAccountingSpoolMountStore");
     expect(LS_GLOBAL_FIELDS).toContain("hostCameraToggle");
   });
 });

@@ -1,12 +1,25 @@
 /**
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 storage namespace 単体テスト
  * @file dashboard_storage_namespace.test.js
- * @description setStorageNamespace() がリレー子と standalone の永続データを
- *              localStorage / IndexedDB の両層で物理分離することを検証する。
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_storage_namespace_test
  *
- * 背景: v2.2.1031 spec §6.7 の前提("ブラウザはオリジンが異なるため IDB が分離する")
- * は同一ブラウザ内の ?relay=standalone と readonly では成立しない(クエリ違いで
- * origin は同じ)。setStorageNamespace("relay") でリレー子側を別 DB / 別 LS キーへ
- * 切り替え、standalone の永続データを上書きから守る。
+ * 【機能内容サマリ】
+ * - setStorageNamespace() がリレー子とstandaloneの永続データを物理分離することを検証
+ * - localStorage / IndexedDB の両層で名前空間が切り替わることを検証
+ *
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1580 (PR #440)
+ * @since   1.390.1540 (PR #439)
+ * @lastModified 2026-09-01 13:38:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -78,6 +91,7 @@ vi.mock('../../3dp_lib/dashboard_storage_idb.js', () => ({
   initIdb: vi.fn(), isIdbAvailable: () => false, getIdbCache: () => null,
   queueSharedWrite: vi.fn(), queueMachineWrite: vi.fn(), flushIdb: vi.fn(),
   exportAllIdb: vi.fn(), importAllIdb: vi.fn(),
+  compareAndSwapSharedValue: vi.fn(),
   setIdbDbName: vi.fn((name) => { _idbDbNameCalls.push(name); }),
   getIdbDbName: () => _idbDbNameCalls[_idbDbNameCalls.length - 1] || '3dpmon',
 }));
