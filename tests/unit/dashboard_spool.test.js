@@ -93,6 +93,7 @@ import {
   countAttributionIssuesForHost,
   updateSpool,
   addSpool,
+  deleteSpool,
   setCurrentSpoolId,
   getSpoolMountedLocationLabels,
 } from '../../3dp_lib/dashboard_spool.js';
@@ -108,6 +109,9 @@ const {
   SPOOL_MOUNT_VERIFICATION,
   MATERIAL_IDENTITY_STRENGTH,
 } = await import('../../3dp_lib/printer_core/dashboard_material_accounting_contract.js');
+const {
+  reserveUniversalSpoolAssignment,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_spool_assignment_guard.js');
 
 // =============================================
 // legacy hostSpoolMap と Universal SpoolMount の排他
@@ -186,6 +190,42 @@ describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
 
     expect(ok).toBe(true);
     expect(monitorData.hostSpoolMap).toEqual({ 'K1Max-4A1B': 'S1' });
+  });
+
+  it('Universal OPEN mount済みspoolはdeleteSpoolで廃棄しない', () => {
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
+      mountId: 'mount:k2:1a:S1',
+      materialSourceId: 'source:k2:cfs:1a',
+      spoolId: 'S1',
+      status: SPOOL_MOUNT_STATUS.OPEN,
+      openedAt: '2026-09-01T04:00:00.000Z',
+      mountOperationId: 'operation:k2:1a:S1',
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    })];
+
+    deleteSpool('S1');
+
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
+  });
+
+  it('Universal reservation中のspoolはdeleteSpoolで廃棄しない', () => {
+    const reservation = reserveUniversalSpoolAssignment({
+      spoolId: 'S1',
+      ownerId: 'operation:k2:pending',
+      materialSourceId: 'source:k2:cfs:1a',
+    });
+    expect(reservation.ok).toBe(true);
+
+    try {
+      deleteSpool('S1');
+    } finally {
+      reservation.release();
+    }
+
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
   });
 });
 

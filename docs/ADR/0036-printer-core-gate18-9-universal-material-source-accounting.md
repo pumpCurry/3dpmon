@@ -433,6 +433,17 @@ Gate 18.9H:
 - production writes require durable CAS evidence with `casApplied:true`
 - legacy `hostSpoolMap` is read-only compatibility evidence and same-spool
   cross-backend occupancy blocks Universal mount until explicit migration
+- transport-local source IDs remain aliases; durable MaterialSource IDs are
+  device-scoped, and storage CAS preconditions re-resolve current observations
+  by canonical ID, alias, or source binding digest
+- import only treats current committed Universal `OPEN` mounts or in-flight
+  reservations as reasons to skip legacy `hostSpoolMap`; incoming Universal
+  conflicts are quarantined by the SpoolMount store reconciliation path
+- operator mount / replace require fresh current MaterialSource observation at
+  send time, while unmount can remove an existing 3DPmon-managed mount without
+  requiring fresh provider data
+- legacy spool deletion is blocked while a Universal `OPEN` mount or in-flight
+  reservation still references the managed spool
 - device observations, RFID, selected state, empty/unloaded state, stale
   providers, and physical CFS commands do not close or rewrite SpoolMounts
 - no production spool debit, legacy usage write, physical command enable, or

@@ -28,9 +28,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1585 (PR #440)
+ * @version 1.390.1586 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 16:49:00
+ * @lastModified 2026-09-01 17:02:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -67,6 +67,7 @@ import {
   MATERIAL_SOURCE_KIND,
   createMaterialSourceIdentity,
   createMaterialSourceLocator,
+  createMaterialSourceRecord,
 } from "./printer_core/dashboard_material_accounting_contract.js";
 import {
   initIdb,
@@ -345,8 +346,7 @@ function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends(o
  * 【詳細説明】
  * - import/restoreはlegacy `hostSpoolMap`を直接増やし得るため、通常UIの
  *   `setCurrentSpoolId()` と同じくUniversal `OPEN` mount / in-flight reservationを尊重する。
- * - incoming SpoolMount storeも候補として検査し、同じimport payload内のUniversal mountを
- *   legacy host割当で即座に奪わないようにする。
+ * - まだCASで確定していないincoming Universal storeはここではlegacy割当を奪うauthorityにしない。
  *
  * @private
  * @function _canImportLegacyHostSpoolAssignment
@@ -354,7 +354,6 @@ function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends(o
  * @param {string} input.host - legacy host名。
  * @param {string|null|undefined} input.spoolId - import/restoreされるspool ID。
  * @param {Set<string>} input.validSpoolIds - 現在有効なmanaged spool ID集合。
- * @param {Object|null|undefined=} input.incomingSpoolMountStore - 同一payload内のUniversal SpoolMount store候補。
  * @param {string} input.contextLabel - ログ用context名。
  * @returns {boolean} hostSpoolMapへ取り込んでよい場合はtrue。
  */
@@ -374,11 +373,7 @@ function _canImportLegacyHostSpoolAssignment(input = {}) {
     spoolId,
     store: monitorData.materialAccountingSpoolMountStore,
   });
-  const incomingConflict = findUniversalSpoolAssignmentConflict({
-    spoolId,
-    store: input.incomingSpoolMountStore,
-  });
-  const conflict = currentConflict || incomingConflict;
+  const conflict = currentConflict;
   if (conflict) {
     console.warn(
       `[${contextLabel}] hostSpoolMap["${host}"]: スプール "${spoolId}" はUniversal MaterialSourceで` +
@@ -411,23 +406,45 @@ function _mergeMaterialAccountingSpoolMountStore(incomingStore) {
   const currentStore = normalizeStoredMaterialAccountingSpoolMountStore(
     monitorData.materialAccountingSpoolMountStore
   );
+  monitorData.materialAccountingSpoolMountStore = _createMergedMaterialAccountingSpoolMountStoreTarget(
+    currentStore,
+    incomingStore,
+  );
+  return true;
+}
+
+/**
+ * 現在storeとincoming storeからSpoolMount import/restore後の候補storeを作成する。
+ *
+ * 【詳細説明】
+ * - このhelperはmonitorDataを直接更新しない。
+ * - import時は、この候補storeをIndexedDB CASへ渡し、CAS成功後だけruntimeへ反映する。
+ * - restore時は既存動作どおり候補をruntimeへ反映し、その後にbest-effort CASでshared keyへ戻す。
+ *
+ * @private
+ * @function _createMergedMaterialAccountingSpoolMountStoreTarget
+ * @param {Object} currentStore - 現在の正規化済みSpoolMount store。
+ * @param {Object|null|undefined} incomingStore - import/restore候補store。
+ * @returns {Object} merge候補store。
+ */
+function _createMergedMaterialAccountingSpoolMountStoreTarget(currentStore, incomingStore) {
+  const normalizedCurrentStore = normalizeStoredMaterialAccountingSpoolMountStore(currentStore);
   const restoredStore = _reconcileSpoolMountStoreWithCurrentBackends(incomingStore);
-  const currentDigest = createMaterialAccountingSpoolMountStoreDigest(currentStore);
+  const currentDigest = createMaterialAccountingSpoolMountStoreDigest(normalizedCurrentStore);
   const restoredDigest = createMaterialAccountingSpoolMountStoreDigest(restoredStore);
-  const currentIsEmpty = (currentStore.spoolMounts || []).length === 0
-    && (currentStore.events || []).length === 0
-    && (currentStore.conflicts || []).length === 0
-    && (currentStore.retainedUnsupportedEntries || []).length === 0;
+  const currentIsEmpty = (normalizedCurrentStore.spoolMounts || []).length === 0
+    && (normalizedCurrentStore.events || []).length === 0
+    && (normalizedCurrentStore.conflicts || []).length === 0
+    && (normalizedCurrentStore.retainedUnsupportedEntries || []).length === 0;
 
   if (currentIsEmpty || currentDigest === restoredDigest) {
-    monitorData.materialAccountingSpoolMountStore = restoredStore;
-    return true;
+    return restoredStore;
   }
 
-  monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
-    ...currentStore,
+  return normalizeStoredMaterialAccountingSpoolMountStore({
+    ...normalizedCurrentStore,
     conflicts: [
-      ...(currentStore.conflicts || []),
+      ...(normalizedCurrentStore.conflicts || []),
       {
         type: "spool-mount-store-import-conflict",
         reason: "divergent-non-empty-spool-mount-store",
@@ -436,7 +453,7 @@ function _mergeMaterialAccountingSpoolMountStore(incomingStore) {
       },
     ],
     retainedUnsupportedEntries: [
-      ...(currentStore.retainedUnsupportedEntries || []),
+      ...(normalizedCurrentStore.retainedUnsupportedEntries || []),
       {
         kind: "spoolMountStore",
         reason: "divergent-non-empty-spool-mount-store",
@@ -444,7 +461,53 @@ function _mergeMaterialAccountingSpoolMountStore(incomingStore) {
       },
     ],
   });
-  return true;
+}
+
+/**
+ * importされたSpoolMount production storeをCAS成功後だけruntimeへ反映する。
+ *
+ * 【詳細説明】
+ * - import payloadは外部入力であり、incoming Universal `OPEN` mountだけでlegacy割当を黙って破棄しない。
+ * - 現在runtime storeをbase `C`、incomingをmergeした結果をtarget `R`として構築し、
+ *   IndexedDB shared keyがまだ`C`であることをCASで確認できた場合だけ`monitorData`へ反映する。
+ *
+ * @private
+ * @function _importMaterialAccountingSpoolMountStoreDurably
+ * @param {Object|null|undefined} incomingStore - import候補SpoolMount store。
+ * @returns {Promise<Object|null>} CAS結果、または処理対象外ならnull。
+ */
+async function _importMaterialAccountingSpoolMountStoreDurably(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return null;
+  }
+  const baseStore = normalizeStoredMaterialAccountingSpoolMountStore(
+    monitorData.materialAccountingSpoolMountStore
+  );
+  const targetStore = _createMergedMaterialAccountingSpoolMountStoreTarget(baseStore, incomingStore);
+  const baseDigest = createMaterialAccountingSpoolMountStoreDigest(baseStore);
+  const targetDigest = createMaterialAccountingSpoolMountStoreDigest(targetStore);
+  if (baseDigest === targetDigest) {
+    monitorData.materialAccountingSpoolMountStore = targetStore;
+    return { ok: true, casApplied: false, backend: "indexedDB", key: "materialAccountingSpoolMountStore", reason: "unchanged" };
+  }
+  if (!_idbInitialized || !isIdbAvailable()) {
+    monitorData.materialAccountingSpoolMountStore = targetStore;
+    return { ok: true, casApplied: false, backend: "localStorage", key: "materialAccountingSpoolMountStore", reason: "fallback-import" };
+  }
+  const result = await compareAndSwapSharedValue({
+    key: "materialAccountingSpoolMountStore",
+    expectedDigest: baseDigest,
+    createDigest: createMaterialAccountingSpoolMountStoreDigest,
+    nextValue: targetStore,
+  });
+  if (result?.ok === true && result.casApplied === true) {
+    monitorData.materialAccountingSpoolMountStore = targetStore;
+    return result;
+  }
+  console.warn(
+    `[importAllData] SpoolMount store import CASが未適用: ${result?.reason || result?.error || "unknown"}`
+  );
+  return result || { ok: false, casApplied: false, backend: "indexedDB", key: "materialAccountingSpoolMountStore", reason: "durable-cas-not-applied" };
 }
 
 /**
@@ -824,7 +887,6 @@ export async function importAllData(data) {
           host,
           spoolId,
           validSpoolIds: validIds,
-          incomingSpoolMountStore: data.materialAccountingSpoolMountStore,
           contextLabel: "importAllData",
         })) {
           monitorData.hostSpoolMap[host] = spoolId;
@@ -887,7 +949,7 @@ export async function importAllData(data) {
   // ── Gate 18.9H: operator-managed SpoolMount production storeをimportする ──
   //    importしてもlegacy hostSpoolMap / usageHistory / spool残量 / print bindingへは投影しない。
   if (data.materialAccountingSpoolMountStore && typeof data.materialAccountingSpoolMountStore === "object") {
-    _mergeMaterialAccountingSpoolMountStore(data.materialAccountingSpoolMountStore);
+    await _importMaterialAccountingSpoolMountStoreDurably(data.materialAccountingSpoolMountStore);
   }
   await _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends({ awaitDurable: true });
 
@@ -1546,23 +1608,23 @@ function _resolveSpoolMountPreconditionIdentityStrength(snapshot, deviceRecord) 
 }
 
 /**
- * 現在観測storeからMaterialSource binding digestを再計算する。
+ * 観測snapshotから現在CAS precondition用MaterialSource recordを再構築する。
+ *
+ * 【詳細説明】
+ * - 観測storeのキーはtransport-local aliasであり、永続IDとして扱わない。
+ * - storage CASではruntime resolverと同じdevice-scoped MaterialSource IDを再生成し、aliasとcanonical IDの
+ *   どちらでpreconditionが来ても同じbinding digestへ解決できるようにする。
  *
  * @private
- * @function _createCurrentMaterialSourceBindingDigestForPrecondition
- * @param {Object} precondition - materialSource precondition。
- * @returns {?string} source identity digest。再計算不能ならnull。
+ * @function _createSpoolMountPreconditionMaterialSourceRecord
+ * @param {Object} snapshot - read-only source snapshot。
+ * @param {Object} deviceRecord - device observation record。
+ * @param {string} deviceId - Device ID。
+ * @param {string} sourceLookupId - latestBySourceId内の検索キー。
+ * @returns {?Object} MaterialSource record。
  */
-function _createCurrentMaterialSourceBindingDigestForPrecondition(precondition) {
-  const deviceId = String(precondition?.deviceId || "").trim();
-  const materialSourceId = String(precondition?.materialSourceId || "").trim();
-  const byDeviceId = monitorData.materialSourceObservations?.byDeviceId &&
-    typeof monitorData.materialSourceObservations.byDeviceId === "object"
-      ? monitorData.materialSourceObservations.byDeviceId
-      : {};
-  const deviceRecord = byDeviceId[deviceId];
-  const snapshot = materialSourceId ? deviceRecord?.latestBySourceId?.[materialSourceId] : null;
-  if (!deviceRecord || !snapshot || typeof snapshot !== "object") {
+function _createSpoolMountPreconditionMaterialSourceRecord(snapshot, deviceRecord, deviceId, sourceLookupId) {
+  if (!snapshot || typeof snapshot !== "object") {
     return null;
   }
 
@@ -1593,15 +1655,86 @@ function _createCurrentMaterialSourceBindingDigestForPrecondition(precondition) 
     index: locator.index,
   });
 
-  return createPrinterCoreV3DeterministicId("material-source-binding", [
+  return createMaterialSourceRecord({
     deviceId,
-    materialSourceId,
     unitId,
     kind,
-    identityStrength,
-    identity,
     locator,
+    identity,
+    identityStrength,
+    displayLabel: snapshot.displayLabel || snapshot.label || sourceLookupId,
+    aliases: [sourceLookupId, snapshot.sourceId, snapshot.materialSourceId, snapshot.id]
+      .map((value) => String(value ?? "").trim())
+      .filter((value, index, list) => value && list.indexOf(value) === index),
+  });
+}
+
+/**
+ * CAS precondition用MaterialSource recordからbinding digestを生成する。
+ *
+ * @private
+ * @function _createSpoolMountPreconditionSourceBindingDigest
+ * @param {Object} source - MaterialSource record。
+ * @returns {string} source identity digest。
+ */
+function _createSpoolMountPreconditionSourceBindingDigest(source) {
+  return createPrinterCoreV3DeterministicId("material-source-binding", [
+    source.deviceId,
+    source.materialSourceId,
+    source.unitId,
+    source.kind,
+    source.identityStrength,
+    source.identity,
+    source.locator,
   ]);
+}
+
+/**
+ * 現在観測storeからMaterialSource binding digestを再計算する。
+ *
+ * @private
+ * @function _createCurrentMaterialSourceBindingDigestForPrecondition
+ * @param {Object} precondition - materialSource precondition。
+ * @returns {?string} source identity digest。再計算不能ならnull。
+ */
+function _createCurrentMaterialSourceBindingDigestForPrecondition(precondition) {
+  const deviceId = String(precondition?.deviceId || "").trim();
+  const materialSourceId = String(precondition?.materialSourceId || "").trim();
+  const expectedDigest = String(precondition?.sourceIdentityDigest || "").trim();
+  const byDeviceId = monitorData.materialSourceObservations?.byDeviceId &&
+    typeof monitorData.materialSourceObservations.byDeviceId === "object"
+      ? monitorData.materialSourceObservations.byDeviceId
+      : {};
+  const deviceRecord = byDeviceId[deviceId];
+  const latestBySourceId = deviceRecord?.latestBySourceId && typeof deviceRecord.latestBySourceId === "object"
+    ? deviceRecord.latestBySourceId
+    : {};
+  if (!deviceRecord || !materialSourceId) {
+    return null;
+  }
+
+  const candidates = [];
+  if (latestBySourceId[materialSourceId]) {
+    candidates.push([materialSourceId, latestBySourceId[materialSourceId]]);
+  }
+  for (const entry of Object.entries(latestBySourceId)) {
+    if (entry[0] !== materialSourceId) {
+      candidates.push(entry);
+    }
+  }
+
+  for (const [lookupId, snapshot] of candidates) {
+    const source = _createSpoolMountPreconditionMaterialSourceRecord(snapshot, deviceRecord, deviceId, lookupId);
+    if (!source) {
+      continue;
+    }
+    const digest = _createSpoolMountPreconditionSourceBindingDigest(source);
+    const aliases = Array.isArray(source.aliases) ? source.aliases : [];
+    if (source.materialSourceId === materialSourceId || aliases.includes(materialSourceId) || digest === expectedDigest) {
+      return digest;
+    }
+  }
+  return null;
 }
 
 /**
@@ -2442,7 +2575,6 @@ function _restoreFromData(shared, machines) {
           host,
           spoolId,
           validSpoolIds,
-          incomingSpoolMountStore: shared.materialAccountingSpoolMountStore,
           contextLabel: "_restoreFromData",
         })) {
           monitorData.hostSpoolMap[host] = spoolId;

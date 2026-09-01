@@ -30,9 +30,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.1584 (PR #440)
-* @since   1.390.193 (PR #86)
-* @lastModified 2026-09-01 16:42:00
+ * @version 1.390.1586 (PR #440)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2026-09-01 17:02:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1584,6 +1584,17 @@ export function deleteSpool(id, hostname) {
   });
   if (!discardGate.ok) {
     console.warn(`[deleteSpool] confirmed 残量を検証できないため廃棄を拒否: id=${id} reason=${discardGate.reason}`);
+    return;
+  }
+  const universalConflict = findUniversalSpoolAssignmentConflict({
+    spoolId: id,
+    store: monitorData.materialAccountingSpoolMountStore,
+  });
+  if (universalConflict) {
+    console.warn(
+      `[deleteSpool] Universal MaterialSourceで装着中または予約中のため廃棄を拒否: ` +
+      `id=${id} reason=${universalConflict.reason || universalConflict.type || "conflict"}`
+    );
     return;
   }
   if (host && Array.isArray(s.printIdRanges) && s.printIdRanges.length) {

@@ -106,6 +106,12 @@ cross-backend assignment and final-current import/restore reconciliation after
   runtime store を更新する。
 - localStorage fallback は restore/export 用に正規化済みstoreを保持できるが、
   production write では `production-cas-unavailable` として失敗させる。
+- import時も、IndexedDBが有効な実運用経路では現在storeをbaseにincomingとのmerge候補を作り、
+  CAS成功後だけruntime storeへ反映する。localStorage-only環境では互換importとして復元するが、
+  operator production writeの成功境界には使わない。
+- incoming Universal `OPEN` mountだけでlegacy `hostSpoolMap` importを黙って破棄しない。
+  legacy割当は既に確定しているcurrent Universal `OPEN` mount / in-flight reservationだけを見て判定し、
+  incoming側の衝突はUniversal storeのreconcile conflictとして隔離する。
 - import時に既存storeと異なる非空storeが来た場合は、自動mergeやfirst-winを行わず、
   conflict evidence として `retainedUnsupportedEntries` へ隔離する。
 
@@ -139,7 +145,12 @@ Status: implemented and tested in PR #440 after `afc3d37`.
   durable `MaterialSource.materialSourceId` は `deviceId + unit + locator` から生成し、
   open mount の `sourceBindingAtOpen.aliases` にraw観測IDを残す。これにより複数K2で
   `cfs:1:slot:0` のような同一一時IDが出ても、SpoolMount store上では衝突しない。
-- stale topologyでは操作ボタンをdisabledにし、最終観測状態からoperator mountを変更しない。
+- storage CAS preconditionも同じ解決規則を使い、direct keyだけでなくcanonical
+  `MaterialSource.materialSourceId` / alias / source binding digest で現在観測sourceを再照合する。
+- stale topologyでは操作ボタンをdisabledにし、runtimeの送信時resolverでもmount / replaceを拒否する。
+  unmountは既存の3DPmon管理mountを外す操作なので、fresh観測を追加要求しない。
+- Universal `OPEN` mountまたはin-flight reservation中のmanaged spoolは、legacy deleteでも廃棄できない。
+  先にMaterialSource割当を解除してから削除する必要がある。
 - 管理スプール割当UIはCFS本体を操作しない。slot select / load / unload / feed /
   retract のphysical commandは Gate 19 / 19.5 のcertification registryが有効になるまで
   productionへ昇格しない。

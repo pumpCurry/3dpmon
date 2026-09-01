@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1585 (PR #440)
+ * @version 1.390.1586 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 16:49:00
+ * @lastModified 2026-09-01 17:02:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -25,7 +25,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import {
   MATERIAL_IDENTITY_STRENGTH,
+  MATERIAL_SOURCE_KIND,
   SPOOL_MOUNT_VERIFICATION,
+  createMaterialSourceIdentity,
+  createMaterialSourceLocator,
+  createMaterialSourceRecord,
   createSpoolMountRecord,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
 import {
@@ -569,6 +573,66 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.monitorData.hostSpoolMap).toEqual({});
     expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
   });
+
+  it("SpoolMount importはCAS成功前にruntime storeへ反映しない", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const importedMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [createDurableMountFixture()],
+      events: [],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.compareAndSwapSharedValue.mockImplementationOnce(async ({ expectedDigest, nextValue }) => {
+      expect(expectedDigest).toBe(baseStore.storeDigest);
+      expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+      expect(nextValue.spoolMounts).toHaveLength(1);
+      return {
+        ok: true,
+        casApplied: true,
+        backend: "indexedDB",
+        key: "materialAccountingSpoolMountStore",
+        reason: "cas-applied",
+        currentDigest: baseStore.storeDigest,
+        nextDigest: nextValue.storeDigest,
+      };
+    });
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+      materialAccountingSpoolMountStore: importedMountStore,
+    });
+
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+      expectedDigest: baseStore.storeDigest,
+    }));
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toHaveLength(1);
+  });
+
+  it("incoming Universal OPEN mountだけではlegacy hostSpoolMap importを黙って捨てない", async () => {
+    const importedMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [createDurableMountFixture()],
+      events: [],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = createEmptyMaterialAccountingSpoolMountStore();
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.hostSpoolMap = {};
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+      hostSpoolMap: { "K1Max-4A1B": "spool:a" },
+      materialAccountingSpoolMountStore: importedMountStore,
+    });
+
+    expect(mocks.monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool:a" });
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "legacy-spool-backend-conflict",
+      }),
+    ]);
+  });
 });
 
 /**
@@ -659,29 +723,35 @@ function createMaterialSourceObservationFixture(overrides = {}) {
 function createDurablePreconditions() {
   const spool = { id: "spool:a" };
   const noLegacyOccupancy = null;
-  const sourceBinding = {
+  const locator = createMaterialSourceLocator({
+    kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+    index: null,
+    unitIndex: 1,
+    boxId: 1,
+    slotIndex: 0,
+    protocolSlotId: "0",
+  });
+  const sourceIdentity = createMaterialSourceIdentity({
     deviceId: "device:k2",
-    materialSourceId: "source:k2:cfs:1a",
     unitId: "unit:k2:cfs:1",
-    kind: "cfs-slot",
-    identityStrength: "provisional",
-    identity: {
-      namespace: "material-source",
-      parts: ["device:k2", "unit:k2:cfs:1", "cfs-slot", 0, null],
-    },
-    locator: {
-      kind: "cfs-slot",
-      index: null,
-      unitIndex: 1,
-      boxId: 1,
-      slotIndex: 0,
-      protocolSlotId: "0",
-    },
-  };
+    kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+    slotIndex: locator.slotIndex,
+    index: locator.index,
+  });
+  const sourceBinding = createMaterialSourceRecord({
+    deviceId: "device:k2",
+    unitId: "unit:k2:cfs:1",
+    kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+    locator,
+    identity: sourceIdentity,
+    identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    displayLabel: "1A",
+    aliases: ["source:k2:cfs:1a"],
+  });
   return {
     materialSource: {
       deviceId: "device:k2",
-      materialSourceId: "source:k2:cfs:1a",
+      materialSourceId: sourceBinding.materialSourceId,
       sourceIdentityDigest: createPrinterCoreV3DeterministicId("material-source-binding", [
         sourceBinding.deviceId,
         sourceBinding.materialSourceId,

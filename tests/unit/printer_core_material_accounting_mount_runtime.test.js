@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1584 (PR #440)
+ * @version 1.390.1586 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 16:39:00
+ * @lastModified 2026-09-01 17:02:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -69,6 +69,9 @@ function createRuntimeData() {
         "serial:k2": {
           deviceId: "serial:k2",
           identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+          lastObservedAt: "2026-09-01T05:00:00.000Z",
+          providerDisconnectedAt: null,
+          restoredFromStorage: false,
           latestBySourceId: {
             "source:k2:cfs:1a": {
               sourceId: "source:k2:cfs:1a",
@@ -295,5 +298,35 @@ describe("MaterialAccountingSpoolMountRuntime", () => {
       spoolId: "spool-031",
       materialSourceId: expect.stringMatching(/^material-source:/),
     });
+  });
+
+  it("runtime factoryはstale観測sourceへのmountを送信時に拒否する", async () => {
+    const data = createRuntimeData();
+    data.materialSourceObservations.byDeviceId["serial:k2"].providerDisconnectedAt = "2026-09-01T05:00:30.000Z";
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingSpoolMountStore = nextStore;
+      return { ok: true, casApplied: true, backend: "indexedDB", reason: "cas-applied" };
+    });
+    const runtime = createMaterialAccountingSpoolMountRuntime({
+      data,
+      persist,
+      now: () => "2026-09-01T05:01:00.000Z",
+    });
+
+    const result = await runtime.service.operatorMountSource({
+      operatorActionId: "action:mount:stale",
+      expectedDeviceId: "serial:k2",
+      materialSourceId: "source:k2:cfs:1a",
+      spoolId: "spool-031",
+      actor: "operator",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      action: "mount",
+      reason: "material-source-not-found",
+    });
+    expect(persist).not.toHaveBeenCalled();
+    expect(data.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
   });
 });

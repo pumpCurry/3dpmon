@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingSpoolMountRuntime}：runtime service wrapperを生成
  * - {@link resolveObservedMaterialSourceRecord}：観測storeからMaterialSource recordを解決
  *
- * @version 1.390.1584 (PR #440)
+ * @version 1.390.1586 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 16:42:00
+ * @lastModified 2026-09-01 17:02:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -41,6 +41,9 @@ import { createMaterialAccountingSpoolMountService } from "./dashboard_material_
 import {
   reserveUniversalSpoolAssignment,
 } from "./dashboard_material_accounting_spool_assignment_guard.js";
+import {
+  deriveMaterialSourceObservationFreshness,
+} from "./dashboard_material_source_observation.js";
 
 /**
  * 値をtrim済み文字列へ変換する。
@@ -238,6 +241,9 @@ function createObservedMaterialSourceRecord(snapshot, deviceRecord, deviceId, so
  * @param {Object=} input.materialSourceObservations - 観測store。未指定ならmonitorDataを参照する。
  * @param {string} input.deviceId - Device ID。
  * @param {string} input.materialSourceId - MaterialSource ID。
+ * @param {boolean=} input.requireFresh - freshな現在観測だけ許可する場合true。
+ * @param {string|Date=} input.now - freshness判定の現在時刻。
+ * @param {number=} input.freshTtlMs - freshness判定TTL。
  * @returns {?Object} MaterialSource record。見つからない場合はnull。
  * @example
  * const source = resolveObservedMaterialSourceRecord({ deviceId, materialSourceId });
@@ -253,6 +259,15 @@ export function resolveObservedMaterialSourceRecord(input = {}) {
   const snapshot = sourceId ? latestBySourceId[sourceId] : null;
   if (!deviceRecord || !sourceId) {
     return null;
+  }
+  if (input.requireFresh === true) {
+    const freshness = deriveMaterialSourceObservationFreshness(deviceRecord, {
+      now: input.now,
+      freshTtlMs: input.freshTtlMs,
+    });
+    if (freshness.state !== "fresh") {
+      return null;
+    }
   }
   const directRecord = createObservedMaterialSourceRecord(snapshot, deviceRecord, deviceId, sourceId);
   if (directRecord) {
@@ -312,10 +327,13 @@ export function createMaterialAccountingSpoolMountRuntime(input = {}) {
    * @returns {?Object} MaterialSource record。
    */
   function resolveMaterialSource(request = {}) {
+    const action = toTrimmedString(request.action);
     return resolveObservedMaterialSourceRecord({
       materialSourceObservations: data.materialSourceObservations,
       deviceId: request.deviceId || request.expectedDeviceId,
       materialSourceId: request.materialSourceId,
+      requireFresh: action === "mount" || action === "replace",
+      now: input.now ? input.now() : undefined,
     });
   }
 
