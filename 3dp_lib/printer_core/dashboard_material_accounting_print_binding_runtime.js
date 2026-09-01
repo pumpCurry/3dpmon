@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1600 (PR #440)
+ * @version 1.390.1601 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 21:58:00
+ * @lastModified 2026-09-01 21:03:29
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -110,7 +110,7 @@ function normalizeObservedTime(value) {
  * @private
  * @function collectCurrentPrintJobObservationsFromMachine
  * @param {Object|null|undefined} machine - MachineData候補。
- * @returns {Array<{printJobId:string,firstObservedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null}>} 現在ジョブ観測候補。
+ * @returns {Array<{printJobId:string,firstObservedAt:string|null,observedReceivedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null}>} 現在ジョブ観測候補。
  */
 function collectCurrentPrintJobObservationsFromMachine(machine) {
   const observationsById = new Map();
@@ -155,6 +155,12 @@ function collectCurrentPrintJobObservationsFromMachine(machine) {
     observationsById.set(id, {
       printJobId: id,
       firstObservedAt: normalizeObservedTime(candidate.observedAt),
+      observedReceivedAt: normalizeObservedTime(
+        current.observedReceivedAt ||
+        current.receivedAt ||
+        machine?.runtimeData?.currentPrintObservedReceivedAt ||
+        null
+      ),
       deviceId,
       sessionId,
       connectionGeneration,
@@ -223,7 +229,7 @@ function resolveHistoryCompletedAt(entry) {
  * @private
  * @function collectCompletedPrintJobObservationsFromMachine
  * @param {Object|null|undefined} machine - MachineData候補。
- * @returns {Array<{printJobId:string,completedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null,historyEntry:Object}>} 完了job観測候補。
+ * @returns {Array<{printJobId:string,completedAt:string|null,observedReceivedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null,historyEntry:Object}>} 完了job観測候補。
  */
 function collectCompletedPrintJobObservationsFromMachine(machine) {
   const shadowRecord = machine?.runtimeData?.printerCoreV3Shadow || {};
@@ -247,6 +253,14 @@ function collectCompletedPrintJobObservationsFromMachine(machine) {
     observations.push({
       printJobId,
       completedAt: resolveHistoryCompletedAt(entry),
+      observedReceivedAt: normalizeObservedTime(
+        entry.observedReceivedAt ||
+        entry.receivedAt ||
+        entry.historyObservedReceivedAt ||
+        entry.localObservedAt ||
+        machine?.runtimeData?.historyObservedReceivedAt ||
+        null
+      ),
       deviceId,
       sessionId,
       connectionGeneration,
@@ -267,7 +281,7 @@ function collectCompletedPrintJobObservationsFromMachine(machine) {
  * @function resolveObservedCompletedPrintJob
  * @param {Object} data - monitorData互換データ。
  * @param {Object} request - runtime request。
- * @returns {{ok:boolean,printJobId:string,completedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null,reasons:string[],observedPrintJobIds:string[],historyEntry:Object|null}} 解決結果。
+ * @returns {{ok:boolean,printJobId:string,completedAt:string|null,observedReceivedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null,reasons:string[],observedPrintJobIds:string[],historyEntry:Object|null}} 解決結果。
  */
 function resolveObservedCompletedPrintJob(data, request) {
   const requestedPrintJobId = toTrimmedString(request.printJobId || request.observedPrintJobId);
@@ -314,6 +328,12 @@ function resolveObservedCompletedPrintJob(data, request) {
     ok: true,
     printJobId: observation.printJobId,
     completedAt: observation.completedAt,
+    observedReceivedAt: normalizeObservedTime(
+      request.completionObservedReceivedAt ||
+      request.observedReceivedAt ||
+      request.receivedAt ||
+      observation.observedReceivedAt
+    ),
     deviceId: observation.deviceId,
     sessionId: observation.sessionId,
     connectionGeneration: observation.connectionGeneration,
@@ -336,6 +356,7 @@ function resolveObservedCompletedPrintJob(data, request) {
       ok: false,
       printJobId: "",
       completedAt: null,
+      observedReceivedAt: null,
       deviceId: "",
       sessionId: "",
       connectionGeneration: null,
@@ -365,6 +386,7 @@ function resolveObservedCompletedPrintJob(data, request) {
     ok: false,
     printJobId: "",
     completedAt: null,
+    observedReceivedAt: null,
     deviceId: "",
     sessionId: "",
     connectionGeneration: null,
@@ -506,6 +528,9 @@ function createMaterialSourceContinuityLookupIds(snapshot, observedSource) {
  */
 function isContinuityBreakingMaterialSourceEvent(event) {
   return [
+    "provider-disconnected",
+    "provider-reconnected",
+    "provider-generation-changed",
     "source-changed",
     "source-disappeared",
     "source-merge-conflict",
@@ -518,27 +543,33 @@ function isContinuityBreakingMaterialSourceEvent(event) {
  * 【詳細説明】
  * - 完了時点で同じsourceがfreshでも、印刷中に材料交換/slot消失/merge conflictが観測されていれば
  *   自動debit候補としては連続性を証明できない。
- * - completion時刻が未取得の場合は、print-start以後のbreaking eventを広く拒否する。
+ * - completion受信時刻が未取得の場合は、print-start受信後のbreaking eventを広く拒否する。
  *
  * @private
  * @function findMaterialSourceContinuityBreakEvents
  * @param {Object} deviceRecord - MaterialSource observation device record。
  * @param {Object} snapshot - print-start snapshot。
  * @param {Object|null} observedSource - completion時に解決したMaterialSource record。
- * @param {string|null} completedAt - 完了観測時刻。
+ * @param {string|null} completedObservedAt - 完了を3DPmonが受信した時刻。
  * @returns {Object[]} continuityを壊すevent一覧。
  */
-function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observedSource, completedAt) {
+function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observedSource, completedObservedAt) {
   const sourceIds = createMaterialSourceContinuityLookupIds(snapshot, observedSource);
-  const startMs = Date.parse(snapshot?.capturedAt || "");
-  const completedMs = Date.parse(completedAt || "");
-  if (!Number.isFinite(startMs) || sourceIds.size === 0) {
+  const snapshotDeviceId = toTrimmedString(snapshot?.deviceId);
+  const startMs = Date.parse(resolvePrintStartObservedReceivedAt(snapshot) || "");
+  const completedMs = Date.parse(completedObservedAt || "");
+  if (!Number.isFinite(startMs) || sourceIds.size === 0 || !snapshotDeviceId) {
     return [];
   }
   return (Array.isArray(deviceRecord?.events) ? deviceRecord.events : []).filter((event) => {
     const eventSourceId = toTrimmedString(event?.sourceId);
+    const eventDeviceId = toTrimmedString(event?.deviceId);
     const eventMs = Date.parse(event?.observedAt || "");
-    if (!eventSourceId || !sourceIds.has(eventSourceId) || !Number.isFinite(eventMs)) {
+    if (!Number.isFinite(eventMs)) {
+      return false;
+    }
+    const sourceMatches = eventSourceId ? sourceIds.has(eventSourceId) : eventDeviceId === snapshotDeviceId;
+    if (!sourceMatches) {
       return false;
     }
     if (!isContinuityBreakingMaterialSourceEvent(event)) {
@@ -552,27 +583,58 @@ function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observe
 }
 
 /**
+ * print interval全体のMaterialSource event coverageを検査する。
+ *
+ * 【詳細説明】
+ * - bounded event logである以上、「breaking eventが無い」ことは保持範囲がprint-start以前から
+ *   残っている場合だけcontinuity証拠になる。
+ * - 古い保存データやtrim後データのようにcoverage開始時刻が証明できない場合は、実使用量は保存しつつ
+ *   自動debit候補には昇格しない。
+ *
+ * @private
+ * @function deriveMaterialSourceEventCoverage
+ * @param {Object} deviceRecord - MaterialSource observation device record。
+ * @param {Object} snapshot - print-start snapshot。
+ * @param {string|null} completedObservedAt - 完了を3DPmonが受信した時刻。
+ * @returns {{ok:boolean,startedAt:string|null,reason:string}} event coverage判定。
+ */
+function deriveMaterialSourceEventCoverage(deviceRecord, snapshot, completedObservedAt) {
+  const startedAt = normalizeObservedTime(
+    deviceRecord?.eventCoverageStartedAt ||
+    deviceRecord?.eventCoverageRetainedFromAt ||
+    deviceRecord?.eventsRetainedFromAt
+  );
+  const startMs = Date.parse(resolvePrintStartObservedReceivedAt(snapshot) || "");
+  const completedMs = Date.parse(completedObservedAt || "");
+  if (!Number.isFinite(startMs) || !Number.isFinite(completedMs)) {
+    return { ok: false, startedAt, reason: "material-source-event-coverage-interval-required" };
+  }
+  if (!startedAt) {
+    return { ok: false, startedAt: null, reason: "material-source-event-coverage-required" };
+  }
+  if (Date.parse(startedAt) > startMs) {
+    return { ok: false, startedAt, reason: "material-source-event-coverage-gap" };
+  }
+  return { ok: true, startedAt, reason: "covered" };
+}
+
+/**
  * completion時点でsource単体のfreshnessを判定する。
  *
  * @private
  * @function deriveCompletionSourceFreshness
  * @param {Object} deviceRecord - MaterialSource observation device record。
- * @param {Object|null} observedSource - completion時に解決したMaterialSource record。
- * @param {string|null} completedAt - 完了観測時刻。
+ * @param {string|null} sourceObservedAt - source単位のMaterialSource観測時刻。
+ * @param {string|null} completedObservedAt - 完了を3DPmonが受信した時刻。
  * @returns {Object} source単位freshness。
  */
-function deriveCompletionSourceFreshness(deviceRecord, observedSource, completedAt) {
-  const sourceObservedAt = normalizeObservedTime(
-    observedSource?.lastObservedAt ||
-    observedSource?.observedAt ||
-    deviceRecord?.lastObservedAt
-  );
+function deriveCompletionSourceFreshness(deviceRecord, sourceObservedAt, completedObservedAt) {
   return deriveMaterialSourceObservationFreshness({
-    lastObservedAt: sourceObservedAt,
+    lastObservedAt: normalizeObservedTime(sourceObservedAt),
     providerDisconnectedAt: deviceRecord?.providerDisconnectedAt || null,
     restoredFromStorage: deviceRecord?.restoredFromStorage === true,
   }, {
-    now: completedAt || new Date().toISOString(),
+    now: completedObservedAt || new Date().toISOString(),
   });
 }
 
@@ -620,23 +682,44 @@ function resolveMaterialSourceObservedAtForContinuity(deviceRecord, snapshot, ob
 }
 
 /**
- * 観測時刻がprint-startからcompletionまでの範囲内にあるか判定する。
+ * print-start snapshotから3DPmon受信時刻を解決する。
+ *
+ * 【詳細説明】
+ * - `capturedAt`はprinter報告時刻として残すため、MaterialSource観測のlocal受信時刻とは比較しない。
+ * - Gate 18.9I以前のsnapshotには存在しない場合があるので、その場合はnullを返してfail-closedにする。
+ *
+ * @private
+ * @function resolvePrintStartObservedReceivedAt
+ * @param {Object|null|undefined} snapshot - print-start snapshot。
+ * @returns {string|null} print-startを3DPmonが受信した時刻。
+ */
+function resolvePrintStartObservedReceivedAt(snapshot) {
+  return normalizeObservedTime(
+    snapshot?.issuanceEvidence?.printStartObservedReceivedAt ||
+    snapshot?.issuanceEvidence?.observedReceivedAt ||
+    snapshot?.observedReceivedAt
+  );
+}
+
+/**
+ * 観測時刻がprint-startからcompletionまでのlocal受信区間内にあるか判定する。
  *
  * 【詳細説明】
  * - 完了後に届いたMaterialSource観測をcompletion時点のfresh証拠として遡及利用しない。
  * - print-start以前の古い観測だけで、印刷区間中のsource continuityがあったとは見なさない。
+ * - MaterialSource観測はlocal受信時計なので、printer報告時刻の`capturedAt`/`completedAt`とは比較しない。
  *
  * @private
  * @function isObservationWithinPrintInterval
  * @param {string|null} observedAt - MaterialSource観測時刻。
  * @param {Object} snapshot - print-start snapshot。
- * @param {string|null} completedAt - 完了観測時刻。
+ * @param {string|null} completedObservedAt - 完了を3DPmonが受信した時刻。
  * @returns {boolean} print-start以後かつcompletion以前の観測ならtrue。
  */
-function isObservationWithinPrintInterval(observedAt, snapshot, completedAt) {
+function isObservationWithinPrintInterval(observedAt, snapshot, completedObservedAt) {
   const observedMs = Date.parse(observedAt || "");
-  const startMs = Date.parse(snapshot?.capturedAt || "");
-  const completedMs = Date.parse(completedAt || "");
+  const startMs = Date.parse(resolvePrintStartObservedReceivedAt(snapshot) || "");
+  const completedMs = Date.parse(completedObservedAt || "");
   if (!Number.isFinite(observedMs) || !Number.isFinite(startMs) || !Number.isFinite(completedMs)) {
     return false;
   }
@@ -655,10 +738,12 @@ function isObservationWithinPrintInterval(observedAt, snapshot, completedAt) {
  * @function buildRuntimeContinuityBySourceId
  * @param {Object} data - monitorData互換データ。
  * @param {Object[]} orderedSnapshots - print-start snapshot配列。
- * @param {string|null=} completedAt - 完了観測時刻。
+ * @param {string|null=} completedAt - 装置が報告した完了時刻。
+ * @param {string|null=} completedObservedAt - 完了を3DPmonが受信した時刻。
  * @returns {Object<string,Object>} source ID別continuity evidence。
  */
-function buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt = null) {
+function buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt = null, completedObservedAt = null) {
+  const continuityNow = completedObservedAt || completedAt || new Date().toISOString();
   const continuityBySourceId = {};
   for (const snapshot of Array.isArray(orderedSnapshots) ? orderedSnapshots : []) {
     const sourceId = toTrimmedString(snapshot?.materialSourceId);
@@ -675,20 +760,29 @@ function buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt = 
     const deviceObservedAt = normalizeObservedTime(deviceRecord.lastObservedAt) || null;
     const sourceObservedAt = resolveMaterialSourceObservedAtForContinuity(deviceRecord, snapshot, observedSource);
     const freshness = deriveMaterialSourceObservationFreshness(deviceRecord, {
-      now: completedAt || new Date().toISOString(),
+      now: continuityNow,
     });
-    const sourceFreshness = deriveCompletionSourceFreshness(deviceRecord, observedSource, completedAt);
-    const continuityBreakEvents = findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observedSource, completedAt);
+    const sourceFreshness = deriveCompletionSourceFreshness(deviceRecord, sourceObservedAt, continuityNow);
+    const continuityBreakEvents = findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observedSource, continuityNow);
+    const eventCoverage = deriveMaterialSourceEventCoverage(deviceRecord, snapshot, continuityNow);
     const intervalObserved =
-      isObservationWithinPrintInterval(deviceObservedAt, snapshot, completedAt) &&
-      isObservationWithinPrintInterval(sourceObservedAt, snapshot, completedAt);
-    const freshTopology = !!observedSource && intervalObserved && freshness.state === "fresh" && sourceFreshness.state === "fresh";
+      isObservationWithinPrintInterval(deviceObservedAt, snapshot, continuityNow) &&
+      isObservationWithinPrintInterval(sourceObservedAt, snapshot, continuityNow);
+    const freshTopology =
+      !!observedSource &&
+      eventCoverage.ok &&
+      intervalObserved &&
+      freshness.state === "fresh" &&
+      sourceFreshness.state === "fresh";
     const hasContinuityBreak = continuityBreakEvents.length > 0;
     continuityBySourceId[sourceId] = {
       sourceContinuity: freshTopology && !hasContinuityBreak,
       freshTopology,
       physicalDiscontinuity: hasContinuityBreak,
       intervalObserved,
+      eventCoverage,
+      printStartObservedReceivedAt: resolvePrintStartObservedReceivedAt(snapshot),
+      completionObservedReceivedAt: continuityNow,
       observedAt: deviceObservedAt,
       sourceObservedAt,
       freshness,
@@ -827,7 +921,7 @@ function getCachedFirstObservedAt(cache, printPlan, printJobId, observedAt) {
  * @function resolveObservedPrintJob
  * @param {Object} data - monitorData互換データ。
  * @param {Object} request - runtime request。
- * @returns {{ok:boolean,printJobId:string,firstObservedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null,reasons:string[],observedPrintJobIds:string[]}} 解決結果。
+ * @returns {{ok:boolean,printJobId:string,firstObservedAt:string|null,observedReceivedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null,reasons:string[],observedPrintJobIds:string[]}} 解決結果。
  */
 function resolveObservedPrintJob(data, request) {
   const requestedPrintJobId = toTrimmedString(request.printJobId || request.observedPrintJobId);
@@ -873,6 +967,12 @@ function resolveObservedPrintJob(data, request) {
     ok: true,
     printJobId: observation.printJobId,
     firstObservedAt: observation.firstObservedAt,
+    observedReceivedAt: normalizeObservedTime(
+      request.printStartObservedReceivedAt ||
+      request.observedReceivedAt ||
+      request.receivedAt ||
+      observation.observedReceivedAt
+    ),
     deviceId: observation.deviceId,
     sessionId: observation.sessionId,
     connectionGeneration: observation.connectionGeneration,
@@ -894,6 +994,7 @@ function resolveObservedPrintJob(data, request) {
       ok: false,
       printJobId: "",
       firstObservedAt: null,
+      observedReceivedAt: null,
       deviceId: "",
       sessionId: "",
       connectionGeneration: null,
@@ -922,6 +1023,7 @@ function resolveObservedPrintJob(data, request) {
     ok: false,
     printJobId: "",
     firstObservedAt: null,
+    observedReceivedAt: null,
     deviceId: "",
     sessionId: "",
     connectionGeneration: null,
@@ -1116,6 +1218,7 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
    * @param {string=} request.printJobId - 実機で観測したPrintJob ID。
    * @param {string=} request.observedPrintJobId - 実機で観測したPrintJob IDの別名。
    * @param {string|Date=} request.capturedAt - print-start観測時刻。
+   * @param {string|Date=} request.observedReceivedAt - print-startを3DPmonが受信した時刻。
    * @param {string=} request.bindingOperationId - idempotency用operation ID。
    * @returns {Promise<Object>} runtime result。
    */
@@ -1136,6 +1239,12 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
       });
     }
     const capturedAt = getCachedFirstObservedAt(firstObservedAtCache, printPlan, printJobId, capturedAtResolution.capturedAt);
+    const printStartObservedReceivedAt = normalizeObservedTime(
+      request.printStartObservedReceivedAt ||
+      request.observedReceivedAt ||
+      request.receivedAt ||
+      printJobResolution.observedReceivedAt
+    );
     const bindingOperationId = toTrimmedString(request.bindingOperationId) ||
       createBindingOperationId(printPlan, printJobId);
     const repository = createTrustedPrintStartMaterialAccountingPrintBindingRepository(previousStore);
@@ -1153,6 +1262,8 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
         sessionId: printJobResolution.sessionId,
         connectionGeneration: printJobResolution.connectionGeneration,
         printJobId,
+        devicePrintStartTime: capturedAt,
+        printStartObservedReceivedAt,
         firstObservedAt: capturedAt,
       },
     });
@@ -1231,6 +1342,12 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
     }
     const printJobId = completionResolution.printJobId;
     const completedAt = completionResolution.completedAt;
+    const completionObservedReceivedAt = normalizeObservedTime(
+      request.completionObservedReceivedAt ||
+      request.observedReceivedAt ||
+      request.receivedAt ||
+      completionResolution.observedReceivedAt
+    );
     const repository = createTrustedPrintStartMaterialAccountingPrintBindingRepository(previousStore);
     const orderedSnapshots = getOrderedPrintStartSnapshots(previousStore, printPlan, printJobId);
     const usageSet = parseMaterialUsagesFromHistoryEntry(completionResolution.historyEntry, orderedSnapshots);
@@ -1264,7 +1381,7 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
       totalUsedLengthMm,
       resultSetCompleteness: request.resultSetCompleteness === "complete" ? inferredResultSetCompleteness : "partial",
       resultSetCompletenessEvidence: request.resultSetCompletenessEvidence,
-      continuityBySourceId: buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt),
+      continuityBySourceId: buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt, completionObservedReceivedAt),
     });
     if (!result.ok && result.status !== MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.PENDING) {
       return {
@@ -1281,6 +1398,7 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
         printPlan,
         printJobId,
         completedAt,
+        completionObservedReceivedAt,
         attributionOperationId,
         observedDeviceId: completionResolution.deviceId,
         observedSessionId: completionResolution.sessionId,

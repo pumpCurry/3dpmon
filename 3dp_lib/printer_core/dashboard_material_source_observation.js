@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1461 (PR #435)
+ * @version 1.390.1601 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 17:18:49
+ * @lastModified 2026-09-01 21:03:29
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -346,6 +346,13 @@ function markRestoredObservationRecord(record, restoredAt) {
   if (!restored.latestBySourceId || typeof restored.latestBySourceId !== "object" || Array.isArray(restored.latestBySourceId)) {
     restored.latestBySourceId = {};
   }
+  restored.eventCoverageStartedAt =
+    restored.eventCoverageStartedAt !== null &&
+    restored.eventCoverageStartedAt !== undefined &&
+    restored.eventCoverageStartedAt !== "" &&
+    isValidExplicitObservedAt(restored.eventCoverageStartedAt)
+    ? toIsoDateTimeString(restored.eventCoverageStartedAt)
+    : null;
   return restored;
 }
 
@@ -430,6 +437,7 @@ function ensureDeviceRecord(store, options) {
       latestBySourceId: {},
       events: [],
       firstObservedAt: options.observedAt,
+      eventCoverageStartedAt: options.observedAt,
       lastObservedAt: options.observedAt,
       lastChangedAt: options.observedAt,
       providerId: null,
@@ -811,6 +819,7 @@ function createSourceChangeEvent(options) {
 function trimDeviceEvents(record, limits) {
   const maxPerSource = Math.max(1, Math.floor(toFiniteNumber(limits?.maxEventsPerSource, DEFAULT_MAX_EVENTS_PER_SOURCE) ?? DEFAULT_MAX_EVENTS_PER_SOURCE));
   const maxPerDevice = Math.max(1, Math.floor(toFiniteNumber(limits?.maxEventsPerDevice, DEFAULT_MAX_EVENTS_PER_DEVICE) ?? DEFAULT_MAX_EVENTS_PER_DEVICE));
+  const originalLength = Array.isArray(record.events) ? record.events.length : 0;
   const sourceCounts = new Map();
   const keepBySource = [];
   for (let index = record.events.length - 1; index >= 0; index -= 1) {
@@ -823,7 +832,16 @@ function trimDeviceEvents(record, limits) {
     }
   }
   keepBySource.reverse();
-  record.events = keepBySource.slice(Math.max(0, keepBySource.length - maxPerDevice));
+  const retainedEvents = keepBySource.slice(Math.max(0, keepBySource.length - maxPerDevice));
+  if (retainedEvents.length !== originalLength) {
+    const retainedObservedAt = retainedEvents
+      .map((event) => toIsoDateTimeString(event?.observedAt))
+      .filter(Boolean)
+      .sort((a, b) => Date.parse(a) - Date.parse(b));
+    record.eventCoverageStartedAt = retainedObservedAt[0] || record.lastObservedAt || null;
+    record.eventCoverageTrimmedAt = record.lastObservedAt || null;
+  }
+  record.events = retainedEvents;
 }
 
 /**
@@ -1079,6 +1097,9 @@ export function recordMaterialTopologyObservation(store, options = {}) {
     host: options.host || null,
     observedAt,
   });
+  if (!record.eventCoverageStartedAt || !isValidExplicitObservedAt(record.eventCoverageStartedAt)) {
+    record.eventCoverageStartedAt = observedAt;
+  }
 
   const topology = options.topology && typeof options.topology === "object" ? options.topology : {};
   const assignments = Array.isArray(topology.assignments) ? topology.assignments : [];
@@ -1156,6 +1177,44 @@ export function recordMaterialTopologyObservation(store, options = {}) {
 
   const nextRevision = Number(record.observationRevision || 0) + 1;
   const changes = [];
+  const previousProviderDisconnectedAt = record.providerDisconnectedAt || null;
+  const previousProviderGeneration = record.providerGeneration ? String(record.providerGeneration) : null;
+  const nextProviderId = options.providerId || topology.provider?.providerId || record.providerId || null;
+  const nextProviderGeneration = options.providerGeneration ? String(options.providerGeneration) : null;
+  const nextProviderDisconnectedAt = topology.cfs?.topologyState === "stale"
+    ? (topology.provider?.disconnectedAt || observedAt)
+    : null;
+  if (previousProviderGeneration && nextProviderGeneration && previousProviderGeneration !== nextProviderGeneration) {
+    changes.push(createSourceChangeEvent({
+      deviceId,
+      sourceId: null,
+      observedAt,
+      changeKind: "provider-generation-changed",
+      before: { providerGeneration: previousProviderGeneration },
+      after: { providerGeneration: nextProviderGeneration },
+      revision: nextRevision,
+      sessionId: options.sessionId || null,
+      providerId: nextProviderId,
+      providerGeneration: nextProviderGeneration,
+      sequence: options.sequence ?? null,
+    }));
+  }
+  if ((!previousProviderDisconnectedAt && nextProviderDisconnectedAt) ||
+      (previousProviderDisconnectedAt && !nextProviderDisconnectedAt)) {
+    changes.push(createSourceChangeEvent({
+      deviceId,
+      sourceId: null,
+      observedAt,
+      changeKind: nextProviderDisconnectedAt ? "provider-disconnected" : "provider-reconnected",
+      before: { providerDisconnectedAt: previousProviderDisconnectedAt },
+      after: { providerDisconnectedAt: nextProviderDisconnectedAt },
+      revision: nextRevision,
+      sessionId: options.sessionId || null,
+      providerId: nextProviderId,
+      providerGeneration: nextProviderGeneration,
+      sequence: options.sequence ?? null,
+    }));
+  }
   for (const [sourceId, snapshot] of Object.entries(nextSnapshots)) {
     const previous = record.latestBySourceId[sourceId] || null;
     const previousSignature = previous ? createSemanticSignature(previous) : null;
@@ -1203,13 +1262,11 @@ export function recordMaterialTopologyObservation(store, options = {}) {
   if (changes.length > 0) {
     record.lastChangedAt = observedAt;
   }
-  record.providerId = options.providerId || topology.provider?.providerId || record.providerId || null;
+  record.providerId = nextProviderId;
   record.sessionId = options.sessionId || record.sessionId || null;
   updateProviderGenerationLifecycle(record, record.providerId, options.providerGeneration || null);
   record.lastSequence = options.sequence ?? record.lastSequence ?? null;
-  record.providerDisconnectedAt = topology.cfs?.topologyState === "stale"
-    ? (topology.provider?.disconnectedAt || observedAt)
-    : null;
+  record.providerDisconnectedAt = nextProviderDisconnectedAt;
   if (record.providerId && record.providerStates?.[record.providerId]) {
     record.providerStates[record.providerId].lastObservedAt = observedAt;
     record.providerStates[record.providerId].lastSequence = record.lastSequence;

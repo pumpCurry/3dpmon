@@ -114,8 +114,16 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
    昇格しない。さらに、print-start後からcompletionまでに同じsourceの変更/消失/merge conflict
    eventが観測された場合は、完了時点のtopologyがfreshでもsource continuityなしとして
    managed debit候補へ昇格しない。provisional sourceのcontinuityは区間証拠として扱い、
-   source/device観測時刻がtrusted print-start snapshot以後かつcompletion観測以前に入らない場合も、
-   完了後fresh観測の遡及利用を避けるためmanaged debit候補へ昇格しない。
+   source/device観測時刻がtrusted print-start受信時刻以後かつcompletion受信時刻以前に入らない場合も、
+   完了後fresh観測の遡及利用を避けるためmanaged debit候補へ昇格しない。`capturedAt` /
+   `completedAt` はprinter clock evidenceとして保持し、MaterialSource `lastObservedAt` との
+   continuity比較には使わない。source-specific freshnessは該当sourceの観測時刻だけで判定し、
+   他sourceで更新されたdevice-level `lastObservedAt`へfallbackしない。
+   さらに、MaterialSource event logはboundedであるため、retained event coverageがprint-start以前から
+   残っていることを要求する。coverage欠落、またはtrim後にcoverage開始がprint-startより後ろへ進んだ
+   recordは、source-specific segmentを保存してもmanaged debit候補へ昇格しない。印刷区間中の
+   provider disconnect/reconnectやproviderGeneration変更は、同じslot/material状態へ戻った場合でも
+   provisional source全体のphysical discontinuityとして扱う。
   Gate 18.9I-3では、このshadow storeに保存された同一device + printJobIdの
   `observed-used` / `confirmed-unused` `JobMaterialSegment` をItemKeeper送信用
   `jobs[].filaments[]` へread-only投影する。

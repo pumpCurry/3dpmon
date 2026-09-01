@@ -22,9 +22,9 @@
  * - {@link forgetMaterialAccountingPrintStartRequest}：hostname単位のpending登録を破棄
  * - {@link clearMaterialAccountingPrintBindingLiveBridge}：テスト用にpending状態を初期化
  *
- * @version 1.390.1599 (PR #440)
+ * @version 1.390.1601 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 21:16:00
+ * @lastModified 2026-09-01 21:03:29
  * -----------------------------------------------------------
  * @todo
  * - Gate 20 restart recoveryでpending print-startの再認証/再構築を永続session registryへ移す
@@ -241,6 +241,7 @@ function createRuntimeRequest(pending, input) {
     sessionId: pending.sessionId,
     connectionGeneration: pending.connectionGeneration,
     capturedAt: input.capturedAt || input.devicePrintStartTime || input.firstObservedAt || input.observedFirstObservedAt || null,
+    observedReceivedAt: input.observedReceivedAt || input.receivedAt || input.observedAt || null,
   };
 }
 
@@ -492,6 +493,7 @@ export async function recordObservedMaterialAccountingPrintStart(input = {}) {
   const result = await runtime.recordObservedPrintStart(createRuntimeRequest(pending, {
     printJobId,
     capturedAt: correlation.capturedAt,
+    observedReceivedAt: correlation.observedReceivedAt,
   }));
   if (!isRuntimeAccepted(result)) {
     return { ...result, pending: clonePendingRecord(pending) };
@@ -532,7 +534,10 @@ export async function recordObservedMaterialAccountingPrintCompletion(input = {}
     return { ok: false, status: "blocked", reasons: ["print-binding-runtime-required"] };
   }
   const result = await runtime.recordObservedPrintCompletion({
-    ...createRuntimeRequest(pending, { printJobId }),
+    ...createRuntimeRequest(pending, {
+      printJobId,
+      observedReceivedAt: input.observedReceivedAt || input.receivedAt || input.observedAt || new Date().toISOString(),
+    }),
     resultSetCompleteness: "complete",
   });
   if (!isRuntimeAccepted(result)) {

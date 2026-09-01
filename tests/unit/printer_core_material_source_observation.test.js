@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1461 (PR #435)
+ * @version 1.390.1601 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 17:18:49
+ * @lastModified 2026-09-01 21:03:29
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -183,6 +183,99 @@ describe("MaterialSourceObservationStore", () => {
       assignments: [],
       lastChangedAt: "2026-08-27T12:00:20.000Z",
     });
+  });
+
+  it("provider断と復帰をsource semantic差分とは別のdevice-level eventとして保持する", () => {
+    const store = createEmptyMaterialSourceObservations();
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 10,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology(),
+      snapshotCompleteness: "complete",
+    });
+
+    const disconnected = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 11,
+      observedAt: "2026-08-27T12:00:10.000Z",
+      topology: createTopology({
+        cfs: { connected: false, topologyState: "stale" },
+        provider: { providerId: "k2-ws9999-boxsInfo", disconnectedAt: "2026-08-27T12:00:09.000Z" },
+      }),
+      snapshotCompleteness: "partial",
+    });
+    const reconnected = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-2",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-2",
+      sequence: 12,
+      observedAt: "2026-08-27T12:00:20.000Z",
+      topology: createTopology(),
+      snapshotCompleteness: "complete",
+    });
+
+    expect(disconnected.changes.some((change) => change.changeKind === "provider-disconnected")).toBe(true);
+    expect(reconnected.changes.map((change) => change.changeKind)).toEqual([
+      "provider-generation-changed",
+      "provider-reconnected",
+    ]);
+    expect(reconnected.record.providerDisconnectedAt).toBeNull();
+    expect(reconnected.record.events.map((event) => event.changeKind)).toContain("provider-disconnected");
+    expect(reconnected.record.events.map((event) => event.changeKind)).toContain("provider-reconnected");
+  });
+
+  it("event logをtrimした場合はcoverage開始時刻を保持範囲の先頭へ前進させる", () => {
+    const store = createEmptyMaterialSourceObservations();
+    recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 10,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology: createTopology(),
+      snapshotCompleteness: "complete",
+      limits: { maxEventsPerSource: 4, maxEventsPerDevice: 4 },
+    });
+    const changed = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 11,
+      observedAt: "2026-08-27T12:00:10.000Z",
+      topology: createTopology({
+        sources: createTopology().sources.map((source) => source.sourceId === "cfs:1:slot:2"
+          ? { ...source, status: { ...source.status, selected: false } }
+          : source),
+        assignments: [],
+      }),
+      snapshotCompleteness: "complete",
+      limits: { maxEventsPerSource: 4, maxEventsPerDevice: 1 },
+    });
+
+    expect(changed.record.events).toHaveLength(1);
+    expect(changed.record.events[0].changeKind).toBe("source-changed");
+    expect(changed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:10.000Z");
+    expect(changed.record.eventCoverageTrimmedAt).toBe("2026-08-27T12:00:10.000Z");
   });
 
   it("provisional deviceの履歴はstable deviceへ安全にrekeyでき、conflict中はmergeしない", () => {

@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1600 (PR #440)
+ * @version 1.390.1601 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 21:58:00
+ * @lastModified 2026-09-01 21:03:29
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -106,6 +106,7 @@ function createMaterialSourceObservationStore(deviceId = "serial:k2") {
       [deviceId]: {
         deviceId,
         identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+        eventCoverageStartedAt: "2026-09-01T08:00:00.000Z",
         lastObservedAt: "2026-09-01T08:00:00.000Z",
         providerDisconnectedAt: null,
         restoredFromStorage: false,
@@ -185,6 +186,7 @@ function markMaterialSourcesObservedAt(data, observedAt) {
  * @param {number=} options.connectionGeneration - WebSocket接続世代。
  * @param {string=} options.printJobId - 実機で観測したPrintJob ID。
  * @param {string|null=} options.firstObservedAt - 実機で観測した印刷開始時刻。
+ * @param {string|null=} options.observedReceivedAt - 3DPmonが開始観測を受け取った時刻。
  * @returns {string} 設定したホスト名。
  */
 function attachObservedPrintJob(data, options = {}) {
@@ -198,6 +200,9 @@ function attachObservedPrintJob(data, options = {}) {
   const firstObservedAt = options.firstObservedAt === null
     ? null
     : (options.firstObservedAt || "2026-09-01T08:01:00.000Z");
+  const observedReceivedAt = options.observedReceivedAt === null
+    ? null
+    : (options.observedReceivedAt || "2026-09-01T08:01:05.000Z");
   data.machines = {
     ...(data.machines || {}),
     [hostname]: {
@@ -207,8 +212,8 @@ function attachObservedPrintJob(data, options = {}) {
       },
       printStore: {
         current: firstObservedAt
-          ? { id: printJobId, startTime: firstObservedAt, firstObservedAt }
-          : { id: printJobId },
+          ? { id: printJobId, startTime: firstObservedAt, firstObservedAt, observedReceivedAt }
+          : { id: printJobId, observedReceivedAt },
         history: [],
       },
       runtimeData: {
@@ -240,6 +245,7 @@ function attachObservedPrintJob(data, options = {}) {
  * @param {number|null=} options.connectionGeneration - WebSocket接続世代。
  * @param {string=} options.printJobId - 完了したPrintJob ID。
  * @param {string|null=} options.completedAt - 機器で観測した完了時刻。
+ * @param {string|null=} options.observedReceivedAt - 3DPmonが完了履歴を受け取った時刻。
  * @param {number=} options.totalUsedLengthMm - 機器で観測した総使用量。
  * @returns {string} 設定したホスト名。
  */
@@ -254,6 +260,9 @@ function attachObservedCompletedPrintJob(data, options = {}) {
   const completedAt = options.completedAt === null
     ? null
     : (options.completedAt || "2026-09-01T08:31:00.000Z");
+  const observedReceivedAt = options.observedReceivedAt === null
+    ? null
+    : (options.observedReceivedAt || "2026-09-01T08:31:05.000Z");
   data.machines = {
     ...(data.machines || {}),
     [hostname]: {
@@ -269,6 +278,7 @@ function attachObservedCompletedPrintJob(data, options = {}) {
           {
             id: printJobId,
             finishTime: completedAt,
+            observedReceivedAt,
             printfinish: 1,
             materialUsedMm: options.totalUsedLengthMm ?? 9753,
           },
@@ -425,6 +435,8 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
         sessionId: "session:k2-live",
         connectionGeneration: 7,
         printJobId: "job:actual-1001",
+        devicePrintStartTime: "2026-09-01T08:01:00.000Z",
+        printStartObservedReceivedAt: "2026-09-01T08:01:05.000Z",
         firstObservedAt: "2026-09-01T08:01:00.000Z",
       },
       {
@@ -433,6 +445,8 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
         sessionId: "session:k2-live",
         connectionGeneration: 7,
         printJobId: "job:actual-1001",
+        devicePrintStartTime: "2026-09-01T08:01:00.000Z",
+        printStartObservedReceivedAt: "2026-09-01T08:01:05.000Z",
         firstObservedAt: "2026-09-01T08:01:00.000Z",
       },
     ]);
@@ -979,6 +993,157 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     expect(changedSegment.debit.reasons).toContain("physical-discontinuity");
     expect(changedSegment.debit.reasons).toContain("source-continuity-required");
     expect(unchangedSegment.debit.canDebit).toBe(true);
+  });
+
+  it("print-start後のprovider断は同じsource状態へ復帰してもdebit候補へ昇格しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:k2-provider-gap-during-print" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-provider-gap-during-print" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-provider-gap-during-print",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
+    const deviceRecord = data.materialSourceObservations.byDeviceId["serial:k2"];
+    deviceRecord.events = Array.isArray(deviceRecord.events) ? deviceRecord.events : [];
+    deviceRecord.events.push({
+      observationId: "mso:serial-k2:device:provider-disconnected-during-print",
+      deviceId: "serial:k2",
+      sourceId: null,
+      observedAt: "2026-09-01T08:12:00.000Z",
+      changeKind: "provider-disconnected",
+      before: { providerDisconnectedAt: null },
+      after: { providerDisconnectedAt: "2026-09-01T08:12:00.000Z" },
+      authority: "observation-only",
+    });
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-provider-gap-during-print",
+      resultSetCompleteness: "complete",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.canDebit === false)).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.reasons.includes("physical-discontinuity"))).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.reasons.includes("source-continuity-required"))).toBe(true);
+  });
+
+  it("device全体がfreshでもsource固有観測がTTL切れなら該当sourceだけdebit候補へ昇格しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:k2-source-specific-ttl" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-source-specific-ttl" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-source-specific-ttl",
+      completedAt: "2026-09-01T08:31:00.000Z",
+      observedReceivedAt: "2026-09-01T08:31:05.000Z",
+    });
+    const deviceRecord = data.materialSourceObservations.byDeviceId["serial:k2"];
+    deviceRecord.lastObservedAt = "2026-09-01T08:30:45.000Z";
+    deviceRecord.latestBySourceId["source:k2:cfs:1a"].lastObservedAt = "2026-09-01T08:02:00.000Z";
+    deviceRecord.latestBySourceId["source:k2:cfs:1b"].lastObservedAt = "2026-09-01T08:30:45.000Z";
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-source-specific-ttl",
+      resultSetCompleteness: "complete",
+    });
+
+    const sourceA = result.segments.find((segment) => segment.protocolToolAlias === "T1A");
+    const sourceB = result.segments.find((segment) => segment.protocolToolAlias === "T1B");
+    expect(result.ok).toBe(true);
+    expect(sourceA.debit.canDebit).toBe(false);
+    expect(sourceA.debit.reasons).toContain("source-continuity-required");
+    expect(sourceA.debit.reasons).toContain("fresh-topology-required");
+    expect(sourceB.debit.canDebit).toBe(true);
+  });
+
+  it("printer時計がlocal受信時計とずれていてもlocal観測区間内ならdebit候補へ昇格する", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:k2-local-clock-continuity",
+      firstObservedAt: "2026-09-01T08:01:00.000Z",
+      observedReceivedAt: "2026-09-01T08:01:05.000Z",
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-local-clock-continuity" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-local-clock-continuity",
+      completedAt: "2026-09-01T08:30:30.000Z",
+      observedReceivedAt: "2026-09-01T08:31:05.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-local-clock-continuity",
+      resultSetCompleteness: "complete",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.segments.map((segment) => segment.debit.canDebit)).toEqual([true, true]);
+  });
+
+  it("print-start以後のevent coverageが証明できない場合はdebit候補へ昇格しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:k2-event-coverage-missing" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-event-coverage-missing" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-event-coverage-missing",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
+    delete data.materialSourceObservations.byDeviceId["serial:k2"].eventCoverageStartedAt;
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-event-coverage-missing",
+      resultSetCompleteness: "complete",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.canDebit === false)).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.reasons.includes("source-continuity-required"))).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.reasons.includes("fresh-topology-required"))).toBe(true);
   });
 
   it("完了後に観測されたfreshなMaterialSourceを完了時点のcontinuity証拠へ遡及利用しない", async () => {

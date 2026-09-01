@@ -187,6 +187,22 @@ print-start snapshot and no later than the trusted completion observation. A
 MaterialSource observation received after completion must not be retroactively
 used to prove that the source was fresh at completion time.
 
+MaterialSource continuity uses the 3dpmon receipt-time domain, not printer clock
+timestamps. `capturedAt` and `completedAt` remain device evidence for the print
+job timeline, while `printStartObservedReceivedAt`, `completionObservedReceivedAt`,
+and MaterialSource `lastObservedAt` form the causal observation interval used
+for provisional debit eligibility. Source freshness must be calculated from the
+source-specific observation timestamp, never from a fresher device-level
+observation belonging to another source. The MaterialSource event log is
+bounded, so absence of a source change event is trusted only when the retained
+event coverage starts at or before the trusted print-start receipt time. If
+coverage is missing or starts after print-start, the usage evidence remains
+shadow evidence and does not become a managed remaining debit candidate.
+Device-level provider gaps also break provisional continuity:
+`provider-disconnected`, `provider-reconnected`, and provider generation changes
+observed during the print interval apply to every provisional source on that
+device even when the same slot/material state is later observed again.
+
 K2/CFS print-start binding must distinguish printer-reported job start time
 from 3dpmon receipt time. `devicePrintStartTime` may be used as the immutable
 print-start snapshot time, but causality against a just-submitted transport
@@ -541,11 +557,20 @@ Gate 18.9 must cover:
   evaluation. TTL-expired, provider-disconnected, or restored-last-known
   observations may still produce source-specific JobMaterialSegment / shadow
   ledger evidence, but they do not become managed remaining debit candidates.
-  A fresh completion-time topology observation is not enough by itself: if the
-  MaterialSource change log records `source-changed`, `source-disappeared`, or
-  `source-merge-conflict` for the same canonical source or alias after
-  print-start and before completion, the runtime marks the segment as a
-  physical discontinuity and keeps `sourceContinuity:false`.
+  Freshness is evaluated with the source-specific observation timestamp. A fresh
+  device-level topology observation for another source cannot refresh a stale
+  provisional source. Runtime interval checks use 3dpmon receipt times
+  (`printStartObservedReceivedAt`, `completionObservedReceivedAt`, and
+  MaterialSource `lastObservedAt`) instead of mixing printer clock `capturedAt`
+  / `completedAt` with local observation clocks. A fresh completion-time
+  topology observation is not enough by itself: if the
+  MaterialSource change log records `source-changed`, `source-disappeared`,
+  `source-merge-conflict`, a device-level provider disconnect/reconnect, or a
+  provider generation change after print-start and before completion, the
+  runtime marks the segment as a physical discontinuity and keeps
+  `sourceContinuity:false`. The same check also requires retained event
+  coverage from at least the print-start time; old restored records or records
+  whose event log has already trimmed past print-start fail closed.
   Gate 18.9I-2 does not mutate managed spool remaining or legacy
   `usageHistory`.
 - ItemKeeper payload generation may read same-device `observed-used` /
