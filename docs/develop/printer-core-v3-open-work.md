@@ -123,8 +123,14 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   module-attested `MaterialBindingPlan` を生成してlive bridgeへpending登録する。
   pendingはtransport送信成功前は`prepared`に留め、送信成功後だけ`submittedAt`とcommand IDを
   固定する。WSで実機 `printStartTime` / `printJobId` を観測した場合は、
-  送信前baseline jobではないこと、観測時刻が`submittedAt`以後であること、
-  session/generationが一致することを満たした時だけ `recordObservedPrintStart()` へ接続する。
+ 送信前baseline jobではないこと、3DPmon側の受信時刻`observedReceivedAt`が`submittedAt`以後であること、
+ session/generationが一致することを満たした時だけ `recordObservedPrintStart()` へ接続する。
+  装置報告の`devicePrintStartTime`はprint-start snapshot時刻として保持するが、ローカル送信時刻との
+  因果順序判定には使わない。さらにMaterialBindingPlanはtransport command requestから生成した
+  `commandBinding` digestにbindし、command ID、device ID、session ID、connectionGeneration、
+  remote path、file hash、material assignment digestが一致しないrequestではpending登録しない。
+  MaterialSource aliasが複数canonical sourceへ衝突する場合はfirst-winせず
+  `ambiguous-material-source-alias` としてprint-start bindingを拒否する。
   完了履歴が `printStore.history` に入った後で `recordObservedPrintCompletion()` へ接続し、
   成功後はpendingを削除する。transport送信失敗時はcommand ID付きでpendingを破棄する。
   saved trusted print-start snapshotには `issuanceEvidence` としてdevice/session/generation/job/timeを残す。

@@ -22,9 +22,9 @@
  * - {@link forgetMaterialAccountingPrintStartRequest}：hostname単位のpending登録を破棄
  * - {@link clearMaterialAccountingPrintBindingLiveBridge}：テスト用にpending状態を初期化
  *
- * @version 1.390.1598 (PR #440)
+ * @version 1.390.1599 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 20:14:08
+ * @lastModified 2026-09-01 21:16:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 20 restart recoveryでpending print-startの再認証/再構築を永続session registryへ移す
@@ -32,7 +32,10 @@
 
 "use strict";
 
-import { validateMaterialBindingPlan } from "./dashboard_material_binding_plan.js";
+import {
+  validateMaterialBindingPlan,
+  validateMaterialBindingPlanCommandBinding,
+} from "./dashboard_material_binding_plan.js";
 
 /**
  * hostnameごとのpending K2/CFS print-start state。
@@ -162,6 +165,28 @@ function requireMaterialBindingPlan(plan) {
 }
 
 /**
+ * MaterialBindingPlanが実transport command requestへ結合されていることを検証する。
+ *
+ * 【詳細説明】
+ * - MaterialBindingPlanは材料割当snapshotとして有効でも、別command requestへ横流しされると誤帰属になる。
+ * - pending登録時にrequestからcommandBindingを再計算し、plan内digestと一致する場合だけ保持する。
+ *
+ * @private
+ * @function requireMaterialBindingCommandBinding
+ * @param {Object} plan - 検証済みMaterialBindingPlan。
+ * @param {Object|null|undefined} commandRequest - 実送信予定のcommand request。
+ * @returns {Object} commandBinding検証結果。
+ * @throws {TypeError} commandBindingが一致しない場合。
+ */
+function requireMaterialBindingCommandBinding(plan, commandRequest) {
+  const validation = validateMaterialBindingPlanCommandBinding(plan, commandRequest);
+  if (!validation.ok) {
+    throw new TypeError(`Material print binding live bridge requires command-bound MaterialBindingPlan: ${validation.errors.join(",")}`);
+  }
+  return validation.commandBinding;
+}
+
+/**
  * pending recordを公開/永続化しない診断用shapeへcloneする。
  *
  * @private
@@ -215,20 +240,32 @@ function createRuntimeRequest(pending, input) {
     printJobId,
     sessionId: pending.sessionId,
     connectionGeneration: pending.connectionGeneration,
-    capturedAt: input.capturedAt || input.firstObservedAt || input.observedFirstObservedAt || null,
+    capturedAt: input.capturedAt || input.devicePrintStartTime || input.firstObservedAt || input.observedFirstObservedAt || null,
   };
 }
 
 /**
- * 観測されたprint-start時刻を正規化する。
+ * 装置が報告したprint-start時刻を正規化する。
  *
  * @private
- * @function resolveObservedFirstObservedAt
+ * @function resolveDevicePrintStartTime
  * @param {Object} input - 観測入力。
  * @returns {string|null} ISO時刻、またはnull。
  */
-function resolveObservedFirstObservedAt(input) {
-  return normalizeIsoTime(input.firstObservedAt || input.observedFirstObservedAt || input.capturedAt || input.observedAt);
+function resolveDevicePrintStartTime(input) {
+  return normalizeIsoTime(input.devicePrintStartTime || input.firstObservedAt || input.observedFirstObservedAt || input.capturedAt);
+}
+
+/**
+ * 3DPmonがprint-start観測を受け取った時刻を正規化する。
+ *
+ * @private
+ * @function resolveObservedReceivedAt
+ * @param {Object} input - 観測入力。
+ * @returns {string|null} ISO時刻、またはnull。
+ */
+function resolveObservedReceivedAt(input) {
+  return normalizeIsoTime(input.observedReceivedAt || input.receivedAt || input.observedAt);
 }
 
 /**
@@ -242,20 +279,24 @@ function resolveObservedFirstObservedAt(input) {
  * @function validateObservedStartCorrelation
  * @param {Object} pending - pending record。
  * @param {Object} input - 観測入力。
- * @returns {{ok:boolean,reasons:string[],observedFirstObservedAt:string|null}} 検証結果。
+ * @returns {{ok:boolean,reasons:string[],devicePrintStartTime:string|null,observedReceivedAt:string|null,capturedAt:string|null}} 検証結果。
  */
 function validateObservedStartCorrelation(pending, input) {
   const reasons = [];
   const printJobId = requireNonEmptyString(input.printJobId || input.observedPrintJobId, "printJobId");
-  const observedFirstObservedAt = resolveObservedFirstObservedAt(input);
+  const devicePrintStartTime = resolveDevicePrintStartTime(input);
+  const observedReceivedAt = resolveObservedReceivedAt(input);
   const submittedAt = normalizeIsoTime(pending.submittedAt);
   if (pending.baselinePrintJobId && printJobId === pending.baselinePrintJobId) {
     reasons.push("observed-job-matches-baseline");
   }
-  if (!observedFirstObservedAt) {
-    reasons.push("observed-first-observed-at-required");
-  } else if (submittedAt && Date.parse(observedFirstObservedAt) < Date.parse(submittedAt)) {
-    reasons.push("observed-start-before-command-submitted");
+  if (!devicePrintStartTime) {
+    reasons.push("device-print-start-time-required");
+  }
+  if (!observedReceivedAt) {
+    reasons.push("observed-received-at-required");
+  } else if (submittedAt && Date.parse(observedReceivedAt) < Date.parse(submittedAt)) {
+    reasons.push("observed-received-before-command-submitted");
   }
   if (input.sessionId && pending.sessionId && input.sessionId !== pending.sessionId) {
     reasons.push("observed-session-mismatch");
@@ -269,7 +310,9 @@ function validateObservedStartCorrelation(pending, input) {
   return {
     ok: reasons.length === 0,
     reasons: [...new Set(reasons)],
-    observedFirstObservedAt,
+    devicePrintStartTime,
+    observedReceivedAt,
+    capturedAt: devicePrintStartTime || observedReceivedAt,
   };
 }
 
@@ -317,6 +360,7 @@ export function rememberMaterialAccountingPrintStartRequest(input = {}) {
   const hostname = requireNonEmptyString(input.hostname || input.host, "hostname");
   const commandRequest = input.commandRequest || input.request;
   const materialBindingPlan = requireMaterialBindingPlan(input.materialBindingPlan);
+  const commandBinding = requireMaterialBindingCommandBinding(materialBindingPlan, commandRequest);
   const connectionGeneration = normalizeConnectionGeneration(
     materialBindingPlan?.startContext?.connectionGeneration ||
     commandRequest?.payload?.startContext?.connectionGeneration ||
@@ -330,6 +374,7 @@ export function rememberMaterialAccountingPrintStartRequest(input = {}) {
     status: "prepared",
     hostname,
     commandId: toTrimmedString(commandRequest?.commandId) || null,
+    commandBinding,
     deviceId: materialBindingPlan.deviceId,
     sessionId: requireNonEmptyString(
       materialBindingPlan?.startContext?.sessionId || commandRequest?.sessionId || commandRequest?.payload?.startContext?.sessionId,
@@ -421,7 +466,8 @@ export async function recordObservedMaterialAccountingPrintStart(input = {}) {
     pending.queuedStartObservation = {
       hostname,
       printJobId,
-      firstObservedAt: resolveObservedFirstObservedAt(input),
+      devicePrintStartTime: resolveDevicePrintStartTime(input),
+      observedReceivedAt: resolveObservedReceivedAt(input),
       sessionId: input.sessionId || null,
       connectionGeneration: input.connectionGeneration ?? null,
     };
@@ -445,7 +491,7 @@ export async function recordObservedMaterialAccountingPrintStart(input = {}) {
   }
   const result = await runtime.recordObservedPrintStart(createRuntimeRequest(pending, {
     printJobId,
-    capturedAt: correlation.observedFirstObservedAt,
+    capturedAt: correlation.capturedAt,
   }));
   if (!isRuntimeAccepted(result)) {
     return { ...result, pending: clonePendingRecord(pending) };

@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1597 (PR #440)
+* @version 1.390.1599 (PR #440)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-09-01 19:56:42
+* @lastModified 2026-09-01 21:16:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -97,7 +97,10 @@ import {
   markMaterialAccountingPrintStartRequestSubmitted,
   rememberMaterialAccountingPrintStartRequest,
 } from "./printer_core/dashboard_material_accounting_print_binding_live_bridge.js";
-import { createMaterialBindingPlan } from "./printer_core/dashboard_material_binding_plan.js";
+import {
+  createMaterialBindingCommandBinding,
+  createMaterialBindingPlan,
+} from "./printer_core/dashboard_material_binding_plan.js";
 
 /**
  * 現在の使用量表示単位を返す。
@@ -1453,6 +1456,7 @@ function createK2CfsMaterialBindingPlanFromPrintStartRequest(request) {
       connectionGeneration: payload.startContext?.connectionGeneration || request.connectionGeneration || null,
       uploadGeneration: payload.startContext?.uploadGeneration || null,
     },
+    commandBinding: createMaterialBindingCommandBinding(request),
     createdAt: request.createdAt || null,
   });
 }

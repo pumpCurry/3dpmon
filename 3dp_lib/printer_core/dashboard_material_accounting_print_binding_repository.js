@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1597 (PR #440)
+ * @version 1.390.1599 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-09-01 19:56:42
+ * @lastModified 2026-09-01 21:16:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -237,22 +237,33 @@ function mapById(records, key) {
  * @private
  * @function mapMaterialSourcesForBinding
  * @param {Object[]} records - MaterialSource record配列。
- * @returns {Map<string,Object>} canonical ID/alias map。
+ * @returns {{sourceMap:Map<string,Object>,ambiguousAliases:Set<string>}} canonical ID/alias mapと衝突alias。
  */
 function mapMaterialSourcesForBinding(records) {
-  const map = new Map();
+  const sourceMap = new Map();
+  const ambiguousAliases = new Set();
   for (const record of Array.isArray(records) ? records : []) {
+    const canonicalId = toTrimmedString(record?.materialSourceId);
     const ids = [
       record?.materialSourceId,
       ...(Array.isArray(record?.aliases) ? record.aliases : []),
     ].map(toTrimmedString).filter(Boolean);
     for (const id of ids) {
-      if (!map.has(id)) {
-        map.set(id, record);
+      if (ambiguousAliases.has(id)) {
+        continue;
+      }
+      const existing = sourceMap.get(id);
+      if (!existing) {
+        sourceMap.set(id, record);
+        continue;
+      }
+      if (toTrimmedString(existing.materialSourceId) !== canonicalId) {
+        sourceMap.delete(id);
+        ambiguousAliases.add(id);
       }
     }
   }
-  return map;
+  return { sourceMap, ambiguousAliases };
 }
 
 /**
@@ -1231,7 +1242,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const capturedAt = normalizeIsoTime(input.capturedAt);
     const operationId = toTrimmedString(input.bindingOperationId);
     const planValidation = validatePrintBindingPlan(printPlan);
-    const sourceMap = mapMaterialSourcesForBinding(input.materialSources);
+    const sourceLookup = mapMaterialSourcesForBinding(input.materialSources);
     const reasons = [];
     if (!planValidation.ok) {
       reasons.push(...planValidation.errors);
@@ -1248,7 +1259,12 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const plannedSnapshots = [];
     if (reasons.length === 0) {
       for (const assignment of printPlan.toolAssignments) {
-        const source = sourceMap.get(assignment.materialSourceId);
+        const assignmentSourceId = toTrimmedString(assignment.materialSourceId);
+        if (sourceLookup.ambiguousAliases.has(assignmentSourceId)) {
+          reasons.push("ambiguous-material-source-alias");
+          continue;
+        }
+        const source = sourceLookup.sourceMap.get(assignmentSourceId);
         const canonicalAssignment = source?.materialSourceId
           ? {
               ...assignment,

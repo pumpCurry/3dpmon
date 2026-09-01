@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1598 (PR #440)
+ * @version 1.390.1599 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 20:14:08
+ * @lastModified 2026-09-01 21:16:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -51,7 +51,9 @@ import {
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_print_binding.js";
 import { createMaterialAccountingPrintBindingRuntime } from "../../3dp_lib/printer_core/dashboard_material_accounting_print_binding_runtime.js";
 import {
+  createMaterialBindingCommandBinding,
   createMaterialBindingPlan,
+  validateMaterialBindingPlanCommandBinding,
   validateMaterialBindingPlan,
 } from "../../3dp_lib/printer_core/dashboard_material_binding_plan.js";
 import {
@@ -244,35 +246,24 @@ function attachOpenMounts(data) {
  * @function createBindingPlan
  * @returns {Object} MaterialBindingPlan fixture。
  */
-function createBindingPlan() {
+function createBindingPlan(commandRequest = createCommandRequest()) {
+  const payload = commandRequest.payload || {};
   return createMaterialBindingPlan({
-    deviceId: "serial:k2",
-    bindingPlanId: "binding-plan:k2:two-color",
+    deviceId: commandRequest.deviceId,
+    bindingPlanId: payload.printPlanId || "binding-plan:k2:two-color",
     planKind: "material-binding-plan",
     asset: {
-      path: "/mnt/UDISK/printer_data/gcodes/two-color.gcode",
-      fileHash: "sha256:remote-list-hash",
-      uploadGeneration: "upload:two-color:1",
+      path: payload.asset?.path || "/mnt/UDISK/printer_data/gcodes/two-color.gcode",
+      fileHash: payload.asset?.fileHash || "sha256:test",
+      uploadGeneration: payload.startContext?.uploadGeneration || "upload:two-color:1",
     },
-    toolAssignments: [
-      {
-        toolId: 0,
-        protocolToolAlias: "T1A",
-        materialSourceId: "source:k2:cfs:1a",
-        spoolId: "spool:a",
-      },
-      {
-        toolId: 1,
-        protocolToolAlias: "T1B",
-        materialSourceId: "source:k2:cfs:1b",
-        spoolId: "spool:b",
-      },
-    ],
+    toolAssignments: payload.toolAssignments || [],
     startContext: {
-      sessionId: "session:k2-live",
-      connectionGeneration: 7,
-      uploadGeneration: "upload:two-color:1",
+      sessionId: commandRequest.sessionId,
+      connectionGeneration: payload.startContext?.connectionGeneration || commandRequest.connectionGeneration || null,
+      uploadGeneration: payload.startContext?.uploadGeneration || "upload:two-color:1",
     },
+    commandBinding: createMaterialBindingCommandBinding(commandRequest),
   });
 }
 
@@ -298,7 +289,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
     expect(pending.sessionId).toBe("session:k2-live");
     expect(pending.printPlan.toolAssignments.map((assignment) => assignment.protocolToolAlias)).toEqual(["T1A", "T1B"]);
     expect(getMaterialAccountingPrintBindingLiveBridgeSnapshot().pendingByHost["K2Pro-69E7"].printPlan.printPlanId)
-      .toBe("binding-plan:k2:two-color");
+      .toBe("ui-k2-cfs:K2Pro-69E7:/mnt/UDISK/printer_data/gcodes/two-color.gcode:hash");
   });
 
   it("実機観測printJobIdが来たときだけpending MaterialBindingPlanをprint-start runtimeへ一度だけ渡す", async () => {
@@ -321,12 +312,14 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       hostname: "K2Pro-69E7",
       printJobId: "1785991119",
       firstObservedAt: "2026-09-01T10:00:05.000Z",
+      observedReceivedAt: "2026-09-01T10:00:05.000Z",
       runtime,
     });
     const second = await recordObservedMaterialAccountingPrintStart({
       hostname: "K2Pro-69E7",
       printJobId: "1785991119",
       firstObservedAt: "2026-09-01T10:00:05.000Z",
+      observedReceivedAt: "2026-09-01T10:00:05.000Z",
       runtime,
     });
 
@@ -341,7 +334,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       connectionGeneration: 7,
       printPlan: expect.objectContaining({
         deviceId: "serial:k2",
-        printPlanId: "binding-plan:k2:two-color",
+        printPlanId: "ui-k2-cfs:K2Pro-69E7:/mnt/UDISK/printer_data/gcodes/two-color.gcode:hash",
       }),
     }));
   });
@@ -366,6 +359,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       hostname: "K2Pro-69E7",
       printJobId: "1785991119",
       firstObservedAt: "2026-09-01T10:00:05.000Z",
+      observedReceivedAt: "2026-09-01T10:00:05.000Z",
       runtime,
     });
 
@@ -438,6 +432,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       hostname: "K2Pro-69E7",
       printJobId: "job:new-1001",
       firstObservedAt: "2026-09-01T08:01:05.000Z",
+      observedReceivedAt: "2026-09-01T08:01:05.000Z",
       runtime,
     });
 
@@ -462,6 +457,47 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
 
     expect(validation.ok).toBe(false);
     expect(validation.errors).toContain("untrusted-material-binding-plan");
+  });
+
+  it("MaterialBindingPlanは実transport command requestと一致するcommandBindingだけを信頼する", () => {
+    const commandRequest = createCommandRequest();
+    const plan = createBindingPlan(commandRequest);
+    const mismatchedRequest = createCommandRequest();
+    mismatchedRequest.payload.asset.path = "/mnt/UDISK/printer_data/gcodes/other.gcode";
+
+    const matching = validateMaterialBindingPlanCommandBinding(plan, commandRequest);
+    const mismatched = validateMaterialBindingPlanCommandBinding(plan, mismatchedRequest);
+
+    expect(matching).toEqual({
+      ok: true,
+      errors: [],
+      commandBinding: expect.objectContaining({
+        commandId: "cmd:k2:print-start:001",
+        remotePath: "/mnt/UDISK/printer_data/gcodes/two-color.gcode",
+      }),
+    });
+    expect(mismatched.ok).toBe(false);
+    expect(mismatched.errors).toContain("material-binding-command-binding-digest-mismatch");
+  });
+
+  it("MaterialBindingPlanとtransport command requestが一致しない場合はpending登録を拒否する", () => {
+    const commandRequest = createCommandRequest();
+    const mismatchedRequest = createCommandRequest();
+    mismatchedRequest.payload.toolAssignments = [
+      {
+        toolId: 0,
+        protocolToolAlias: "T1A",
+        materialSourceId: "source:k2:cfs:1d",
+        spoolId: "spool:d",
+      },
+    ];
+
+    expect(() => rememberMaterialAccountingPrintStartRequest({
+      hostname: "K2Pro-69E7",
+      commandRequest: mismatchedRequest,
+      materialBindingPlan: createBindingPlan(commandRequest),
+      preparedAt: "2026-09-01T10:00:00.000Z",
+    })).toThrow(/material-binding-command-binding-digest-mismatch/);
   });
 
   it("MaterialBindingPlanはspool未割当sourceでもtransport binding候補として保持できる", () => {
@@ -503,6 +539,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       hostname: "K2Pro-69E7",
       printJobId: "job:new-1001",
       firstObservedAt: "2026-09-01T08:01:05.000Z",
+      observedReceivedAt: "2026-09-01T08:01:05.000Z",
       runtime,
     });
     const submitted = await markMaterialAccountingPrintStartRequestSubmitted({
@@ -537,6 +574,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       hostname: "K2Pro-69E7",
       printJobId: "job:new-1001",
       firstObservedAt: "2026-09-01T08:01:05.000Z",
+      observedReceivedAt: "2026-09-01T08:01:05.000Z",
       runtime,
     });
     const submitted = await markMaterialAccountingPrintStartRequestSubmitted({
@@ -552,6 +590,68 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
     expect(runtime.recordObservedPrintStart).toHaveBeenCalledWith(expect.objectContaining({
       printJobId: "job:new-1001",
     }));
+  });
+
+  it("装置printStartTimeがsubmittedより古くても3DPmon受信時刻が送信後なら新jobとしてbindする", async () => {
+    const runtime = {
+      recordObservedPrintStart: vi.fn(async () => ({ ok: true, status: "recorded" })),
+    };
+    const commandRequest = createCommandRequest();
+    rememberMaterialAccountingPrintStartRequest({
+      hostname: "K2Pro-69E7",
+      commandRequest,
+      materialBindingPlan: createBindingPlan(commandRequest),
+      submittedAt: "2026-09-01T10:00:00.000Z",
+    });
+    markMaterialAccountingPrintStartRequestSubmitted({
+      hostname: "K2Pro-69E7",
+      commandId: commandRequest.commandId,
+      submittedAt: "2026-09-01T10:00:00.000Z",
+    });
+
+    const result = await recordObservedMaterialAccountingPrintStart({
+      hostname: "K2Pro-69E7",
+      printJobId: "job:new-1001",
+      devicePrintStartTime: "2026-09-01T09:59:50.000Z",
+      observedReceivedAt: "2026-09-01T10:00:05.000Z",
+      runtime,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(runtime.recordObservedPrintStart).toHaveBeenCalledWith(expect.objectContaining({
+      printJobId: "job:new-1001",
+      capturedAt: "2026-09-01T09:59:50.000Z",
+    }));
+  });
+
+  it("3DPmon受信時刻がsubmittedより古いstart観測は装置printStartTimeが新しくても拒否する", async () => {
+    const runtime = {
+      recordObservedPrintStart: vi.fn(async () => ({ ok: true, status: "recorded" })),
+    };
+    const commandRequest = createCommandRequest();
+    rememberMaterialAccountingPrintStartRequest({
+      hostname: "K2Pro-69E7",
+      commandRequest,
+      materialBindingPlan: createBindingPlan(commandRequest),
+      submittedAt: "2026-09-01T10:00:00.000Z",
+    });
+    markMaterialAccountingPrintStartRequestSubmitted({
+      hostname: "K2Pro-69E7",
+      commandId: commandRequest.commandId,
+      submittedAt: "2026-09-01T10:00:00.000Z",
+    });
+
+    const result = await recordObservedMaterialAccountingPrintStart({
+      hostname: "K2Pro-69E7",
+      printJobId: "job:new-1001",
+      devicePrintStartTime: "2026-09-01T10:00:05.000Z",
+      observedReceivedAt: "2026-09-01T09:59:59.000Z",
+      runtime,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("observed-received-before-command-submitted");
+    expect(runtime.recordObservedPrintStart).not.toHaveBeenCalled();
   });
 
   it("baselineと同じ旧job観測は今回commandの新jobとしてbindしない", async () => {
@@ -576,6 +676,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       hostname: "K2Pro-69E7",
       printJobId: "job:old-9999",
       firstObservedAt: "2026-09-01T08:01:05.000Z",
+      observedReceivedAt: "2026-09-01T08:01:05.000Z",
       runtime,
     });
 
@@ -605,6 +706,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       hostname: "K2Pro-69E7",
       printJobId: "job:new-1001",
       firstObservedAt: "2026-09-01T08:01:05.000Z",
+      observedReceivedAt: "2026-09-01T08:01:05.000Z",
       runtime,
     });
 
@@ -617,6 +719,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       hostname: "K2Pro-69E7",
       printJobId: "job:manual-later",
       firstObservedAt: "2026-09-01T08:40:00.000Z",
+      observedReceivedAt: "2026-09-01T08:40:00.000Z",
       runtime,
     });
 

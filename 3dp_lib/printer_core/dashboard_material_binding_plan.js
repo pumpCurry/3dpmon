@@ -14,11 +14,13 @@
  *
  * 【公開関数一覧】
  * - {@link createMaterialBindingPlan}：材料割当専用planを生成
+ * - {@link createMaterialBindingCommandBinding}：transport command request用binding digestを生成
+ * - {@link validateMaterialBindingPlanCommandBinding}：planとtransport command requestの一致を検証
  * - {@link validateMaterialBindingPlan}：MaterialBindingPlanのattestationを検証
  *
- * @version 1.390.1597 (PR #440)
+ * @version 1.390.1599 (PR #440)
  * @since   1.390.1597 (PR #440)
- * @lastModified 2026-09-01 19:56:42
+ * @lastModified 2026-09-01 21:16:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 20 restart recoveryでprocess-local secret依存ではない再認証registryへ移行する
@@ -166,6 +168,103 @@ function normalizeConnectionGeneration(value) {
 }
 
 /**
+ * command binding用assignment payloadを正規化する。
+ *
+ * 【詳細説明】
+ * - transport command requestとMaterialBindingPlanの照合では、UI表示用materialや生成済みassignmentIdではなく、
+ *   実際に送るtool/source/spool対応だけをdigestへ含める。
+ * - tool順序の違いで別commandとして扱えるよう、orderも安定化して含める。
+ *
+ * @private
+ * @function normalizeCommandBindingAssignment
+ * @param {Object} assignment - command payload内assignment候補。
+ * @param {number} index - fallback順序。
+ * @returns {Object} command binding用assignment。
+ * @throws {TypeError} 必須値が欠ける場合。
+ */
+function normalizeCommandBindingAssignment(assignment, index) {
+  const toolId = normalizeToolId(assignment?.toolId ?? index);
+  if (toolId === null) {
+    throw new TypeError("MaterialBindingPlan command binding requires a valid assignment.toolId.");
+  }
+  return {
+    toolId,
+    protocolToolAlias: requireNonEmptyString(
+      assignment?.protocolToolAlias || assignment?.toolAlias,
+      "assignment.protocolToolAlias",
+    ),
+    materialSourceId: requireNonEmptyString(assignment?.materialSourceId, "assignment.materialSourceId"),
+    spoolId: toTrimmedString(assignment?.spoolId) || null,
+    order: Number.isFinite(Number(assignment?.order)) ? Number(assignment.order) : index,
+  };
+}
+
+/**
+ * command binding用assignment digestを生成する。
+ *
+ * @private
+ * @function createCommandMaterialAssignmentDigest
+ * @param {Object[]} assignments - 正規化済みassignment配列。
+ * @returns {string} assignment digest。
+ */
+function createCommandMaterialAssignmentDigest(assignments) {
+  return createPrinterCoreV3DeterministicId("material-binding-command-assignments", [
+    stableStringifyPrinterCoreV3Value(assignments),
+  ]);
+}
+
+/**
+ * K2/CFS印刷開始transport command requestからMaterialBindingPlan結合証拠を生成する。
+ *
+ * 【詳細説明】
+ * - MaterialBindingPlanはUI側の材料割当snapshotであり、transport command requestとは別objectとして流れる。
+ * - その2つが別ファイル・別session・別assignmentへ差し替わらないよう、実送信requestから再計算できるdigestを保持する。
+ * - live bridgeはpending登録時にこのdigestを再計算して、caller supplied planだけではauthorityを得られないようにする。
+ *
+ * @function createMaterialBindingCommandBinding
+ * @param {Object} commandRequest - Printer Core command request互換object。
+ * @returns {Object} frozen command binding証拠。
+ * @throws {TypeError} command requestに必須値が欠ける場合。
+ * @example
+ * const commandBinding = createMaterialBindingCommandBinding(commandRequest);
+ */
+export function createMaterialBindingCommandBinding(commandRequest = {}) {
+  const payload = commandRequest?.payload || {};
+  const asset = payload.asset || {};
+  const assignments = (Array.isArray(payload.toolAssignments) ? payload.toolAssignments : [])
+    .map((assignment, index) => normalizeCommandBindingAssignment(assignment, index));
+  if (assignments.length === 0) {
+    throw new TypeError("MaterialBindingPlan command binding requires at least one toolAssignment.");
+  }
+  const commandBinding = {
+    schemaVersion: MATERIAL_BINDING_PLAN_SCHEMA_VERSION,
+    bindingKind: "material-binding-command",
+    commandId: requireNonEmptyString(commandRequest?.commandId, "commandId"),
+    deviceId: requireNonEmptyString(commandRequest?.deviceId || payload.deviceId, "deviceId"),
+    sessionId: requireNonEmptyString(
+      commandRequest?.sessionId || payload.startContext?.sessionId,
+      "sessionId",
+    ),
+    connectionGeneration: normalizeConnectionGeneration(
+      payload.startContext?.connectionGeneration || commandRequest?.connectionGeneration
+    ),
+    remotePath: requireNonEmptyString(asset.path || asset.remotePath || payload.path, "asset.path"),
+    fileHash: toTrimmedString(asset.fileHash || asset.contentHash || asset.sha256 || payload.fileHash) || null,
+    materialAssignmentDigest: createCommandMaterialAssignmentDigest(assignments),
+  };
+  commandBinding.digest = createPrinterCoreV3DeterministicId("material-binding-command-binding", [
+    commandBinding.commandId,
+    commandBinding.deviceId,
+    commandBinding.sessionId,
+    commandBinding.connectionGeneration,
+    commandBinding.remotePath,
+    commandBinding.fileHash || "",
+    commandBinding.materialAssignmentDigest,
+  ]);
+  return deepFreezeJson(commandBinding);
+}
+
+/**
  * MaterialBindingPlan assignmentを正規化する。
  *
  * @private
@@ -220,6 +319,7 @@ function createAttestationPayload(plan) {
     toolAssignments: plan.toolAssignments,
     materialSourceIds: plan.materialSourceIds,
     startContext: plan.startContext,
+    commandBinding: plan.commandBinding || null,
   };
 }
 
@@ -252,6 +352,7 @@ function createMaterialBindingPlanAttestation(plan) {
  * @param {Object} options.asset - 印刷対象remote asset。
  * @param {Object[]} options.toolAssignments - tool/source/spool assignment配列。
  * @param {Object=} options.startContext - session/generation/uploadGeneration文脈。
+ * @param {Object=} options.commandBinding - 実transport command requestから生成したbinding digest。
  * @param {string=} options.createdAt - 生成時刻。
  * @returns {Object} frozen MaterialBindingPlan。
  * @example
@@ -293,6 +394,7 @@ export function createMaterialBindingPlan(options = {}) {
     toolAssignments: assignments,
     materialSourceIds,
     startContext,
+    commandBinding: cloneJsonValue(options.commandBinding || null),
     createdAt: normalizeOptionalIsoTime(options.createdAt) || null,
     authority: {
       mode: "material-binding-plan",
@@ -308,6 +410,45 @@ export function createMaterialBindingPlan(options = {}) {
   };
   plan.provenance.attestation = createMaterialBindingPlanAttestation(plan);
   return deepFreezeJson(plan);
+}
+
+/**
+ * MaterialBindingPlanと実transport command requestのcommandBinding一致を検証する。
+ *
+ * 【詳細説明】
+ * - plan自体のmodule attestationだけでは「どのtransport commandへ紐づくか」を証明できない。
+ * - この検証ではrequestからcommandBindingを再計算し、plan内のdigestと完全一致する場合だけOKにする。
+ * - commandBinding未設定の古いplanは、live bridgeのproduction pending登録ではfail-closedにする。
+ *
+ * @function validateMaterialBindingPlanCommandBinding
+ * @param {Object|null|undefined} plan - MaterialBindingPlan候補。
+ * @param {Object|null|undefined} commandRequest - 実送信予定のPrinter Core command request。
+ * @returns {{ok:boolean,errors:string[],commandBinding:Object|null}} 検証結果。
+ * @example
+ * const result = validateMaterialBindingPlanCommandBinding(plan, commandRequest);
+ */
+export function validateMaterialBindingPlanCommandBinding(plan, commandRequest) {
+  const errors = [];
+  let expected = null;
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
+    return { ok: false, errors: ["material-binding-plan-not-object"], commandBinding: null };
+  }
+  try {
+    expected = createMaterialBindingCommandBinding(commandRequest);
+  } catch (error) {
+    errors.push("material-binding-command-binding-request-invalid");
+  }
+  if (!plan.commandBinding || typeof plan.commandBinding !== "object" || Array.isArray(plan.commandBinding)) {
+    errors.push("material-binding-command-binding-required");
+  }
+  if (expected && plan.commandBinding?.digest !== expected.digest) {
+    errors.push("material-binding-command-binding-digest-mismatch");
+  }
+  return {
+    ok: errors.length === 0,
+    errors: [...new Set(errors)],
+    commandBinding: expected,
+  };
 }
 
 /**
@@ -341,6 +482,14 @@ export function validateMaterialBindingPlan(plan) {
   }
   if (!toTrimmedString(plan.asset?.path)) {
     errors.push("missing-asset-path");
+  }
+  if (plan.commandBinding !== null && plan.commandBinding !== undefined) {
+    if (plan.commandBinding?.bindingKind !== "material-binding-command") {
+      errors.push("material-binding-command-binding-kind-invalid");
+    }
+    if (!toTrimmedString(plan.commandBinding?.digest)) {
+      errors.push("missing-material-binding-command-binding-digest");
+    }
   }
   const assignments = Array.isArray(plan.toolAssignments) ? plan.toolAssignments : [];
   if (assignments.length === 0) {

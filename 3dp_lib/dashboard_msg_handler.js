@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.1597 (PR #440)
+* @version 1.390.1599 (PR #440)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-09-01 19:56:42
+* @lastModified 2026-09-01 21:16:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -131,18 +131,23 @@ function hasK2PrinterCoreShadow(machine) {
  * @function notifyMaterialAccountingPrintStartObserved
  * @param {string} host - 対象ホスト名。
  * @param {number|string|null} printJobId - 実機観測済みPrintJob ID。
- * @param {string|null=} firstObservedAt - 実機観測済みprint-start時刻。
+ * @param {Object|string|null=} observation - 装置開始時刻、または互換用の開始時刻文字列。
  * @returns {void}
  */
-function notifyMaterialAccountingPrintStartObserved(host, printJobId, firstObservedAt = null) {
+function notifyMaterialAccountingPrintStartObserved(host, printJobId, observation = null) {
   const normalizedPrintJobId = String(printJobId ?? "").trim();
   if (!normalizedPrintJobId) {
     return;
   }
+  const observedReceivedAt = new Date().toISOString();
+  const observationPayload = observation && typeof observation === "object"
+    ? observation
+    : { devicePrintStartTime: observation || null };
   void recordObservedMaterialAccountingPrintStart({
     hostname: host,
     printJobId: normalizedPrintJobId,
-    firstObservedAt,
+    devicePrintStartTime: observationPayload.devicePrintStartTime || observationPayload.firstObservedAt || null,
+    observedReceivedAt: observationPayload.observedReceivedAt || observedReceivedAt,
     runtime: getMaterialAccountingPrintBindingRuntime(),
   }).catch((error) => {
     pushLog(`PrintBinding開始観測の記録をスキップしました: ${error?.message || error}`, "warn", false, host);
@@ -1114,7 +1119,10 @@ export function processData(data, hostname) {
         scopedById("print-current-container", host), host
       );
       if (hasK2PrinterCoreShadow(machine) && data.printStartTime) {
-        notifyMaterialAccountingPrintStartObserved(host, curJob.id, curJob.startTime || null);
+        notifyMaterialAccountingPrintStartObserved(host, curJob.id, {
+          devicePrintStartTime: curJob.startTime || null,
+          observedReceivedAt: new Date().toISOString(),
+        });
       }
     }
   }

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1523 (PR #438)
+ * @version 1.390.1599 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 16:16:00
+ * @lastModified 2026-09-01 21:16:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -287,6 +287,60 @@ describe("MaterialSource print binding repository", () => {
       ok: false,
       status: "blocked",
       reasons: ["spool-mount-ambiguous-at-print-start"],
+    });
+    expect(repository.toJSON().printStartSnapshots).toEqual([]);
+  });
+
+  it("MaterialSource aliasが複数canonical sourceへ衝突する場合は履歴順に依存せずbindingを拒否する", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const sharedAlias = "source:k2:cfs:shared-1a";
+    const ambiguousSources = materialSources.map((source, index) => (
+      index === 0 || index === 1
+        ? createMaterialSourceRecord({
+          deviceId: source.deviceId,
+          unitId: source.unitId,
+          kind: source.kind,
+          locator: source.locator,
+          identity: source.identity,
+          identityStrength: source.identityStrength,
+          displayLabel: source.displayLabel,
+          aliases: [sharedAlias],
+        })
+        : source
+    ));
+    const printPlan = createMulticolorCfsPrintPlan({
+      deviceId,
+      asset: createAsset("alias_collision.gcode", [0, 1]),
+      toolAssignments: [
+        {
+          toolId: 0,
+          protocolToolAlias: "T1A",
+          materialSourceId: sharedAlias,
+          spoolId: spoolMounts[0].spoolId,
+        },
+        {
+          toolId: 1,
+          protocolToolAlias: "T1B",
+          materialSourceId: materialSources[1].materialSourceId,
+          spoolId: spoolMounts[1].spoolId,
+        },
+      ],
+    });
+    const repository = createMaterialAccountingPrintBindingRepository();
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:alias-collision",
+      materialSources: ambiguousSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:alias-collision",
+    });
+
+    expect(start).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["ambiguous-material-source-alias"],
     });
     expect(repository.toJSON().printStartSnapshots).toEqual([]);
   });

@@ -180,6 +180,27 @@ and a trusted issuer has created source-specific usage and print-start binding
 evidence. Restart or reconnect does not close the mount, but fresh source
 observation is required before a new automatic debit.
 
+K2/CFS print-start binding must distinguish printer-reported job start time
+from 3dpmon receipt time. `devicePrintStartTime` may be used as the immutable
+print-start snapshot time, but causality against a just-submitted transport
+command is decided by local `observedReceivedAt`. A device clock or firmware
+start timestamp that predates the local submit instant must not by itself reject
+a newly received job observation. Conversely, an observation received before the
+command was submitted is treated as stale or pre-command evidence even if its
+device timestamp looks newer.
+
+MaterialBindingPlan is not sufficient unless it is digest-bound to the actual
+transport command request. The command binding includes command ID, device ID,
+session ID, connection generation, remote path, file hash, and the material
+assignment digest. The live bridge recomputes that binding from the request at
+pending registration time; mismatch blocks the binding before any runtime
+snapshot is recorded.
+
+MaterialSource aliases are convenience identifiers only. If a single alias maps
+to multiple canonical MaterialSource IDs, print-start binding for that alias
+must fail closed as `ambiguous-material-source-alias` instead of choosing the
+first record in array order.
+
 Manual SpoolMount assignment requires a confirmed 3dpmon managed spool. An
 `inferred:true` spool or an `isPending:true` spool is not assignable to a
 MaterialSource until the operator confirms it as a real managed spool. This

@@ -155,7 +155,7 @@ describe("processData printStarted 通知ストーム防止", () => {
     expect(starts.length, "ジョブAとジョブBで計2回").toBe(2);
   });
 
-  it("K2/CFSの実機printStartTime観測時にPrintBinding live bridgeへ開始観測を通知する", async () => {
+  it("K2/CFSの実機printStartTime観測時に装置開始時刻と3DPmon受信時刻を分けて通知する", async () => {
     const H = "K2Pro-PRINT-BINDING";
     const REAL_ID = 1785991119;
     ensureMachineData(H);
@@ -177,7 +177,11 @@ describe("processData printStarted 通知ストーム防止", () => {
     expect(recordObservedMaterialAccountingPrintStart).toHaveBeenCalledWith(expect.objectContaining({
       hostname: H,
       printJobId: String(REAL_ID),
+      devicePrintStartTime: "2026-08-06T04:38:39.000Z",
+      observedReceivedAt: expect.any(String),
     }));
+    expect(Date.parse(recordObservedMaterialAccountingPrintStart.mock.calls[0][0].observedReceivedAt))
+      .toBeGreaterThan(0);
   });
 
   it("K2/CFSの完了履歴登録時にPrintBinding live bridgeへ完了観測を通知する", async () => {
