@@ -1,6 +1,6 @@
 # Printer Core v3 Gate 19 CFS Control Spec Investigation
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 このメモは、K2/CFSを3DPmon UIから操作できる版に向けて、公開ソース、既存3DPmon実装、実機captureで確認済みの事実、未確定の仕様境界を整理する。ここでの目的は、CFS操作を急いで有効化することではなく、どの操作をどの証跡でproduction authorityへ昇格できるかを固定すること。
 
@@ -315,6 +315,10 @@ live certificationは次の順で進める。
    「通信応答timeout」なのか「物理反映待ち不足」なのかを切り分けやすい。
    `printerInfo` には `/info` のmodel/version/port hintと観測時刻、期待modelとの一致結果を保存する。
    `printerStatus` には送信前のread-only status probe結果を保存し、`idle:false` の場合は送信前rejectの根拠として扱う。
+   `state` / `deviceState` が未観測のpartial frameはidle証明にもactive確定にも使わず、
+   `summary.activityState:"unknown-core-state"` / `coreStateComplete:false` として保存する。
+   これは「状態不足」と「not idle」をレビュー時に分けて読むための診断であり、
+   `summary.active:false` であっても `summary.idle:true` でない限りlive CFS操作は送らない。
    `targetSourceDelta` には対象sourceのpresence/stateCode/selected/percent/material/color/RFID有無の前後差分を保存する。
    `--probe-before` / `--probe-after` の観測結果には `summary` が含まれ、次の項目をraw payloadとは別に確認できる。
 
