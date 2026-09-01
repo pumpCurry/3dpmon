@@ -157,6 +157,10 @@ lifecycle mutations against Universal `OPEN` mount / reservation conflicts.
 - `deleteSpool()` だけでなく、`revertInferredSpool()` や `updateSpool({deleted:true})` /
   `updateSpool({isDeleted:true})` / ID変更patchのような別legacy lifecycle mutationも、
   Universal `OPEN` mountまたはin-flight reservation中は拒否する。
+- `revertInferredSpool()` が superseded 旧spoolをlegacy hostへ再装着する場合も、
+  旧spool側にUniversal `OPEN` mountまたはin-flight reservationがあればrevert全体を拒否する。
+- Universal `OPEN` mountまたはin-flight reservation中のmanaged spoolは、
+  `updateSpool({inferred:true})` / `updateSpool({isPending:true})` で未確定状態へ戻さない。
 - H-2の管理スプール候補は `inferred:true` と `isPending:true` を除外し、
   service/runtime境界でも `managed-spool-not-confirmed` として拒否する。推定・保留スプールは、
   先にユーザーが確認して実スプール化してからMaterialSourceへ割り当てる。
@@ -332,6 +336,8 @@ H-1a/H-1b では最低限以下を固定する。
   storage digest preconditionでfail-closedする。
 - legacy `hostSpoolMap` のimport/restoreもUniversal `OPEN` mount /
   in-flight reservationを検査し、同じmanaged spoolをlegacy側へ二重装着しない。
+- inferred取消でsuperseded旧spoolをlegacyへ復元する経路も同じ検査を通し、
+  旧spoolがUniversal側で使われている場合はinferred側もold側も変更しない。
 - `identityStrength: "unknown"` の source は mount できない。
 - provisional source は manual mount できるが、future debit は revalidation まで
   pending になる。

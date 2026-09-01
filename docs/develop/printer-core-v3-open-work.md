@@ -75,6 +75,10 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   `deleteSpool()`、`revertInferredSpool()`、`updateSpool()`の削除/ID変更patchからも破壊できない。
   また、`inferred:true` / `isPending:true` の未確定スプールはH-2候補とservice/runtimeで拒否し、
   先にユーザー確認で実スプール化してからMaterialSourceへ割り当てる。
+- 追加hardeningでは、`revertInferredSpool()` が superseded 旧spoolをlegacy hostへ
+  再装着する前にもUniversal `OPEN` mount / reservationを検査し、二重assignmentを拒否する。
+  `updateSpool({inferred:true})` / `updateSpool({isPending:true})` による
+  OPEN/reservation中spoolの未確定化も拒否する。
 - Gate 18.9I-1では、runtimeからprint-start binding repositoryを呼び出し、
   実機で観測した `printJobId` とprint-start時点で現在 `OPEN` なsource別
   SpoolMountが揃う場合だけ `materialAccountingPrintBindingStore` へsnapshotを保存する。

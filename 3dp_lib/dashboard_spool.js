@@ -30,9 +30,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
- * @version 1.390.1586 (PR #440)
+ * @version 1.390.1588 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 17:48:30
+ * @lastModified 2026-09-01 18:35:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -231,6 +231,56 @@ function findManagedSpoolDestructiveLifecycleConflict(spoolId, action) {
     `id=${id} reason=${universalConflict.reason || universalConflict.type || "conflict"}`
   );
   return universalConflict;
+}
+
+/**
+ * managed spoolをlegacy hostへ装着する前のUniversal/legacy衝突を検査する。
+ *
+ * 【詳細説明】
+ * - `setCurrentSpoolId()`の通常装着だけでなく、`revertInferredSpool()`が
+ *   superseded旧spoolをlegacyへ戻す経路でも同じ不変条件を使う。
+ * - Universal MaterialSourceのOPEN mount / in-flight reservation中のspoolを
+ *   legacy hostへ再claimすると、K2/CFS sourceとK1 direct spoolが同一spoolを
+ *   同時に所有するため、ここでfail-closedにする。
+ *
+ * @private
+ * @function findManagedSpoolLegacyAssignmentConflict
+ * @param {string} spoolId - legacyへ装着しようとしているmanaged spool ID。
+ * @param {string} hostname - 装着先legacy host。
+ * @param {string} action - 呼び出し元操作名。
+ * @returns {Object|null} 衝突情報。衝突が無い場合はnull。
+ */
+function findManagedSpoolLegacyAssignmentConflict(spoolId, hostname, action) {
+  const id = String(spoolId || "").trim();
+  const host = String(hostname || "").trim();
+  if (!id || !host) {
+    return null;
+  }
+  const universalConflict = findUniversalSpoolAssignmentConflict({
+    spoolId: id,
+    store: monitorData.materialAccountingSpoolMountStore,
+  });
+  if (universalConflict) {
+    console.warn(
+      `[${action}] Universal MaterialSourceで装着中または予約中のためlegacy装着を拒否: ` +
+      `id=${id} host=${host} reason=${universalConflict.reason || universalConflict.type || "conflict"}`
+    );
+    return universalConflict;
+  }
+  for (const [assignedHost, assignedSpoolId] of Object.entries(monitorData.hostSpoolMap || {})) {
+    if (String(assignedSpoolId || "").trim() === id && String(assignedHost || "").trim() !== host) {
+      const machine = monitorData.machines?.[assignedHost] || {};
+      const displayName = machine.storedData?.hostname?.rawValue || assignedHost;
+      const conflict = {
+        spoolId: id,
+        host: assignedHost,
+        reason: "legacy-spool-already-mounted",
+      };
+      console.warn(`[${action}] spool ${id} is already mounted on ${displayName}`);
+      return conflict;
+    }
+  }
+  return null;
 }
 
 /**
@@ -979,21 +1029,8 @@ export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
   if (_isRelayChildSpool()) {
     // 既に他ホストへ装着済みかは同期済みデータでローカル検査し、即時フィードバックする
     // （親側でも同じ検証が再実行される）
-    if (id) {
-      const universalConflict = findUniversalSpoolAssignmentConflict({
-        spoolId: id,
-        store: monitorData.materialAccountingSpoolMountStore,
-      });
-      if (universalConflict) {
-        console.warn(`setCurrentSpoolId(relay): spool ${id} is already mounted by Universal MaterialSource ${universalConflict.materialSourceId || ""}`);
-        return false;
-      }
-      for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
-        if (spId === id && h !== hostname) {
-          console.warn(`setCurrentSpoolId(relay): spool ${id} is already mounted on ${h}`);
-          return false;
-        }
-      }
+    if (id && findManagedSpoolLegacyAssignmentConflict(id, hostname, "setCurrentSpoolId(relay)")) {
+      return false;
     }
     return sendRelayFilament(
       id ? "mount" : "unmount",
@@ -1022,21 +1059,8 @@ export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
 
   // 同じスプールが別ホストに既に装着されていないかチェック
   if (id && host && newSpool) {
-    const universalConflict = findUniversalSpoolAssignmentConflict({
-      spoolId: id,
-      store: monitorData.materialAccountingSpoolMountStore,
-    });
-    if (universalConflict) {
-      console.warn(`setCurrentSpoolId: spool ${id} is already mounted by Universal MaterialSource ${universalConflict.materialSourceId || ""}`);
+    if (findManagedSpoolLegacyAssignmentConflict(id, host, "setCurrentSpoolId")) {
       return false;
-    }
-    for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
-      if (spId === id && h !== host) {
-        const m = monitorData.machines[h] || {};
-        const displayName = m.storedData?.hostname?.rawValue || h;
-        console.warn(`setCurrentSpoolId: spool ${id} is already mounted on ${displayName}`);
-        return false;
-      }
     }
   }
 
@@ -1503,6 +1527,10 @@ export function revertInferredSpool(id) {
   const sup = inferred._supersedes;
   const host = sup?.host || inferred.hostname || null;
   const nowTs = Date.now();
+  const old = sup?.spoolId ? monitorData.filamentSpools.find(sp => sp.id === sup.spoolId) : null;
+  if (old && host && findManagedSpoolLegacyAssignmentConflict(old.id, host, "revertInferredSpool")) {
+    return null;
+  }
 
   // #3 以降に inferred へ帰属した消費（= 物理的には同一リールの消費）を算出
   let inferredUsed = 0;
@@ -1525,7 +1553,6 @@ export function revertInferredSpool(id) {
   inferred.currentPrintID = ""; inferred.currentJobStartLength = null;
   inferred.hostname = null;
 
-  const old = sup?.spoolId ? monitorData.filamentSpools.find(sp => sp.id === sup.spoolId) : null;
   if (!old || !host) {
     // 復元対象なし → inferred を外すだけ
     if (host && monitorData.hostSpoolMap[host] === id) monitorData.hostSpoolMap[host] = null;
@@ -1598,11 +1625,15 @@ export function updateSpool(id, patch) {
   ) || (
     Object.prototype.hasOwnProperty.call(applied, "spoolId") && String(applied.spoolId || "").trim() !== String(s.spoolId || s.id || "").trim()
   );
-  if ((changesDeletedState || changesStableId) && findManagedSpoolDestructiveLifecycleConflict(id, "updateSpool")) {
+  const changesUnconfirmedLifecycle = applied.inferred === true || applied.isPending === true;
+  if ((changesDeletedState || changesStableId || changesUnconfirmedLifecycle) &&
+      findManagedSpoolDestructiveLifecycleConflict(id, "updateSpool")) {
     delete applied.deleted;
     delete applied.isDeleted;
     delete applied.id;
     delete applied.spoolId;
+    delete applied.inferred;
+    delete applied.isPending;
   }
   const beforeRemaining = Number(s.remainingLengthMm);
   Object.assign(s, applied);
