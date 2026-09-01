@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1452 (PR #435)
+ * @version 1.390.1620 (PR #440)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 14:28:57
+ * @lastModified 2026-09-02 01:07:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1166,6 +1166,7 @@ function _ensurePrinterCoreV3LiveShadowSession(host, state, identityResult, fami
       host,
       deviceId: state.printerCoreV3ShadowDeviceId,
       sessionId: state.printerCoreV3ShadowSessionId,
+      connectionGeneration: Number(state.printerCoreV3ConnectionGeneration) || null,
     });
   }
   return {
@@ -2623,6 +2624,7 @@ function handleSocketMessage(event, host) {
           deviceId: shadowSession.deviceId,
           sessionId: shadowSession.sessionId,
           frame: data,
+          connectionGeneration: Number(st.printerCoreV3ConnectionGeneration) || null,
         };
         if (shadowSession.family === "k2") {
           const snapshotCompleteness = _classifyK2BoxsInfoSnapshotCompleteness(st, data);

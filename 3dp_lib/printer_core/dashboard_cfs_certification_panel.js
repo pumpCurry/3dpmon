@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1617 (PR #440)
+ * @version 1.390.1620 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-09-01 23:59:00
+ * @lastModified 2026-09-02 01:07:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -322,6 +322,34 @@ function createSelectionEvidencePreflightDetail(materialViewModel) {
  */
 function createPrinterIdlePreflightDetail(printer) {
   const printerState = toText(printer?.printState || printer?.state, "");
+  const idleObservation = printer?.printerIdleObservation && typeof printer.printerIdleObservation === "object"
+    ? printer.printerIdleObservation
+    : null;
+  if (idleObservation) {
+    const status = toText(idleObservation.status, "").toLowerCase();
+    const expiresAtMs = Date.parse(toText(idleObservation.expiresAt, ""));
+    const nowMs = Date.now();
+    if (idleObservation.fresh !== true || !Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
+      return {
+        state: "fail",
+        detail: "idle未証明: stale",
+      };
+    }
+    if (!["observed", "assembled"].includes(status) ||
+        idleObservation.snapshotCompleteness !== "complete" ||
+        idleObservation.coreStateComplete !== true) {
+      return {
+        state: "fail",
+        detail: "idle未証明: incomplete",
+      };
+    }
+    if (idleObservation.idle !== true) {
+      return {
+        state: "fail",
+        detail: toText(idleObservation.activityState || printerState, "idle未証明"),
+      };
+    }
+  }
   const probeStatus = toText(printer?.statusProbeStatus || printer?.printStatusProbeStatus, "");
   const activityState = toText(printer?.printActivityState || printer?.activityState, "");
   const incompleteReasons = [];
@@ -745,6 +773,10 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     statusProbeStatus: toText(options.printer?.statusProbeStatus || options.printer?.printStatusProbeStatus, ""),
     printActivityState: toText(options.printer?.printActivityState || options.printer?.activityState, ""),
     coreStateComplete: options.printer?.coreStateComplete ?? options.printer?.printCoreStateComplete ?? null,
+    printerIdleObservation: options.printer?.printerIdleObservation &&
+      typeof options.printer.printerIdleObservation === "object"
+      ? { ...options.printer.printerIdleObservation }
+      : null,
   };
   const materialViewModel = options.materialViewModel || {};
   const targetSource = resolveTargetSource(materialViewModel, options.targetSource);

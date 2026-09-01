@@ -170,6 +170,16 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   これはdelta-only/timeout後に古いidle表示だけでphysical CFS commandを送らないためのGate19 idle predicateである。
   `createK2StatusPatch()` はraw frame単位でこのmetadataを生成し、Facadeの累積 `shadowRecord.lastState.print` へ残す。
   そのためCertification panelの合成入力だけでなく、実機WS9999から入ったproduction shadowでも同じpreflight境界を使える。
+- production dispatcherは、送信時に `printerIdleObservation` を内部生成し、command authorityへ渡す。
+  この観測は現在の `runtimeData.printerCoreV3Shadow` recordから生成し、`sessionId` と
+  `connectionGeneration` が現在接続と一致しなければ `cfs-control-printer-idle-session-mismatch` /
+  `cfs-control-printer-idle-generation-mismatch` で拒否する。観測TTLは5秒で、期限切れまたは
+  `fresh:false` は `cfs-control-printer-idle-observation-stale` として扱う。
+  `boxsInfo` のようなmaterial-only frameはprinter status scalarを含まないため、このTTLを延長しない。
+  complete baseline後に同一session/generation内で届いたdelta-only printer status frameは、baseline sequenceと
+  last applied sequenceを保持した `status:"assembled"` evidenceとして扱える。これによりF012で観測された
+  「full statusは初回だけ、その後は差分だけ」という通信でも、古いidle表示だけを根拠にせず、freshな
+  assembled idle観測がある場合だけsend-time guardを通せる。
 - `scripts/capture_k2_cfs_readonly_calibration.mjs` は、複数のprinter status probeから
   `assembledPrinterStatus` を生成する。これはread-only certification用のprojectionであり、
   最初に `state` と `deviceState` を含むcomplete baselineを観測できた場合だけ、同一WS session内の

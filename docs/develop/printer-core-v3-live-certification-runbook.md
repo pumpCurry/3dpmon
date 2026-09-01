@@ -1,6 +1,6 @@
 # Printer Core v3 Live Certification Runbook
 
-Last updated: 2026-08-28
+Last updated: 2026-09-02
 
 This runbook defines the operator-controlled steps for the remaining physical
 evidence gates. It intentionally separates dry-run evidence, live command
@@ -100,6 +100,46 @@ Observation checklist:
 
 Restart recovery can be code/tooling closed before this live run, but production
 print-start authority remains blocked until this physical evidence is attached.
+
+## Gate 18.9I: K2/CFS Shadow Accounting Certification
+
+Goal: prove that a K2/CFS print can be linked to the 3DPmon-managed spool
+mounted on each MaterialSource, without writing managed remaining, legacy
+`usageHistory`, or ItemKeeper debit authority.
+
+Required sequence:
+
+- Mount 3DPmon-managed spools to every CFS source that may be used by the test
+  print. The external spool source and every CFS slot remain separate sources.
+- Start a K2/CFS print through the guarded print-start flow so the app creates a
+  MaterialBindingPlan before transport send and moves it to submitted only after
+  local transport success.
+- Confirm the app observes a new machine print start after submission. A
+  baseline job already present before send must not bind to the pending plan.
+- Keep K2 material topology fresh through the print interval. Provider
+  disconnect/reconnect, source disappearance, alias conflict, or event-log
+  coverage gap must keep the segment out of managed debit eligibility.
+- Confirm completed history appears with source-specific `materialUsed`
+  evidence, or confirm the result is left pending/unattributed when only total
+  usage or incomplete source counts are available.
+- Confirm the filament manager shows each source segment as read-only usage
+  evidence beside the mounted 3DPmon spool. It may show estimated remaining, but
+  must not write managed remaining or legacy K1-style usage records yet.
+- Confirm ItemKeeper export/projection includes only read-only source-specific
+  evidence that has a trusted print-start snapshot and matching completion
+  usage. Unused sources require explicit result-set completeness evidence before
+  they can be marked confirmed-unused.
+
+Pass criteria:
+
+- The saved print-start snapshot contains device, session, generation, print
+  job, source, spool, and local receipt evidence.
+- Source-specific usage such as `T1A -> CFS 1A = 3210mm` and
+  `T1B -> CFS 1B = 6543mm` is preserved as separate JobMaterialSegment records.
+- A source that was mounted but not reported as used remains pending or
+  unconfirmed unless result-set completeness evidence explicitly proves zero
+  usage.
+- No managed spool remaining debit occurs during this certification gate.
 
 ## Gate 10: K2 CFS Topology Certification
 

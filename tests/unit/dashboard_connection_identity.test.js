@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1452 (PR #435)
+ * @version 1.390.1620 (PR #440)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 14:28:57
+ * @lastModified 2026-09-02 01:07:00
  *
  * @vitest-environment jsdom
  */
@@ -619,11 +619,13 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K1Max-Shadow",
       deviceId: "provisional:k1%20max:k1max-shadow",
       sessionId: "k1-live:test-session",
+      connectionGeneration: 1,
     });
     expect(shadowMock.observeK1LiveShadowFrame).toHaveBeenCalledWith({
       host: "K1Max-Shadow",
       deviceId: "provisional:k1%20max:k1max-shadow",
       sessionId: "k1-live:test-session",
+      connectionGeneration: 1,
       frame: {
         hostname: "K1Max-Shadow",
         model: "K1 Max",
@@ -649,11 +651,13 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-69E7",
       deviceId: "provisional:f012:k2pro-69e7",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
     });
     expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenCalledWith({
       host: "K2Pro-69E7",
       deviceId: "provisional:f012:k2pro-69e7",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         hostname: "K2Pro-69E7",
         model: "F012",
@@ -698,6 +702,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-69E7",
       deviceId: "provisional:f012:k2pro-69e7",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         boxsInfo: {
           enable: 1,
@@ -749,6 +754,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-Sparse",
       deviceId: "provisional:f012:k2pro-sparse",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         boxsInfo: {
           materialBoxs: [
@@ -786,6 +792,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-Sparse",
       deviceId: "provisional:f012:k2pro-sparse",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         boxsInfo: {
           enable: 1,
@@ -877,6 +884,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "Workshop-Printer",
       deviceId: "provisional:f012:workshop-printer",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         connectionCount: 1,
       },
@@ -946,6 +954,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-MixedFrame",
       deviceId: "provisional:f012:k2pro-mixedframe",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         hostname: "K2Pro-MixedFrame",
         model: "F012",
@@ -1076,6 +1085,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K1Max-Conflict",
       deviceId: "provisional-shadow:endpoint:203.0.113.13%3A9999",
       sessionId: "k1-live:test-session",
+      connectionGeneration: 1,
     });
   });
 

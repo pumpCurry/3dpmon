@@ -1,6 +1,6 @@
 # Printer Core v3 Open Work
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 このメモは、Gate 1-18 の contract / fail-closed 判定とは別に、現場でユーザーが設定、監視、判断、操作するときに未実装または未接続として残っている項目を整理する。
 
@@ -21,7 +21,7 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 | --- | --- | --- | --- | --- |
 | Gate 18.7 Material Observation | CLOSED | CLOSED | partial | read-only |
 | Gate 18.8 Material Observation UX / Evidence | CLOSED | CLOSED | partial | read-only |
-| Gate 19 Slot Control Spec | scaffold CLOSED / recovery latch schema+storage added | CLOSED | pending | disabled |
+| Gate 19 Slot Control Spec | scaffold CLOSED / recovery latch schema+storage added / production idle observation TTL+session+generation guard connected | CLOSED | pending | disabled until live registry entry exists |
 | Gate 19.5 UI Control Lifecycle | scaffold CLOSED / selection evidence + recovery blocker UI added | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
@@ -33,6 +33,14 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 現時点のv2.2.1045では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
 のstandalone操作はすべて無効である。実機certificationをmodule-owned registryへ追加するまで、
 UI設定や保存済みtarget情報だけでproduction操作へ昇格しない。
+
+Gate 19のproduction dispatcherは、standalone CFS物理操作を送信する直前に
+`printerIdleObservation` を再検査する。これは、現在接続中のWS session /
+connection generationで得たprinter statusのcomplete baseline、またはそのbaselineへ同一session内の
+delta-only frameを順序通り合成したassembled evidenceだけを根拠にする。観測TTLは5秒で、期限切れ、
+session不一致、connection generation不一致、partial / unknown-core-state、またはbusy状態では
+`cfs-control-printer-idle-*` reasonで送信前に拒否する。CFS `boxsInfo` だけのmaterial-only frameは
+printer idle観測を更新しない。
 
 ## 未実装と分かっているもの
 
@@ -155,7 +163,7 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   physical discontinuityとして扱い、debit候補へ昇格しない。
   この接続もshadow attributionまでで、managed spool残量debitやlegacy usage writeは行わない。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
-- CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
+- CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意し、send-timeのfresh printer idle observation、session/generation、source loaded、recovery latch、capabilityを再検査する。しかしLAN command keyとexpected-state confirmationは未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
 - K2/CFS print semantics certification は未完。Gate9.5 で selected-source guard は確認しているが、command lifecycle完了と物理的なfilament供給/押出成功は別証跡として実機captureで確定する必要がある。
 - Data Schema v3 の本番 write / migration は未完。dry-run contract はあるが、Device / Endpoint / CfsUnit / MaterialSource / Spool / Mount / Ledger の永続authorityはまだ切り替えていない。
 - command authority は未完。command id、result、expected-state confirmation、timeout、side-effect retry guard、production dispatcher の send-time 再検証 foundation、bound dispatcher foundation はあるが、UI操作の本番送信経路はまだ移していない。

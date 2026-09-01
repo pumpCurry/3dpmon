@@ -3,9 +3,9 @@
  * @description
  * - K1 legacy differential と K2 read-only shadow の runtime record 境界を検証する。
  *
- * @version 1.390.1436 (PR #435)
+ * @version 1.390.1620 (PR #440)
  * @since 1.390.1299 (PR #432)
- * @lastModified 2026-08-28 10:37:51
+ * @lastModified 2026-09-02 01:07:00
  *
  * @vitest-environment jsdom
  */
@@ -460,6 +460,100 @@ describe("Printer Core v3 K1 live shadow", () => {
       printerFamily: "k2",
       sessionId,
       lastSequence: 2,
+    });
+  });
+
+  it("K2 live shadowはconnectionGenerationをruntime recordへ保持する", () => {
+    const host = "K2Pro-Live-Generation";
+    const deviceId = "host:K2Pro-Live-Generation";
+    const sessionId = "k2-live:generation";
+    setMachine(host);
+    const started = beginK2LiveShadowSession({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 6,
+    });
+    const record = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 7,
+      frame: {
+        hostname: host,
+        model: "F012",
+        state: 0,
+        deviceState: 0,
+      },
+      receivedAt: "2026-09-02T01:07:09.000+09:00",
+    });
+
+    expect(started.connectionGeneration).toBe(6);
+    expect(record.connectionGeneration).toBe(7);
+    expect(monitorData.machines[host].runtimeData.printerCoreV3Shadow).toMatchObject({
+      connectionGeneration: 7,
+      printerCoreV3ConnectionGeneration: 7,
+    });
+  });
+
+  it("K2 live shadowはcomplete baseline後のdelta-only statusをfresh assembled idle証跡として保持する", () => {
+    const host = "K2Pro-Live-Assembled-Idle";
+    const deviceId = "host:K2Pro-Live-Assembled-Idle";
+    const sessionId = "k2-live:assembled-idle";
+    setMachine(host);
+    beginK2LiveShadowSession({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 7,
+    });
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 7,
+      frame: {
+        hostname: host,
+        model: "F012",
+        state: 0,
+        deviceState: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        nozzleTemp: 27.2,
+        bedTemp0: 26.8,
+      },
+      receivedAt: "2026-09-02T01:07:09.000+09:00",
+    });
+    const record = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 7,
+      frame: {
+        nozzleTemp: 28.4,
+        bedTemp0: 27.8,
+      },
+      receivedAt: "2026-09-02T01:07:10.000+09:00",
+    });
+
+    expect(record.lastState.print).toMatchObject({
+      stateLabel: "idle",
+      snapshotCompleteness: "partial",
+      activityState: "unknown-core-state",
+      coreStateComplete: false,
+    });
+    expect(record.printerIdleObservation).toMatchObject({
+      status: "assembled",
+      snapshotCompleteness: "complete",
+      activityState: "idle",
+      coreStateComplete: true,
+      sessionId,
+      connectionGeneration: 7,
+      baselineSequence: 1,
+      lastAppliedSequence: 2,
+      appliedDeltaCount: 1,
+      fresh: true,
+      idle: true,
     });
   });
 
