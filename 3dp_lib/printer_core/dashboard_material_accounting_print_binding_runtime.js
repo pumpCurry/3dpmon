@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1627 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-02 07:45:00
+ * @lastModified 2026-09-02 07:55:51
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -589,7 +589,8 @@ function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observe
  * 【詳細説明】
  * - source-specific debitは「mountを開いた後、印刷開始までに同じslotが入れ替わっていない」ことも
  *   必要なため、print-start受信時刻だけを下限にしない。
- * - 将来operator再確認時刻をsnapshotへ保存した場合は、mount openより新しい再確認を優先する。
+ * - 将来operator再確認を許可する場合は、typed durable eventで証明された時刻だけを
+ *   別関数で導出する。現時点ではimportされた任意fieldで検査下限を後ろへずらさない。
  * - print-startより後の候補はcompletion側の別検査範囲になるため、ここでは下限として採用しない。
  *
  * @private
@@ -604,19 +605,7 @@ function resolveMaterialSourceContinuityStartedAt(snapshot) {
     return null;
   }
   const candidates = [
-    snapshot?.sourceContinuityConfirmedAt,
-    snapshot?.operatorReconfirmedAt,
-    snapshot?.reconfirmedAt,
-    snapshot?.issuanceEvidence?.sourceContinuityConfirmedAt,
-    snapshot?.issuanceEvidence?.operatorReconfirmedAt,
-    snapshot?.issuanceEvidence?.reconfirmedAt,
-    snapshot?.spoolMount?.sourceContinuityConfirmedAt,
-    snapshot?.spoolMount?.operatorReconfirmedAt,
-    snapshot?.spoolMount?.reconfirmedAt,
     snapshot?.spoolMount?.openedAt,
-    snapshot?.mount?.sourceContinuityConfirmedAt,
-    snapshot?.mount?.operatorReconfirmedAt,
-    snapshot?.mount?.reconfirmedAt,
     snapshot?.mount?.openedAt,
     snapshot?.openedAt,
   ];

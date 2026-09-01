@@ -195,12 +195,14 @@ for provisional debit eligibility. Source freshness must be calculated from the
 source-specific observation timestamp, never from a fresher device-level
 observation belonging to another source. The MaterialSource event log is
 bounded, so absence of a source change event is trusted only when the retained
-event coverage starts at or before the operator-confirmed mount open or
-reconfirmation time. If
+event coverage starts at or before the operator-confirmed mount open time.
+Operator reconfirmation is not trusted until a typed durable reconfirm event is
+introduced; imported/restored timestamp fields cannot move the continuity start
+forward. If
 device-level coverage is missing, source-specific coverage is missing, or
 either coverage starts after that continuity start, the usage evidence remains
 shadow evidence and does not become a managed remaining debit candidate. A
-source first observed after the mount open/reconfirmation continuity start
+source first observed after the mount-open continuity start
 cannot borrow an older device-level coverage start.
 Device-level provider gaps also break provisional continuity:
 `provider-disconnected`, `provider-reconnected`, and provider generation changes
@@ -577,13 +579,15 @@ Gate 18.9 must cover:
   topology observation is not enough by itself: if the
   MaterialSource change log records `source-changed`, `source-disappeared`,
   `source-merge-conflict`, a device-level provider disconnect/reconnect, or a
-  provider generation change after the operator-confirmed mount open or
-  reconfirmation and before completion, the runtime marks the segment as a
+  provider generation change after the operator-confirmed mount open and before
+  completion, the runtime marks the segment as a
   physical discontinuity and keeps
   `sourceContinuity:false`. The same check also requires retained event
-  coverage from at least the operator-confirmed mount open or reconfirmation
-  time at both the device-event-log level and the individual MaterialSource
-  snapshot level; old restored records, sources first observed after the
+  coverage from at least the operator-confirmed mount open time at both the
+  device-event-log level and the individual MaterialSource snapshot level.
+  Plain `reconfirmedAt` / `operatorReconfirmedAt` fields are not authority; a
+  future reconfirm flow must add typed durable operator evidence before it can
+  reset this interval. Old restored records, sources first observed after the
   continuity start, or records whose event log has already trimmed past that
   point fail closed.
   Gate 18.9I-2 does not mutate managed spool remaining or legacy
@@ -592,11 +596,14 @@ Gate 18.9 must cover:
   `confirmed-unused` JobMaterialSegment records as a projection source when
   `job.filamentInfo[]` is absent only when the segment is debit eligible and
   the source-specific projection is live certified through the module-owned
-  ItemKeeper projection registry. Plain imported/restored
-  `itemKeeperProjection.status:"certified"` fields are not sufficient; the
-  projection evidence must carry the registry authority and a digest that still
-  matches the current segment. This projection sends per-spool `filaments[]`
-  evidence without mutating 3dpmon inventory state.
+  ItemKeeper projection registry and `usedLengthMm` is an explicit non-negative
+  number. Plain imported/restored `itemKeeperProjection.status:"certified"`
+  fields are not sufficient; the projection evidence must carry the registry
+  authority and a digest that still matches the current segment. The current
+  release intentionally has no production issuer for this registry, so public
+  helper calls cannot enable source-aware ItemKeeper projection. This projection
+  sends per-spool `filaments[]` evidence without mutating 3dpmon inventory
+  state.
 - K2/CFS UI print-start sends create a module-attested MaterialBindingPlan
   separate from the transport command request, register it as prepared pending
   state immediately before transport dispatch, mark it submitted only after

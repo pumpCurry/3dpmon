@@ -8,9 +8,9 @@
  * 依存モジュールは全て vi.doMock でモックする（dashboard_notification_manager は
  * モジュール読込時に document へ触れるため node 環境では必ずモックすること）。
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1627 (PR #440)
  * @since 1.390.0 (Initial)
- * @lastModified 2026-09-02 08:28:00
+ * @lastModified 2026-09-02 07:55:51
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
@@ -82,7 +82,9 @@ vi.doMock("../../3dp_lib/dashboard_printmanager.js", () => ({
 const {
   ItemKeeperIntegration,
   clearItemKeeperSourceUsageProjectionCertificationsForTest,
+  createItemKeeperSourceUsageProjectionCertificationDigest,
   registerItemKeeperSourceUsageProjectionCertification,
+  registerItemKeeperSourceUsageProjectionCertificationForTest,
 } = await import("../../3dp_lib/dashboard_integration_itemkeeper.js");
 
 /**
@@ -94,7 +96,7 @@ const {
  */
 function certifyItemKeeperSegment(segment) {
   const certified = { ...segment };
-  certified.itemKeeperProjection = registerItemKeeperSourceUsageProjectionCertification(certified);
+  certified.itemKeeperProjection = registerItemKeeperSourceUsageProjectionCertificationForTest(certified);
   return certified;
 }
 
@@ -426,8 +428,8 @@ describe("buildFilaments", () => {
 
     expect(fil).toEqual([]);
   });
-  it("module-owned registryで認証されたsegmentだけItemKeeperへsource別投影する", () => {
-    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(certifyItemKeeperSegment({
+  it("public登録関数だけではsource-aware segmentをproduction ItemKeeper projectionへ解禁しない", () => {
+    const publicRegisteredSegment = {
       segmentId: "seg:registered",
       printJobId: "94",
       printPlanId: "plan:registered",
@@ -441,16 +443,82 @@ describe("buildFilaments", () => {
       confidence: "high",
       debit: { status: "eligible", canDebit: true, reasons: [] },
       order: 0
-    }));
+    };
+    publicRegisteredSegment.itemKeeperProjection =
+      registerItemKeeperSourceUsageProjectionCertification(publicRegisteredSegment);
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(publicRegisteredSegment);
 
     const fil = ik.buildFilaments(
       job({ id: 94, materialUsedMm: 6543, filamentInfo: [] }),
       { deviceId: "serial:k2-a" }
     );
 
-    expect(fil.map(f => [f.spoolId, f.usedMm, f.materialSourceId])).toEqual([
-      ["s2", 6543, "source:registered"]
-    ]);
+    expect(fil).toEqual([]);
+  });
+  it("source-aware projection digestではnull/空文字と明示0mmを同一扱いにしない", () => {
+    const baseSegment = {
+      segmentId: "seg:zero-identity",
+      printJobId: "96",
+      printPlanId: "plan:zero-identity",
+      deviceId: "serial:k2-a",
+      spoolId: "s2",
+      mountId: "mount:zero-identity",
+      materialSourceId: "source:zero-identity",
+      protocolToolAlias: "T1B",
+      usageState: "confirmed-unused",
+      confidence: "high",
+      debit: { status: "eligible", canDebit: true, reasons: [] },
+      order: 0
+    };
+    const explicitZeroDigest = createItemKeeperSourceUsageProjectionCertificationDigest({
+      ...baseSegment,
+      usedLengthMm: 0,
+    });
+    const nullDigest = createItemKeeperSourceUsageProjectionCertificationDigest({
+      ...baseSegment,
+      usedLengthMm: null,
+    });
+    const emptyDigest = createItemKeeperSourceUsageProjectionCertificationDigest({
+      ...baseSegment,
+      usedLengthMm: "",
+    });
+
+    expect(nullDigest).not.toBe(explicitZeroDigest);
+    expect(emptyDigest).not.toBe(explicitZeroDigest);
+  });
+  it("usedLengthMmがnullまたは空文字のsource-aware segmentは0mmとしてItemKeeperへ投影しない", () => {
+    const baseSegment = {
+      printJobId: "97",
+      printPlanId: "plan:invalid-zero",
+      deviceId: "serial:k2-a",
+      spoolId: "s2",
+      mountId: "mount:invalid-zero",
+      materialSourceId: "source:invalid-zero",
+      protocolToolAlias: "T1B",
+      usageState: "confirmed-unused",
+      confidence: "high",
+      debit: { status: "eligible", canDebit: true, reasons: [] },
+      order: 0
+    };
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(
+      certifyItemKeeperSegment({
+        ...baseSegment,
+        segmentId: "seg:null-zero",
+        usedLengthMm: null,
+      }),
+      certifyItemKeeperSegment({
+        ...baseSegment,
+        segmentId: "seg:empty-zero",
+        usedLengthMm: "",
+      })
+    );
+
+    const fil = ik.buildFilaments(
+      job({ id: 97, materialUsedMm: 0, filamentInfo: [] }),
+      { deviceId: "serial:k2-a" }
+    );
+
+    expect(fil).toEqual([]);
   });
   it("認証後にsource-aware segmentの使用量が改変された場合はItemKeeperへsource別投影しない", () => {
     const certifiedSegment = certifyItemKeeperSegment({

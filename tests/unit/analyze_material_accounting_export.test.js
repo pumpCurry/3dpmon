@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1627 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 08:28:00
+ * @lastModified 2026-09-02 07:55:51
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -44,6 +44,30 @@ import {
 const ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY = "module-owned-live-certification-registry";
 
 /**
+ * analyzer fixture用のItemKeeper projection使用量をdigest向けに正規化する。
+ *
+ * @function normalizeItemKeeperProjectionUsedLengthForDigest
+ * @param {*} value - JobMaterialSegment.usedLengthMm のraw値。
+ * @returns {{kind:string,value?:number,raw?:string}} digestへ入れる正規化値。
+ */
+function normalizeItemKeeperProjectionUsedLengthForDigest(value) {
+  if (value === undefined) {
+    return Object.freeze({ kind: "missing" });
+  }
+  if (value === null) {
+    return Object.freeze({ kind: "null" });
+  }
+  if (typeof value === "string" && value.trim() === "") {
+    return Object.freeze({ kind: "empty-string" });
+  }
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return Object.freeze({ kind: "invalid", raw: String(value) });
+  }
+  return Object.freeze({ kind: "finite", value: numericValue });
+}
+
+/**
  * analyzer fixture用のItemKeeper projection digestを生成する。
  *
  * @function createItemKeeperProjectionDigest
@@ -62,7 +86,7 @@ function createItemKeeperProjectionDigest(segment) {
       mountId: String(segment?.mountId || "").trim(),
       materialSourceId: String(segment?.materialSourceId || "").trim(),
       protocolToolAlias: String(segment?.protocolToolAlias || "").trim(),
-      usedLengthMm: Number(segment?.usedLengthMm),
+      usedLengthMm: normalizeItemKeeperProjectionUsedLengthForDigest(segment?.usedLengthMm),
       usageState: String(segment?.usageState || "").trim(),
       confidence: String(segment?.confidence || "").trim(),
       order: Number.isFinite(Number(segment?.order)) ? Number(segment.order) : 0,
@@ -87,6 +111,29 @@ function certifyItemKeeperProjectionSegment(segment) {
   };
   return certified;
 }
+
+it("analyzer fixtureのItemKeeper projection digestはnull/空文字と明示0mmを区別する", () => {
+  const baseSegment = {
+    segmentId: "seg:analyzer-zero-identity",
+    printJobId: "job:zero",
+    printPlanId: "plan:zero",
+    deviceId: "serial:k2",
+    spoolId: "spool:a",
+    mountId: "mount:a",
+    materialSourceId: "source:a",
+    protocolToolAlias: "T1A",
+    usageState: "confirmed-unused",
+    confidence: "high",
+    debit: { status: "eligible", canDebit: true, reasons: [] },
+    order: 0,
+  };
+  const zeroDigest = createItemKeeperProjectionDigest({ ...baseSegment, usedLengthMm: 0 });
+  const nullDigest = createItemKeeperProjectionDigest({ ...baseSegment, usedLengthMm: null });
+  const emptyDigest = createItemKeeperProjectionDigest({ ...baseSegment, usedLengthMm: "" });
+
+  expect(nullDigest).not.toBe(zeroDigest);
+  expect(emptyDigest).not.toBe(zeroDigest);
+});
 
 /**
  * K2/CFSを含む最小export payloadを生成する。

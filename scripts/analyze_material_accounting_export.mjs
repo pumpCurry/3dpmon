@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1627 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 08:28:00
+ * @lastModified 2026-09-02 07:55:51
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -444,6 +444,36 @@ function resolvePrintJobId(record) {
 }
 
 /**
+ * ItemKeeper projection digest用の使用量を厳密に正規化する。
+ *
+ * 【詳細説明】
+ * - `Number(null)`や`Number("")`を使うとunknownと0mmが同じdigestになるため、
+ *   analyzerでもruntimeと同じkind付きpayloadへ寄せる。
+ * - analyzerのeligible判定自体は別途`toFiniteNumberOrNull()`で非負数値だけを許可する。
+ *
+ * @private
+ * @function normalizeItemKeeperProjectionUsedLengthForDigest
+ * @param {*} value - JobMaterialSegment.usedLengthMm のraw値。
+ * @returns {{kind:string,value?:number,raw?:string}} digestへ入れる正規化値。
+ */
+function normalizeItemKeeperProjectionUsedLengthForDigest(value) {
+  if (value === undefined) {
+    return Object.freeze({ kind: "missing" });
+  }
+  if (value === null) {
+    return Object.freeze({ kind: "null" });
+  }
+  if (typeof value === "string" && value.trim() === "") {
+    return Object.freeze({ kind: "empty-string" });
+  }
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return Object.freeze({ kind: "invalid", raw: String(value) });
+  }
+  return Object.freeze({ kind: "finite", value: numericValue });
+}
+
+/**
  * ItemKeeper source-aware projection認証用の意味payloadを生成する。
  *
  * 【詳細説明】
@@ -467,7 +497,7 @@ function createItemKeeperProjectionCertificationPayload(segment) {
     mountId: toText(segment?.mountId),
     materialSourceId: toText(segment?.materialSourceId),
     protocolToolAlias: toText(segment?.protocolToolAlias),
-    usedLengthMm: Number(segment?.usedLengthMm),
+    usedLengthMm: normalizeItemKeeperProjectionUsedLengthForDigest(segment?.usedLengthMm),
     usageState: toText(segment?.usageState),
     confidence: toText(segment?.confidence),
     order: Number.isFinite(Number(segment?.order)) ? Number(segment.order) : 0,

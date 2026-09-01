@@ -142,10 +142,11 @@ source-aware mountとして扱わない。
    continuity比較には使わない。source-specific freshnessは該当sourceの観測時刻だけで判定し、
    他sourceで更新されたdevice-level `lastObservedAt`へfallbackしない。
    さらに、MaterialSource event logはboundedであるため、device-level event coverageと
-   source固有event coverageの両方がoperator-confirmed mountのopenまたは再確認以前から
-   残っていることを要求する。coverage欠落、
-   source初回観測がmount open / 再確認時刻以後、またはtrim後にどちらかのcoverage開始が
-   mount open / 再確認時刻より後ろへ進んだrecordは、source-specific segmentを保存しても
+   source固有event coverageの両方がoperator-confirmed mountのopen以前から
+   残っていることを要求する。operator reconfirmはまだtyped durable event authorityでは
+   ないため、import / restore由来fieldだけでは検査開始時刻を後ろへずらさない。coverage欠落、
+   source初回観測がmount open時刻以後、またはtrim後にどちらかのcoverage開始が
+   mount open時刻より後ろへ進んだrecordは、source-specific segmentを保存しても
    managed debit候補へ昇格しない。印刷区間中の
    provider disconnect/reconnectやproviderGeneration変更は、同じslot/material状態へ戻った場合でも
    provisional source全体のphysical discontinuityとして扱う。completion通知後にCAS失敗などで
@@ -154,9 +155,11 @@ source-aware mountとして扱わない。
   Gate 18.9I-3では、このshadow storeに保存された同一device + printJobIdの
   `observed-used` / `confirmed-unused` `JobMaterialSegment` をItemKeeper送信用
   `jobs[].filaments[]` へread-only投影する。projectionには同一device ID、source-aware
-  `debit.status:"eligible"`、およびmodule-owned registryでlive certification済みの
-  `itemKeeperProjection.status:"certified"` + `authority` + 現segmentと一致する`digest`を要求し、
-  plain import / localStorage restore上の文字列だけではsource-aware投影を解禁しない。未certifiedのK2 materialUsed CSV順序は
+  `debit.status:"eligible"`、明示的な非負`usedLengthMm`、およびmodule-owned registryで
+  live certification済みの `itemKeeperProjection.status:"certified"` + `authority` +
+  現segmentと一致する`digest`を要求し、plain import / localStorage restore上の文字列だけでは
+  source-aware投影を解禁しない。現releaseではpublic登録関数もregistryをmintせず、
+  future live certification issuerが接続されるまで未certifiedのK2 materialUsed CSV順序は
   ItemKeeperへsource別true usageとして送らない。
   ただしmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
   への書き込みはまだ行わない。
@@ -207,7 +210,7 @@ source-aware mountとして扱わない。
 ## UIに繋ぐべきだが、まだ繋いでいないもの
 
 - CFS/CFS-C の操作候補hookは通常フィラメントパネルへ接続済み。ただしproduction有効化前はrenderer側`canSendCommands:false`とcomposition-bound scaffold側`enabled:false`で二重に閉じ、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。production有効化には、現在接続世代へbindされた`/info`、fresh topology、module-owned immutable certification registry登録済み証跡が必要で、保存済みtarget設定やUI clickごとのdispatcher/context/enabled注入だけでは有効化しない。
-- フィラメント管理のsource cardには、3DPmon管理スプールをsource別に設定/交換/割当解除するUIを接続済み。これはoperator-managed `SpoolMount` のみを更新し、CFSの物理操作や残量debitは行わない。ItemKeeper payloadは保存済みprint binding segmentがある場合だけread-only projectionとしてsource別usageを送れる。
+- フィラメント管理のsource cardには、3DPmon管理スプールをsource別に設定/交換/割当解除するUIを接続済み。これはoperator-managed `SpoolMount` のみを更新し、CFSの物理操作や残量debitは行わない。ItemKeeper payloadは保存済みprint binding segmentがある場合でも、source-aware live certification issuerが接続されるまではsource別usageを送らない。
 - CFS Debug / Certification panel は、選択状態の完全性と未解決physical command recovery blockerをpreflightとして表示する。保存済み復旧ラッチで `unresolvedByCommandId` のkeyとrecord内commandIdが食い違う場合は、どちらのIDで問い合わせてもintegrity quarantineとしてblockする。
 - CFS/CFS-C のslot選択状態は表示するが、ユーザーが3dpmon側でslotを選ぶ本番UIはまだ提供しない。
 - CFS/CFS-C の残量値は表示するが、手動スプール台帳の残量へ自動反映しない。

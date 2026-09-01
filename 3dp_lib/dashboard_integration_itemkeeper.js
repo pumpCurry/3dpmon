@@ -18,15 +18,15 @@
  *
  * @author pumpCurry
  * @license BSD-3-Clause
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1627 (PR #440)
  * @since 1.390.0 (Initial)
- * @lastModified 2026-09-02 08:28:00
+ * @lastModified 2026-09-02 07:55:51
  */
 
 "use strict";
 
 /* グローバル（ブラウザ/Electron レンダラ・Node18+ ランタイム）: 認証ノンス・gzip 圧縮・カメラ画像取得で使用 */
-/* global crypto, CompressionStream, Response, location */
+/* global crypto, CompressionStream, Response, location, process */
 
 import { monitorData } from "./dashboard_data.js";
 import { saveUnifiedStorage } from "./dashboard_storage.js";
@@ -58,6 +58,10 @@ const THUMB_MAX_PER_DEVICE = 60;
 const ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY = "module-owned-live-certification-registry";
 /** live certification済みsource-aware projection digest集合 */
 const ITEMKEEPER_SOURCE_USAGE_PROJECTION_CERTIFICATIONS = new Set();
+/** productionでは未実装のlive issuerだけがregistryを更新できるようにする内部token */
+const ITEMKEEPER_SOURCE_USAGE_PROJECTION_ISSUER_TOKEN = Object.freeze({
+  authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,
+});
 
 /** 既定設定 */
 const DEFAULTS = Object.freeze({
@@ -116,6 +120,74 @@ function resolveItemKeeperPrinterCoreDeviceId(machine) {
 }
 
 /**
+ * ItemKeeper source-aware projection用の使用量をdigest向けに厳密正規化する。
+ *
+ * 【詳細説明】
+ * - JavaScriptの`Number(null)`や`Number("")`は0になるが、Gate18.9では
+ *   「明示0mm」と「未知/欠損」は別物として扱う必要がある。
+ * - digest入力にもkindを含め、unknown値と0mmが同じ認証digestにならないようにする。
+ *
+ * @private
+ * @function normalizeItemKeeperProjectionUsedLengthForDigest
+ * @param {*} value - JobMaterialSegment.usedLengthMm のraw値。
+ * @returns {{kind:string,value?:number,raw?:string}} digestへ入れる正規化値。
+ */
+function normalizeItemKeeperProjectionUsedLengthForDigest(value) {
+  if (value === undefined) {
+    return Object.freeze({ kind: "missing" });
+  }
+  if (value === null) {
+    return Object.freeze({ kind: "null" });
+  }
+  if (typeof value === "string" && value.trim() === "") {
+    return Object.freeze({ kind: "empty-string" });
+  }
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return Object.freeze({ kind: "invalid", raw: String(value) });
+  }
+  return Object.freeze({ kind: "finite", value: numericValue });
+}
+
+/**
+ * ItemKeeper source-aware projectionへ使える明示的な非負使用量か判定する。
+ *
+ * 【詳細説明】
+ * - confirmed-unusedの0mmは許可するが、null/undefined/空文字/NaNを0mmへ補正しない。
+ * - registry登録時とprojection時の両方で同じ条件を使い、認証後の解釈差を防ぐ。
+ *
+ * @private
+ * @function isExplicitNonNegativeItemKeeperUsedLength
+ * @param {*} value - JobMaterialSegment.usedLengthMm のraw値。
+ * @returns {boolean} 明示的な非負数値ならtrue。
+ */
+function isExplicitNonNegativeItemKeeperUsedLength(value) {
+  const normalized = normalizeItemKeeperProjectionUsedLengthForDigest(value);
+  return normalized.kind === "finite" && normalized.value >= 0;
+}
+
+/**
+ * ItemKeeper source-aware projection用の明示的な非負使用量を数値として取得する。
+ *
+ * 【詳細説明】
+ * - projection生成時にも`Number(null) || 0`のような補正を使わず、事前filterと同じ
+ *   strict normalizerから値を取り出す。
+ * - 呼び出し側はnullをprojection不可として扱う。
+ *
+ * @private
+ * @function toExplicitNonNegativeItemKeeperUsedLengthMm
+ * @param {*} value - JobMaterialSegment.usedLengthMm のraw値。
+ * @returns {number|null} 明示的な非負数値、またはprojection不可を表すnull。
+ */
+function toExplicitNonNegativeItemKeeperUsedLengthMm(value) {
+  const normalized = normalizeItemKeeperProjectionUsedLengthForDigest(value);
+  if (normalized.kind !== "finite" || normalized.value < 0) {
+    return null;
+  }
+  return normalized.value;
+}
+
+/**
  * ItemKeeper source-aware projection認証用の意味payloadを生成する。
  *
  * 【詳細説明】
@@ -139,7 +211,7 @@ function createItemKeeperSourceUsageProjectionCertificationPayload(segment) {
     mountId: String(segment?.mountId || "").trim(),
     materialSourceId: String(segment?.materialSourceId || "").trim(),
     protocolToolAlias: String(segment?.protocolToolAlias || "").trim(),
-    usedLengthMm: Number(segment?.usedLengthMm),
+    usedLengthMm: normalizeItemKeeperProjectionUsedLengthForDigest(segment?.usedLengthMm),
     usageState: String(segment?.usageState || "").trim(),
     confidence: String(segment?.confidence || "").trim(),
     order: Number.isFinite(Number(segment?.order)) ? Number(segment.order) : 0,
@@ -170,28 +242,93 @@ export function createItemKeeperSourceUsageProjectionCertificationDigest(segment
 }
 
 /**
- * ItemKeeper source-aware projectionをmodule-owned registryへ登録する。
+ * 内部issuer tokenつきでItemKeeper source-aware projection registryへ登録する。
  *
  * 【詳細説明】
- * - この関数は将来のlive certification gateから呼ばれる入口であり、import済みstoreの
- *   plain fieldだけではprojectionを解禁しないためのprocess-local authorityである。
- * - 戻り値を`segment.itemKeeperProjection`へ保存することで、UI/export側にも
- *   どのdigestで認証されたかを診断情報として残せる。
+ * - module外から任意segmentをcertifiedへ昇格できないよう、tokenはexportしない。
+ * - 現時点ではtest helperだけがこの関数を経由し、production live issuerは後続Gateで
+ *   fixture/capture/reviewedCommit等の証跡検証と一緒に実装する。
  *
- * @function registerItemKeeperSourceUsageProjectionCertification
- * @param {Object|null|undefined} segment - 認証するJobMaterialSegment。
- * @returns {Object} segmentへ付与するItemKeeper projection認証証跡。
- * @example
- * segment.itemKeeperProjection = registerItemKeeperSourceUsageProjectionCertification(segment);
+ * @private
+ * @function registerItemKeeperSourceUsageProjectionCertificationWithIssuer
+ * @param {Object|null|undefined} segment - 認証候補のJobMaterialSegment。
+ * @param {Object} issuerToken - module-private issuer token。
+ * @returns {Object} segmentへ付与するItemKeeper projection認証receipt。
  */
-export function registerItemKeeperSourceUsageProjectionCertification(segment) {
+function registerItemKeeperSourceUsageProjectionCertificationWithIssuer(segment, issuerToken) {
   const digest = createItemKeeperSourceUsageProjectionCertificationDigest(segment);
+  if (issuerToken !== ITEMKEEPER_SOURCE_USAGE_PROJECTION_ISSUER_TOKEN) {
+    return Object.freeze({
+      status: "uncertified",
+      authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,
+      digest,
+      reason: "live-certification-issuer-required",
+    });
+  }
+  if (!isExplicitNonNegativeItemKeeperUsedLength(segment?.usedLengthMm)) {
+    return Object.freeze({
+      status: "uncertified",
+      authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,
+      digest,
+      reason: "used-length-mm-required",
+    });
+  }
   ITEMKEEPER_SOURCE_USAGE_PROJECTION_CERTIFICATIONS.add(digest);
   return Object.freeze({
     status: "certified",
     authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,
     digest,
   });
+}
+
+/**
+ * ItemKeeper source-aware projection登録のproduction placeholder。
+ *
+ * 【詳細説明】
+ * - live certification issuerが未実装の現段階では、外部callerがこの関数を呼んでも
+ *   process-local registryへdigestを追加しない。
+ * - 将来、fixture/capture/reviewedCommit等を検証するmodule-owned issuerを追加した時点で、
+ *   そのissuerだけが内部tokenつきで登録する。
+ *
+ * @function registerItemKeeperSourceUsageProjectionCertification
+ * @param {Object|null|undefined} segment - 認証候補のJobMaterialSegment。
+ * @returns {Object} 未認証理由を含む診断用receipt。
+ * @example
+ * const receipt = registerItemKeeperSourceUsageProjectionCertification(segment);
+ */
+export function registerItemKeeperSourceUsageProjectionCertification(segment) {
+  const digest = createItemKeeperSourceUsageProjectionCertificationDigest(segment);
+  return Object.freeze({
+    status: "uncertified",
+    authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,
+    digest,
+    reason: "live-certification-issuer-required",
+  });
+}
+
+/**
+ * unit test専用にItemKeeper source-aware projection認証registryへ登録する。
+ *
+ * 【詳細説明】
+ * - production codeが任意segmentを認証できないことを保ったまま、projection経路の
+ *   regression testだけがmodule-owned issuer後の状態を再現するための入口。
+ * - Vitest/Node test環境以外ではpublic mintとして機能しない。
+ *
+ * @function registerItemKeeperSourceUsageProjectionCertificationForTest
+ * @param {Object|null|undefined} segment - 認証候補のJobMaterialSegment。
+ * @returns {Object} test環境では認証receipt、それ以外では未認証receipt。
+ * @example
+ * segment.itemKeeperProjection = registerItemKeeperSourceUsageProjectionCertificationForTest(segment);
+ */
+export function registerItemKeeperSourceUsageProjectionCertificationForTest(segment) {
+  const isTestEnvironment = typeof process !== "undefined" && process.env && process.env.NODE_ENV === "test";
+  if (!isTestEnvironment) {
+    return registerItemKeeperSourceUsageProjectionCertification(segment);
+  }
+  return registerItemKeeperSourceUsageProjectionCertificationWithIssuer(
+    segment,
+    ITEMKEEPER_SOURCE_USAGE_PROJECTION_ISSUER_TOKEN
+  );
 }
 
 /**
@@ -234,6 +371,7 @@ function isItemKeeperProjectionCertified(segment) {
     String(projection.status || "").trim() === "certified" &&
     String(projection.authority || "").trim() === ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY &&
     String(projection.digest || "").trim() === digest &&
+    isExplicitNonNegativeItemKeeperUsedLength(segment?.usedLengthMm) &&
     ITEMKEEPER_SOURCE_USAGE_PROJECTION_CERTIFICATIONS.has(digest)
   );
 }
@@ -450,8 +588,7 @@ export class ItemKeeperIntegration {
         );
       })
       .filter(segment => {
-        const usedLengthMm = Number(segment.usedLengthMm);
-        return Number.isFinite(usedLengthMm) && usedLengthMm >= 0;
+        return isExplicitNonNegativeItemKeeperUsedLength(segment.usedLengthMm);
       })
       .sort((a, b) => {
         const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 0;
@@ -479,11 +616,12 @@ export class ItemKeeperIntegration {
   _buildFilamentsFromPrintBinding(job, context = {}) {
     return this._getPrintBindingSegmentsForJob(job, context).map(segment => {
       const spool = getSpoolById(segment.spoolId);
+      const usedLengthMm = toExplicitNonNegativeItemKeeperUsedLengthMm(segment.usedLengthMm);
       return {
         ...this._filamentEntry(
           { spoolId: segment.spoolId },
           spool,
-          Number(segment.usedLengthMm) || 0,
+          usedLengthMm ?? 0,
           job
         ),
         materialSourceId: segment.materialSourceId || "",
