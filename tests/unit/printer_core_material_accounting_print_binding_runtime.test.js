@@ -16,19 +16,20 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1589 (PR #440)
+ * @version 1.390.1590 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 18:15:11
+ * @lastModified 2026-09-01 18:41:23
  * -----------------------------------------------------------
  * @todo
  * - none
  */
 
 import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   MATERIAL_IDENTITY_STRENGTH,
+  MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
   MATERIAL_SOURCE_KIND,
   SPOOL_MOUNT_STATUS,
   SPOOL_MOUNT_VERIFICATION,
@@ -159,11 +160,15 @@ function createRuntimeData() {
  * @param {Object=} options - 観測値オプション。
  * @param {string=} options.hostname - 対象ホスト名。
  * @param {string=} options.printJobId - 実機で観測したPrintJob ID。
+ * @param {string|null=} options.firstObservedAt - 実機で観測した印刷開始時刻。
  * @returns {string} 設定したホスト名。
  */
 function attachObservedPrintJob(data, options = {}) {
   const hostname = options.hostname || "K2Pro-69E7";
   const printJobId = options.printJobId || "job:actual-1001";
+  const firstObservedAt = options.firstObservedAt === null
+    ? null
+    : (options.firstObservedAt || "2026-09-01T08:01:00.000Z");
   data.machines = {
     ...(data.machines || {}),
     [hostname]: {
@@ -172,7 +177,9 @@ function attachObservedPrintJob(data, options = {}) {
         state: { rawValue: 2 },
       },
       printStore: {
-        current: { id: printJobId },
+        current: firstObservedAt
+          ? { id: printJobId, startTime: firstObservedAt, firstObservedAt }
+          : { id: printJobId },
         history: [],
       },
       runtimeData: {},
@@ -272,6 +279,14 @@ function attachOpenMounts(data, options = {}) {
 }
 
 describe("MaterialAccountingPrintBindingRuntime", () => {
+  beforeEach(() => {
+    storageMock.commitMaterialAccountingPrintBindingStoreDurably.mockReset();
+    storageMock.saveUnifiedStorage.mockReset();
+    for (const key of Object.keys(mockMonitorData)) {
+      delete mockMonitorData[key];
+    }
+  });
+
   it("観測済みprintJobIdで現在OPENのsource別SpoolMountをprint-start snapshotへ保存する", async () => {
     const data = createRuntimeData();
     attachOpenMounts(data);
@@ -297,10 +312,47 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       snapshot.protocolToolAlias,
       snapshot.spoolId,
       snapshot.printJobId,
+      snapshot.trusted,
+      snapshot.authority?.canBindUsage,
     ])).toEqual([
-      ["T1A", "spool:a", "job:actual-1001"],
-      ["T1B", "spool:b", "job:actual-1001"],
+      ["T1A", "spool:a", "job:actual-1001", true, true],
+      ["T1B", "spool:b", "job:actual-1001", true, true],
     ]);
+  });
+
+  it("同じ実機print-start観測を再評価してもstable identityで冪等になりsnapshotを増やさない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:retry-stable",
+      firstObservedAt: "2026-09-01T08:01:00.000Z",
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, persisted: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+
+    const first = await runtime.recordObservedPrintStart({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:retry-stable",
+    });
+    data.machines[hostname].printStore.current.startTime = "2026-09-01T08:01:05.000Z";
+    data.machines[hostname].printStore.current.firstObservedAt = "2026-09-01T08:01:05.000Z";
+    const second = await runtime.recordObservedPrintStart({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:retry-stable",
+    });
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(second.status).toBe(MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.IDEMPOTENT);
+    expect(data.materialAccountingPrintBindingStore.printStartSnapshots).toHaveLength(2);
+    expect(data.materialAccountingPrintBindingStore.printStartSnapshots.map((snapshot) => snapshot.capturedAt))
+      .toEqual(["2026-09-01T08:01:00.000Z", "2026-09-01T08:01:00.000Z"]);
   });
 
   it("実機で観測したprintJobIdが無い場合はsnapshotを保存しない", async () => {
@@ -425,6 +477,31 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
 
     expect(result.ok).toBe(false);
     expect(result.reasons).toContain("observed-print-job-id-mismatch");
+    expect(data.materialAccountingPrintBindingStore.printStartSnapshots).toEqual([]);
+  });
+
+  it("実機観測済みjobに開始時刻が無い場合はcaller supplied capturedAtだけではsnapshotを保存しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:missing-observed-time",
+      firstObservedAt: null,
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({
+      data,
+      persist: vi.fn(),
+    });
+
+    const result = await runtime.recordObservedPrintStart({
+      printPlan: createPlan(data),
+      hostname,
+      printJobId: "job:missing-observed-time",
+      capturedAt: "2026-09-01T08:01:00.000Z",
+      bindingOperationId: "binding:missing-observed-time",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("observed-print-start-time-required");
     expect(data.materialAccountingPrintBindingStore.printStartSnapshots).toEqual([]);
   });
 

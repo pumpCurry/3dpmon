@@ -363,6 +363,12 @@ Gate 18.9I-1:
   `monitorData.machines[hostname]` に現在観測されている `printStore.current.id`
   または `storedData.printId` と一致する場合だけ採用する。実機観測済み
   `printJobId` が無い場合、または一致しない場合は保存しない。
+- `capturedAt` はcaller supplied値をauthorityとして使わず、既存snapshotまたは
+  現在機器観測のstart timeから解決する。開始時刻が無い観測では保存しない。
+- binding operation ID は `deviceId + printPlanId + printJobId` で安定化し、
+  同一print-start retryではidempotentとして扱う。
+- runtime経由のsnapshotはcontract module内のtrusted print-start issuerで発行し、
+  public shadow repositoryは引き続きtrusted snapshotをmintしない。
 - print-start時点で現在 `OPEN` なsource別SpoolMountが揃わない場合もblockedにする。
 - `materialAccountingPrintBindingStore` は通常flush queue投入だけでは成功扱いにせず、
   `commitMaterialAccountingPrintBindingStoreDurably()` のIndexedDB CASが

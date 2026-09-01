@@ -10,14 +10,14 @@
  * 【機能内容サマリ】
  * - Gate 18.9I のprint-start binding repositoryをmonitorDataへ接続
  * - 実機で観測できたPrintJob IDを条件に、開始時点のMaterialSource/SpoolMount snapshotを保存
- * - CFS/外部スプールのsource別使用量を後続Gateで帰属するためのshadow証跡を構築
+ * - CFS/外部スプールのsource別使用量を後続Gateで帰属するためのtrusted print-start証跡を構築
  *
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start binding runtimeを生成
  *
- * @version 1.390.1589 (PR #440)
+ * @version 1.390.1590 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 18:15:11
+ * @lastModified 2026-09-01 18:41:23
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でcompletion usage observation runtimeを接続する
@@ -34,7 +34,7 @@ import {
 import {
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
   createMaterialAccountingPrintBindingStoreDigest,
-  createMaterialAccountingPrintBindingRepository,
+  createTrustedPrintStartMaterialAccountingPrintBindingRepository,
   normalizeStoredMaterialAccountingPrintBindingStore,
 } from "./dashboard_material_accounting_print_binding.js";
 import {
@@ -71,36 +71,173 @@ function readStoredDatumValue(value) {
 }
 
 /**
- * MachineDataから現在印刷中のjob ID候補を収集する。
+ * 時刻候補をISO時刻へ正規化する。
  *
  * 【詳細説明】
- * - print-start bindingは実機観測済みジョブだけを根拠にするため、caller引数だけを採用しない。
- * - K1/K2で観測位置が異なるため、`printStore.current.id`と`storedData.printId`の両方を読む。
+ * - `printStartTime`系のepoch秒、epoch ms、ISO文字列の差をruntime内で吸収する。
+ * - 不正値はcaller supplied evidenceとして採用せず、nullへ落とす。
  *
  * @private
- * @function collectCurrentPrintJobIdsFromMachine
- * @param {Object|null|undefined} machine - MachineData候補。
- * @returns {string[]} 現在ジョブID候補。
+ * @function normalizeObservedTime
+ * @param {*} value - 時刻候補。
+ * @returns {string|null} ISO時刻、またはnull。
  */
-function collectCurrentPrintJobIdsFromMachine(machine) {
-  const ids = [];
-  const candidates = [
-    machine?.printStore?.current?.id,
-    machine?.printStore?.current?.printId,
-    readStoredDatumValue(machine?.storedData?.printId),
-    readStoredDatumValue(machine?.storedData?.currentPrintID),
-  ];
-  for (const candidate of candidates) {
-    const id = toTrimmedString(candidate);
-    if (id && !ids.includes(id)) {
-      ids.push(id);
-    }
+function normalizeObservedTime(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
   }
-  return ids;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    const epochMs = numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+    return new Date(epochMs).toISOString();
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
 }
 
 /**
- * 実機観測済みPrintJob IDを解決する。
+ * MachineDataから現在印刷中のjob観測候補を収集する。
+ *
+ * 【詳細説明】
+ * - job IDだけではprint-start時刻がcaller suppliedになってしまうため、機器状態に付随する
+ *   `startTime` / `startedAt` / `firstObservedAt` / `printStartTime`も同時に保持する。
+ * - 同じIDが複数経路から見える場合は、最初に得られた時刻を採用する。
+ *
+ * @private
+ * @function collectCurrentPrintJobObservationsFromMachine
+ * @param {Object|null|undefined} machine - MachineData候補。
+ * @returns {Array<{printJobId:string,firstObservedAt:string|null}>} 現在ジョブ観測候補。
+ */
+function collectCurrentPrintJobObservationsFromMachine(machine) {
+  const observationsById = new Map();
+  const current = machine?.printStore?.current || {};
+  const storedPrintStartTime = readStoredDatumValue(machine?.storedData?.printStartTime);
+  const candidates = [
+    {
+      id: current.id,
+      observedAt: current.firstObservedAt || current.startTime || current.startedAt || current.printStartTime || storedPrintStartTime,
+    },
+    {
+      id: current.printId,
+      observedAt: current.firstObservedAt || current.startTime || current.startedAt || current.printStartTime || storedPrintStartTime,
+    },
+    {
+      id: readStoredDatumValue(machine?.storedData?.printId),
+      observedAt: storedPrintStartTime || current.firstObservedAt || current.startTime || current.startedAt,
+    },
+    {
+      id: readStoredDatumValue(machine?.storedData?.currentPrintID),
+      observedAt: storedPrintStartTime || current.firstObservedAt || current.startTime || current.startedAt,
+    },
+    {
+      id: storedPrintStartTime,
+      observedAt: storedPrintStartTime,
+    },
+  ];
+  for (const candidate of candidates) {
+    const id = toTrimmedString(candidate.id);
+    if (!id || observationsById.has(id)) {
+      continue;
+    }
+    observationsById.set(id, {
+      printJobId: id,
+      firstObservedAt: normalizeObservedTime(candidate.observedAt),
+    });
+  }
+  return Array.from(observationsById.values());
+}
+
+/**
+ * snapshot storeから既存のprint-start観測時刻を探す。
+ *
+ * @private
+ * @function resolveExistingPrintStartSnapshotTime
+ * @param {Object} store - print binding store。
+ * @param {Object} printPlan - PrintPlan。
+ * @param {string} printJobId - PrintJob ID。
+ * @returns {string|null} 既存snapshot時刻。
+ */
+function resolveExistingPrintStartSnapshotTime(store, printPlan, printJobId) {
+  const printPlanId = toTrimmedString(printPlan?.printPlanId);
+  const snapshots = Array.isArray(store?.printStartSnapshots) ? store.printStartSnapshots : [];
+  const match = snapshots.find((snapshot) =>
+    toTrimmedString(snapshot?.printJobId) === printJobId &&
+    toTrimmedString(snapshot?.printPlanId) === printPlanId &&
+    normalizeObservedTime(snapshot?.capturedAt)
+  );
+  return normalizeObservedTime(match?.capturedAt);
+}
+
+/**
+ * print-start capturedAtをtrusted observationから解決する。
+ *
+ * 【詳細説明】
+ * - 既存snapshotがある場合はその時刻を最優先し、同一print-start retryでpayload conflictを起こさない。
+ * - 既存snapshotが無い場合は機器の現在ジョブ観測に含まれるstart timeだけを採用する。
+ * - caller supplied `capturedAt`はauthorityとして採用しないが、不正な明示値は入力汚染として拒否する。
+ *
+ * @private
+ * @function resolveTrustedPrintStartCapturedAt
+ * @param {Object} previousStore - 記録前store。
+ * @param {Object} printPlan - PrintPlan。
+ * @param {{printJobId:string,firstObservedAt:string|null}} printJobResolution - PrintJob解決結果。
+ * @param {Object} request - runtime request。
+ * @returns {{ok:boolean,capturedAt:string|null,reasons:string[]}} capturedAt解決結果。
+ */
+function resolveTrustedPrintStartCapturedAt(previousStore, printPlan, printJobResolution, request) {
+  if (Object.prototype.hasOwnProperty.call(request, "capturedAt") &&
+      request.capturedAt !== null &&
+      request.capturedAt !== undefined &&
+      request.capturedAt !== "" &&
+      !normalizeObservedTime(request.capturedAt)) {
+    return { ok: false, capturedAt: null, reasons: ["observed-print-start-time-invalid"] };
+  }
+  const existingCapturedAt = resolveExistingPrintStartSnapshotTime(previousStore, printPlan, printJobResolution.printJobId);
+  if (existingCapturedAt) {
+    return { ok: true, capturedAt: existingCapturedAt, reasons: [] };
+  }
+  if (printJobResolution.firstObservedAt) {
+    return { ok: true, capturedAt: printJobResolution.firstObservedAt, reasons: [] };
+  }
+  return { ok: false, capturedAt: null, reasons: ["observed-print-start-time-required"] };
+}
+
+/**
+ * runtime process内の初回観測時刻cacheを生成する。
+ *
+ * @private
+ * @function createFirstObservedAtCache
+ * @returns {Map<string,string>} cache。
+ */
+function createFirstObservedAtCache() {
+  return new Map();
+}
+
+/**
+ * runtime cacheから安定したfirstObservedAtを取得する。
+ *
+ * @private
+ * @function getCachedFirstObservedAt
+ * @param {Map<string,string>} cache - process lifetime cache。
+ * @param {Object} printPlan - PrintPlan。
+ * @param {string} printJobId - PrintJob ID。
+ * @param {string} observedAt - 観測時刻。
+ * @returns {string} 安定化済み初回観測時刻。
+ */
+function getCachedFirstObservedAt(cache, printPlan, printJobId, observedAt) {
+  const key = stableStringifyPrinterCoreV3Value({
+    deviceId: printPlan?.deviceId || null,
+    printPlanId: printPlan?.printPlanId || null,
+    printJobId,
+  });
+  if (!cache.has(key)) {
+    cache.set(key, observedAt);
+  }
+  return cache.get(key);
+}
+
+/**
+ * 実機観測済みPrintJobを解決する。
  *
  * 【詳細説明】
  * - `hostname`が指定された場合は、その機器の現在ジョブ観測だけを見る。
@@ -108,33 +245,42 @@ function collectCurrentPrintJobIdsFromMachine(machine) {
  * - hostname未指定で複数候補がある場合は曖昧なので採用しない。
  *
  * @private
- * @function resolveObservedPrintJobId
+ * @function resolveObservedPrintJob
  * @param {Object} data - monitorData互換データ。
  * @param {Object} request - runtime request。
- * @returns {{ok:boolean,printJobId:string,reasons:string[],observedPrintJobIds:string[]}} 解決結果。
+ * @returns {{ok:boolean,printJobId:string,firstObservedAt:string|null,reasons:string[],observedPrintJobIds:string[]}} 解決結果。
  */
-function resolveObservedPrintJobId(data, request) {
+function resolveObservedPrintJob(data, request) {
   const requestedPrintJobId = toTrimmedString(request.printJobId || request.observedPrintJobId);
   const hostname = toTrimmedString(request.hostname || request.host);
   const machines = data?.machines && typeof data.machines === "object" ? data.machines : {};
   const machineEntries = hostname
     ? [[hostname, machines[hostname]]]
     : Object.entries(machines);
-  const observedIds = [];
+  const observationsById = new Map();
   for (const [, machine] of machineEntries) {
-    for (const id of collectCurrentPrintJobIdsFromMachine(machine)) {
-      if (!observedIds.includes(id)) {
-        observedIds.push(id);
+    for (const observation of collectCurrentPrintJobObservationsFromMachine(machine)) {
+      if (!observationsById.has(observation.printJobId)) {
+        observationsById.set(observation.printJobId, observation);
       }
     }
   }
+  const observedIds = Array.from(observationsById.keys());
   if (requestedPrintJobId) {
-    if (observedIds.includes(requestedPrintJobId)) {
-      return { ok: true, printJobId: requestedPrintJobId, reasons: [], observedPrintJobIds: observedIds };
+    const observation = observationsById.get(requestedPrintJobId);
+    if (observation) {
+      return {
+        ok: true,
+        printJobId: requestedPrintJobId,
+        firstObservedAt: observation.firstObservedAt,
+        reasons: [],
+        observedPrintJobIds: observedIds,
+      };
     }
     return {
       ok: false,
       printJobId: "",
+      firstObservedAt: null,
       reasons: observedIds.length > 0
         ? ["observed-print-job-id-mismatch"]
         : ["observed-print-job-id-required"],
@@ -142,11 +288,19 @@ function resolveObservedPrintJobId(data, request) {
     };
   }
   if (observedIds.length === 1) {
-    return { ok: true, printJobId: observedIds[0], reasons: [], observedPrintJobIds: observedIds };
+    const observation = observationsById.get(observedIds[0]);
+    return {
+      ok: true,
+      printJobId: observedIds[0],
+      firstObservedAt: observation.firstObservedAt,
+      reasons: [],
+      observedPrintJobIds: observedIds,
+    };
   }
   return {
     ok: false,
     printJobId: "",
+    firstObservedAt: null,
     reasons: observedIds.length > 1
       ? ["observed-print-job-id-ambiguous"]
       : ["observed-print-job-id-required"],
@@ -173,41 +327,20 @@ function cloneJsonValue(value) {
 }
 
 /**
- * ISO時刻を生成または正規化する。
- *
- * @private
- * @function resolveCapturedAt
- * @param {string|Date|null|undefined} value - 時刻候補。
- * @param {Function|null} now - 現在時刻関数。
- * @returns {string} ISO時刻。
- */
-function resolveCapturedAt(value, now) {
-  const explicit = Date.parse(value);
-  if (Number.isFinite(explicit)) {
-    return new Date(explicit).toISOString();
-  }
-  const current = typeof now === "function" ? now() : new Date();
-  const currentEpoch = Date.parse(current);
-  return Number.isFinite(currentEpoch) ? new Date(currentEpoch).toISOString() : new Date().toISOString();
-}
-
-/**
  * binding operation IDを生成する。
  *
  * @private
  * @function createBindingOperationId
  * @param {Object} printPlan - PrintPlan。
  * @param {string} printJobId - 実機で観測したPrintJob ID。
- * @param {string} capturedAt - print-start観測時刻。
  * @returns {string} deterministic operation ID。
  */
-function createBindingOperationId(printPlan, printJobId, capturedAt) {
+function createBindingOperationId(printPlan, printJobId) {
   return `binding:${createPrinterCoreV3DeterministicId("material-print-start-binding-runtime", [
     stableStringifyPrinterCoreV3Value({
       printJobId,
       printPlanId: printPlan?.printPlanId || null,
       deviceId: printPlan?.deviceId || null,
-      capturedAt,
     }),
   ])}`;
 }
@@ -329,7 +462,6 @@ function isPersistOk(result) {
  * @param {Object=} input - runtime入力。
  * @param {Object=} input.data - monitorData互換データ。未指定なら実monitorData。
  * @param {Function=} input.persist - 永続化関数。未指定ならunified storageへ保存。
- * @param {Function=} input.now - 現在時刻関数。
  * @returns {{recordObservedPrintStart:Function,snapshot:Function}} runtime API。
  * @example
  * const runtime = createMaterialAccountingPrintBindingRuntime();
@@ -340,6 +472,7 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
   const persist = typeof input.persist === "function"
     ? input.persist
     : (request) => persistPrintBindingStoreWithUnifiedStorage({ ...request, data });
+  const firstObservedAtCache = createFirstObservedAtCache();
 
   /**
    * 現在のprint binding store snapshotを返す。
@@ -366,17 +499,23 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
   async function recordObservedPrintStart(request = {}) {
     const previousStore = snapshot();
     const printPlan = request.printPlan;
-    const printJobResolution = resolveObservedPrintJobId(data, request);
+    const printJobResolution = resolveObservedPrintJob(data, request);
     if (!printJobResolution.ok) {
       return createBlockedResult(printJobResolution.reasons, previousStore, {
         observedPrintJobIds: printJobResolution.observedPrintJobIds,
       });
     }
     const printJobId = printJobResolution.printJobId;
-    const capturedAt = resolveCapturedAt(request.capturedAt, input.now);
+    const capturedAtResolution = resolveTrustedPrintStartCapturedAt(previousStore, printPlan, printJobResolution, request);
+    if (!capturedAtResolution.ok) {
+      return createBlockedResult(capturedAtResolution.reasons, previousStore, {
+        observedPrintJobIds: printJobResolution.observedPrintJobIds,
+      });
+    }
+    const capturedAt = getCachedFirstObservedAt(firstObservedAtCache, printPlan, printJobId, capturedAtResolution.capturedAt);
     const bindingOperationId = toTrimmedString(request.bindingOperationId) ||
-      createBindingOperationId(printPlan, printJobId, capturedAt);
-    const repository = createMaterialAccountingPrintBindingRepository(previousStore);
+      createBindingOperationId(printPlan, printJobId);
+    const repository = createTrustedPrintStartMaterialAccountingPrintBindingRepository(previousStore);
     const materialSources = collectMaterialSourcesForPrintPlan(data, printPlan);
     const result = repository.recordPrintStartBindings({
       printPlan,

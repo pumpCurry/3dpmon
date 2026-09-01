@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1589 (PR #440)
+ * @version 1.390.1590 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-09-01 18:15:11
+ * @lastModified 2026-09-01 18:41:23
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -1011,8 +1011,8 @@ function createResult(input) {
     status: input.status || (input.ok ? MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.RECORDED : MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.BLOCKED),
     action: input.action || input.status || null,
     reasons: Array.isArray(input.reasons) ? [...new Set(input.reasons)] : [],
-    snapshots: Array.isArray(input.snapshots) ? input.snapshots.map((snapshot) => cloneJsonValue(snapshot)) : [],
-    usageEvidence: Array.isArray(input.usageEvidence) ? input.usageEvidence.map((evidence) => cloneJsonValue(evidence)) : [],
+    snapshots: Array.isArray(input.snapshots) ? input.snapshots.map((snapshot) => deepFreezeJson(snapshot)) : [],
+    usageEvidence: Array.isArray(input.usageEvidence) ? input.usageEvidence.map((evidence) => deepFreezeJson(evidence)) : [],
     segments: Array.isArray(input.segments) ? input.segments.map((segment) => cloneJsonValue(segment)) : [],
     ledgerEvents: Array.isArray(input.ledgerEvents) ? input.ledgerEvents.map((event) => cloneJsonValue(event)) : [],
     unattributedUsage: Array.isArray(input.unattributedUsage) ? input.unattributedUsage.map((usage) => cloneJsonValue(usage)) : [],
@@ -1074,6 +1074,7 @@ function createLedgerEvent(segment, createdAt) {
  * @function createMaterialAccountingPrintBindingRepositoryWithIssuer
  * @param {Object} dependencies - 契約モジュールから注入されるissuer/validator。
  * @param {Function} dependencies.createTrustedSourceSpecificMaterialUsageEvidence - trusted usage issuer。
+ * @param {Function=} dependencies.createPrintStartMaterialSnapshot - print-start snapshot issuer。
  * @param {Function} dependencies.validateTrustedResultSetCompletenessEvidence - trusted result-set completeness validator。
  * @param {Function} dependencies.evaluateMaterialDebitEligibility - debit eligibility evaluator。
  * @param {Function} dependencies.validateMaterialSource - MaterialSource validator。
@@ -1085,6 +1086,9 @@ function createLedgerEvent(segment, createdAt) {
  */
 export function createMaterialAccountingPrintBindingRepositoryWithIssuer(dependencies = {}, initialStore = {}) {
   const createTrustedSourceSpecificMaterialUsageEvidence = dependencies.createTrustedSourceSpecificMaterialUsageEvidence;
+  const createPrintStartMaterialSnapshot = typeof dependencies.createPrintStartMaterialSnapshot === "function"
+    ? dependencies.createPrintStartMaterialSnapshot
+    : createShadowPrintStartMaterialSnapshot;
   const validateTrustedResultSetCompletenessEvidence = dependencies.validateTrustedResultSetCompletenessEvidence;
   const evaluateMaterialDebitEligibility = dependencies.evaluateMaterialDebitEligibility;
   const validateMaterialSource = dependencies.validateMaterialSource;
@@ -1184,7 +1188,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           reasons.push(mountResolution.reason || "spool-mount-required");
           continue;
         }
-        plannedSnapshots.push(createShadowPrintStartMaterialSnapshot({
+        plannedSnapshots.push(createPrintStartMaterialSnapshot({
           deviceId: printPlan.deviceId,
           printJobId,
           printPlanId: printPlan.printPlanId,
@@ -1242,6 +1246,22 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.BLOCKED,
         reasons,
       });
+    }
+    const allSnapshotsAlreadyRecorded = plannedSnapshots.length > 0 &&
+      plannedSnapshots.every((snapshot) => {
+        const existingSnapshot = snapshotsById.get(snapshot.snapshotId);
+        return existingSnapshot &&
+          stableStringifyPrinterCoreV3Value(existingSnapshot) === stableStringifyPrinterCoreV3Value(snapshot);
+      });
+    if (allSnapshotsAlreadyRecorded) {
+      const result = createResult({
+        ok: true,
+        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.IDEMPOTENT,
+        action: "idempotent",
+        snapshots: plannedSnapshots,
+      });
+      recordOperation(operationId, digest, result);
+      return result;
     }
     for (const snapshot of plannedSnapshots) {
       if (!snapshotsById.has(snapshot.snapshotId)) {

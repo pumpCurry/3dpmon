@@ -25,6 +25,7 @@
  * - {@link createTrustedMaterialResultSetCompletenessRegistry}：trusted result-set completeness 検証用registryを生成
  * - {@link createMaterialAccountingPrintBindingStoreDigest}：print binding store digestを生成
  * - {@link createMaterialAccountingPrintBindingRepository}：print binding repositoryを生成
+ * - {@link createTrustedPrintStartMaterialAccountingPrintBindingRepository}：trusted print-start issuer注入済みrepositoryを生成
  * - {@link createMaterialSourceAccountingView}：UI用 read model contract を生成
  * - {@link canTransitionMaterialAccountingMigrationStatus}：migration lifecycle遷移可否を判定
  * - {@link validateFilamentUnit}：FilamentUnit record を検証
@@ -33,9 +34,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1589 (PR #440)
+ * @version 1.390.1590 (PR #440)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-09-01 18:15:11
+ * @lastModified 2026-09-01 18:41:23
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -1403,6 +1404,32 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
 export function createMaterialAccountingPrintBindingRepository(initialStore = {}) {
   return createMaterialAccountingPrintBindingRepositoryWithIssuer({
     createTrustedSourceSpecificMaterialUsageEvidence,
+    validateTrustedResultSetCompletenessEvidence,
+    evaluateMaterialDebitEligibility,
+    validateMaterialSource,
+    validateSpoolMount,
+  }, initialStore);
+}
+
+/**
+ * trusted print-start snapshot issuer注入済みprint binding repositoryを生成する。
+ *
+ * 【詳細説明】
+ * - Gate18.9I production runtimeだけが使う入口として、契約モジュールprivateの
+ *   trusted print-start snapshot issuerをrepositoryへ注入する。
+ * - public shadow repositoryは従来どおりtrusted snapshotをmintしないため、read-only検証や
+ *   fixture比較用途のtrust boundaryを維持できる。
+ *
+ * @function createTrustedPrintStartMaterialAccountingPrintBindingRepository
+ * @param {Object=} initialStore - 復元用store。
+ * @returns {Object} trusted print-start issuer注入済みrepository API。
+ * @example
+ * const repository = createTrustedPrintStartMaterialAccountingPrintBindingRepository(store);
+ */
+export function createTrustedPrintStartMaterialAccountingPrintBindingRepository(initialStore = {}) {
+  return createMaterialAccountingPrintBindingRepositoryWithIssuer({
+    createTrustedSourceSpecificMaterialUsageEvidence,
+    createPrintStartMaterialSnapshot: createTrustedPrintStartMaterialSnapshot,
     validateTrustedResultSetCompletenessEvidence,
     evaluateMaterialDebitEligibility,
     validateMaterialSource,
