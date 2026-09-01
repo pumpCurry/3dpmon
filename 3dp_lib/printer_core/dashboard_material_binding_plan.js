@@ -18,9 +18,9 @@
  * - {@link validateMaterialBindingPlanCommandBinding}：planとtransport command requestの一致を検証
  * - {@link validateMaterialBindingPlan}：MaterialBindingPlanのattestationを検証
  *
- * @version 1.390.1599 (PR #440)
+ * @version 1.390.1615 (PR #440)
  * @since   1.390.1597 (PR #440)
- * @lastModified 2026-09-01 21:16:00
+ * @lastModified 2026-09-01 23:40:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 20 restart recoveryでprocess-local secret依存ではない再認証registryへ移行する
@@ -211,6 +211,58 @@ function createCommandMaterialAssignmentDigest(assignments) {
   return createPrinterCoreV3DeterministicId("material-binding-command-assignments", [
     stableStringifyPrinterCoreV3Value(assignments),
   ]);
+}
+
+/**
+ * MaterialBindingPlan本体からcommand binding相当のsemantic projectionを生成する。
+ *
+ * 【詳細説明】
+ * - `commandBinding` はtransport requestから生成されるが、plan本体のasset/source/spoolと
+ *   独立に渡されるため、両者が同じ印刷指示を意味しているかを別途検証する。
+ * - commandIdはplan本体へ保持しないためprojectionには含めず、device/session/file/source対応を
+ *   authority boundaryで照合する。
+ *
+ * @private
+ * @function createPlanCommandBindingProjection
+ * @param {Object} plan - MaterialBindingPlan候補。
+ * @returns {Object} command binding照合用projection。
+ * @throws {TypeError} plan本体の必須semanticが欠ける場合。
+ */
+function createPlanCommandBindingProjection(plan) {
+  const assignments = (Array.isArray(plan?.toolAssignments) ? plan.toolAssignments : [])
+    .map((assignment, index) => normalizeCommandBindingAssignment(assignment, index));
+  if (assignments.length === 0) {
+    throw new TypeError("MaterialBindingPlan command projection requires at least one toolAssignment.");
+  }
+  return {
+    deviceId: requireNonEmptyString(plan?.deviceId, "deviceId"),
+    sessionId: requireNonEmptyString(plan?.startContext?.sessionId, "startContext.sessionId"),
+    connectionGeneration: normalizeConnectionGeneration(plan?.startContext?.connectionGeneration),
+    remotePath: requireNonEmptyString(plan?.asset?.path || plan?.asset?.remotePath, "asset.path"),
+    fileHash: toTrimmedString(plan?.asset?.fileHash || plan?.asset?.contentHash || plan?.asset?.sha256) || null,
+    materialAssignmentDigest: createCommandMaterialAssignmentDigest(assignments),
+  };
+}
+
+/**
+ * command binding projection同士が同じsemanticを指すかを判定する。
+ *
+ * @private
+ * @function hasSameCommandBindingSemantic
+ * @param {Object|null} left - 比較対象A。
+ * @param {Object|null} right - 比較対象B。
+ * @returns {boolean} 同じcommand semanticならtrue。
+ */
+function hasSameCommandBindingSemantic(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+  return left.deviceId === right.deviceId &&
+    left.sessionId === right.sessionId &&
+    left.connectionGeneration === right.connectionGeneration &&
+    left.remotePath === right.remotePath &&
+    left.fileHash === right.fileHash &&
+    left.materialAssignmentDigest === right.materialAssignmentDigest;
 }
 
 /**
@@ -430,6 +482,7 @@ export function createMaterialBindingPlan(options = {}) {
 export function validateMaterialBindingPlanCommandBinding(plan, commandRequest) {
   const errors = [];
   let expected = null;
+  let planProjection = null;
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) {
     return { ok: false, errors: ["material-binding-plan-not-object"], commandBinding: null };
   }
@@ -438,11 +491,28 @@ export function validateMaterialBindingPlanCommandBinding(plan, commandRequest) 
   } catch (error) {
     errors.push("material-binding-command-binding-request-invalid");
   }
+  try {
+    planProjection = createPlanCommandBindingProjection(plan);
+  } catch (error) {
+    errors.push("material-binding-plan-command-binding-semantic-invalid");
+  }
   if (!plan.commandBinding || typeof plan.commandBinding !== "object" || Array.isArray(plan.commandBinding)) {
     errors.push("material-binding-command-binding-required");
   }
   if (expected && plan.commandBinding?.digest !== expected.digest) {
     errors.push("material-binding-command-binding-digest-mismatch");
+  }
+  if (
+    planProjection &&
+    plan.commandBinding &&
+    typeof plan.commandBinding === "object" &&
+    !Array.isArray(plan.commandBinding) &&
+    !hasSameCommandBindingSemantic(planProjection, plan.commandBinding)
+  ) {
+    errors.push("material-binding-plan-command-binding-semantic-mismatch");
+  }
+  if (expected && planProjection && !hasSameCommandBindingSemantic(planProjection, expected)) {
+    errors.push("material-binding-plan-command-binding-semantic-mismatch");
   }
   return {
     ok: errors.length === 0,

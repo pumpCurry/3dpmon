@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1602 (PR #440)
+ * @version 1.390.1615 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 21:27:00
+ * @lastModified 2026-09-01 23:40:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -575,7 +575,7 @@ function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observe
     if (!isContinuityBreakingMaterialSourceEvent(event)) {
       return false;
     }
-    if (eventMs <= startMs) {
+    if (eventMs < startMs) {
       return false;
     }
     return !Number.isFinite(completedMs) || eventMs <= completedMs;

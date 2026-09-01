@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1611 (PR #440)
+ * @version 1.390.1615 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 23:00:18
+ * @lastModified 2026-09-01 23:40:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -701,6 +701,38 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       materialBindingPlan: createBindingPlan(commandRequest),
       preparedAt: "2026-09-01T10:00:00.000Z",
     })).toThrow(/material-binding-command-binding-digest-mismatch/);
+  });
+
+  it("MaterialBindingPlan本体とcommandBindingの材料割当semanticが一致しない場合はpending登録を拒否する", () => {
+    const commandRequest = createCommandRequest();
+    const planWithDifferentAssignments = createMaterialBindingPlan({
+      deviceId: commandRequest.deviceId,
+      bindingPlanId: "binding-plan:k2:semantic-mismatch",
+      asset: {
+        path: "/mnt/UDISK/printer_data/gcodes/other-file.gcode",
+        fileHash: "sha256:other",
+        uploadGeneration: "upload:other:1",
+      },
+      toolAssignments: [{
+        toolId: 0,
+        protocolToolAlias: "T1A",
+        materialSourceId: "source:k2:cfs:1d",
+        spoolId: "spool:d",
+      }],
+      startContext: {
+        sessionId: commandRequest.sessionId,
+        connectionGeneration: commandRequest.payload.startContext.connectionGeneration,
+        uploadGeneration: "upload:other:1",
+      },
+      commandBinding: createMaterialBindingCommandBinding(commandRequest),
+    });
+
+    expect(() => rememberMaterialAccountingPrintStartRequest({
+      hostname: "K2Pro-69E7",
+      commandRequest,
+      materialBindingPlan: planWithDifferentAssignments,
+      preparedAt: "2026-09-01T10:00:00.000Z",
+    })).toThrow(/material-binding-plan-command-binding-semantic-mismatch/);
   });
 
   it("MaterialBindingPlanはspool未割当sourceでもtransport binding候補として保持できる", () => {

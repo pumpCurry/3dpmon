@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1602 (PR #440)
+ * @version 1.390.1615 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 21:27:00
+ * @lastModified 2026-09-01 23:40:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -985,6 +985,56 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       printPlan: plan,
       hostname,
       printJobId: "job:k2-source-changed-during-print",
+      resultSetCompleteness: "complete",
+    });
+
+    const changedSegment = result.segments.find((segment) => segment.protocolToolAlias === "T1A");
+    const unchangedSegment = result.segments.find((segment) => segment.protocolToolAlias === "T1B");
+    expect(result.ok).toBe(true);
+    expect(changedSegment.debit.canDebit).toBe(false);
+    expect(changedSegment.debit.reasons).toContain("physical-discontinuity");
+    expect(changedSegment.debit.reasons).toContain("source-continuity-required");
+    expect(unchangedSegment.debit.canDebit).toBe(true);
+  });
+
+  it("print-start受信と同一msのsource変更イベントは印刷中断絶としてdebit候補へ昇格しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:k2-source-changed-at-start",
+      observedReceivedAt: "2026-09-01T08:01:05.000Z",
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({ plan, printPlan: plan, hostname, printJobId: "job:k2-source-changed-at-start" });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-source-changed-at-start",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
+    const deviceRecord = data.materialSourceObservations.byDeviceId["serial:k2"];
+    deviceRecord.events = Array.isArray(deviceRecord.events) ? deviceRecord.events : [];
+    deviceRecord.events.push({
+      observationId: "mso:serial-k2:source-k2-cfs-1a:changed-at-print-start",
+      deviceId: "serial:k2",
+      sourceId: "source:k2:cfs:1a",
+      observedAt: "2026-09-01T08:01:05.000Z",
+      changeKind: "source-changed",
+      before: null,
+      after: null,
+      authority: "observation-only",
+    });
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-source-changed-at-start",
       resultSetCompleteness: "complete",
     });
 
