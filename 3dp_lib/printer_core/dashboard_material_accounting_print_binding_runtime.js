@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1597 (PR #440)
+ * @version 1.390.1598 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 19:56:42
+ * @lastModified 2026-09-01 20:22:36
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -470,12 +470,119 @@ function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
 }
 
 /**
+ * MaterialSource continuity判定で同一sourceとして扱うID集合を生成する。
+ *
+ * 【詳細説明】
+ * - PrintBinding snapshotはcanonical `materialSourceId`を保存する一方、
+ *   MaterialSource観測storeのchange logはtransport/localな`sourceId`で記録されることがある。
+ * - canonical IDとaliasesを同時に照合し、CFS slotの変更イベントを見落とさない。
+ *
+ * @private
+ * @function createMaterialSourceContinuityLookupIds
+ * @param {Object} snapshot - print-start snapshot。
+ * @param {Object|null} observedSource - completion時に解決したMaterialSource record。
+ * @returns {Set<string>} source continuity照合用ID集合。
+ */
+function createMaterialSourceContinuityLookupIds(snapshot, observedSource) {
+  return new Set([
+    snapshot?.materialSourceId,
+    snapshot?.sourceId,
+    snapshot?.materialSource?.materialSourceId,
+    snapshot?.materialSource?.sourceId,
+    ...(Array.isArray(snapshot?.materialSource?.aliases) ? snapshot.materialSource.aliases : []),
+    observedSource?.materialSourceId,
+    observedSource?.sourceId,
+    ...(Array.isArray(observedSource?.aliases) ? observedSource.aliases : []),
+  ].map(toTrimmedString).filter(Boolean));
+}
+
+/**
+ * source change eventがprint中のcontinuityを壊す種類か判定する。
+ *
+ * @private
+ * @function isContinuityBreakingMaterialSourceEvent
+ * @param {Object|null|undefined} event - MaterialSource observation event。
+ * @returns {boolean} continuityを壊すeventならtrue。
+ */
+function isContinuityBreakingMaterialSourceEvent(event) {
+  return [
+    "source-changed",
+    "source-disappeared",
+    "source-merge-conflict",
+  ].includes(toTrimmedString(event?.changeKind));
+}
+
+/**
+ * print-start後からcompletionまでにsource変更が観測されたかを検査する。
+ *
+ * 【詳細説明】
+ * - 完了時点で同じsourceがfreshでも、印刷中に材料交換/slot消失/merge conflictが観測されていれば
+ *   自動debit候補としては連続性を証明できない。
+ * - completion時刻が未取得の場合は、print-start以後のbreaking eventを広く拒否する。
+ *
+ * @private
+ * @function findMaterialSourceContinuityBreakEvents
+ * @param {Object} deviceRecord - MaterialSource observation device record。
+ * @param {Object} snapshot - print-start snapshot。
+ * @param {Object|null} observedSource - completion時に解決したMaterialSource record。
+ * @param {string|null} completedAt - 完了観測時刻。
+ * @returns {Object[]} continuityを壊すevent一覧。
+ */
+function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observedSource, completedAt) {
+  const sourceIds = createMaterialSourceContinuityLookupIds(snapshot, observedSource);
+  const startMs = Date.parse(snapshot?.capturedAt || "");
+  const completedMs = Date.parse(completedAt || "");
+  if (!Number.isFinite(startMs) || sourceIds.size === 0) {
+    return [];
+  }
+  return (Array.isArray(deviceRecord?.events) ? deviceRecord.events : []).filter((event) => {
+    const eventSourceId = toTrimmedString(event?.sourceId);
+    const eventMs = Date.parse(event?.observedAt || "");
+    if (!eventSourceId || !sourceIds.has(eventSourceId) || !Number.isFinite(eventMs)) {
+      return false;
+    }
+    if (!isContinuityBreakingMaterialSourceEvent(event)) {
+      return false;
+    }
+    if (eventMs <= startMs) {
+      return false;
+    }
+    return !Number.isFinite(completedMs) || eventMs <= completedMs;
+  });
+}
+
+/**
+ * completion時点でsource単体のfreshnessを判定する。
+ *
+ * @private
+ * @function deriveCompletionSourceFreshness
+ * @param {Object} deviceRecord - MaterialSource observation device record。
+ * @param {Object|null} observedSource - completion時に解決したMaterialSource record。
+ * @param {string|null} completedAt - 完了観測時刻。
+ * @returns {Object} source単位freshness。
+ */
+function deriveCompletionSourceFreshness(deviceRecord, observedSource, completedAt) {
+  const sourceObservedAt = normalizeObservedTime(
+    observedSource?.lastObservedAt ||
+    observedSource?.observedAt ||
+    deviceRecord?.lastObservedAt
+  );
+  return deriveMaterialSourceObservationFreshness({
+    lastObservedAt: sourceObservedAt,
+    providerDisconnectedAt: deviceRecord?.providerDisconnectedAt || null,
+    restoredFromStorage: deviceRecord?.restoredFromStorage === true,
+  }, {
+    now: completedAt || new Date().toISOString(),
+  });
+}
+
+/**
  * completion時点でruntime所有のsource continuity evidenceを作る。
  *
  * 【詳細説明】
  * - caller supplied continuityをtrusted debit候補へ使わないため、現在のMaterialSource観測storeを読む。
- * - provisional sourceは、同一device/sourceが最新観測に残っていてproviderがstaleでない場合だけ
- *   `freshTopology/sourceContinuity`をtrueにする。
+ * - provisional sourceは、同一device/sourceが完了時点でfreshに観測でき、かつprint-start後に
+ *   source変更/消失/merge conflictが記録されていない場合だけ`sourceContinuity`をtrueにする。
  *
  * @private
  * @function buildRuntimeContinuityBySourceId
@@ -501,12 +608,24 @@ function buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt = 
     const freshness = deriveMaterialSourceObservationFreshness(deviceRecord, {
       now: completedAt || new Date().toISOString(),
     });
-    const freshTopology = !!observedSource && freshness.state === "fresh";
+    const sourceFreshness = deriveCompletionSourceFreshness(deviceRecord, observedSource, completedAt);
+    const continuityBreakEvents = findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observedSource, completedAt);
+    const freshTopology = !!observedSource && freshness.state === "fresh" && sourceFreshness.state === "fresh";
+    const hasContinuityBreak = continuityBreakEvents.length > 0;
     continuityBySourceId[sourceId] = {
-      sourceContinuity: freshTopology,
+      sourceContinuity: freshTopology && !hasContinuityBreak,
       freshTopology,
+      physicalDiscontinuity: hasContinuityBreak,
       observedAt: normalizeObservedTime(deviceRecord.lastObservedAt) || null,
+      sourceObservedAt: normalizeObservedTime(observedSource?.lastObservedAt || observedSource?.observedAt) || null,
       freshness,
+      sourceFreshness,
+      continuityBreakEvents: continuityBreakEvents.map((event) => ({
+        observationId: event.observationId || null,
+        sourceId: event.sourceId || null,
+        observedAt: event.observedAt || null,
+        changeKind: event.changeKind || null,
+      })),
       source: "runtime-material-source-observation",
     };
   }

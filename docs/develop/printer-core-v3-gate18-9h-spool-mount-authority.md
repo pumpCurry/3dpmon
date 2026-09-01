@@ -419,7 +419,11 @@ Gate 18.9I-2:
   MaterialSource observation resolverと正式freshness TTL判定から作り、caller supplied
   continuity objectはtrusted authorityへ採用しない。TTL切れ、provider disconnected、
   restored last-knownでは `freshTopology:false` / `sourceContinuity:false` になり、
-  source-specific segmentは保存してもmanaged remaining debit候補には昇格しない。この段階では
+  source-specific segmentは保存してもmanaged remaining debit候補には昇格しない。加えて、
+  print-start snapshotの `capturedAt` 以後からcompletionまでに、同じsourceの
+  `source-changed` / `source-disappeared` / `source-merge-conflict` eventが観測された場合は、
+  完了時点のtopologyがfreshでも `physicalDiscontinuity:true` /
+  `sourceContinuity:false` としてdebit候補から外す。この段階では
   managed spool残量、legacy `usageHistory`、ItemKeeper projectionへは反映しない。
 - completion writeも専用CAS境界を必須とし、`casApplied:true` が無いpersist結果では
   runtime storeを進めない。

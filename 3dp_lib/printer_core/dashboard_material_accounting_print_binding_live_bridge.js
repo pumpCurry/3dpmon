@@ -22,9 +22,9 @@
  * - {@link forgetMaterialAccountingPrintStartRequest}：hostname単位のpending登録を破棄
  * - {@link clearMaterialAccountingPrintBindingLiveBridge}：テスト用にpending状態を初期化
  *
- * @version 1.390.1597 (PR #440)
+ * @version 1.390.1598 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 19:56:42
+ * @lastModified 2026-09-01 20:14:08
  * -----------------------------------------------------------
  * @todo
  * - Gate 20 restart recoveryでpending print-startの再認証/再構築を永続session registryへ移す
@@ -44,6 +44,18 @@ import { validateMaterialBindingPlan } from "./dashboard_material_binding_plan.j
  * @constant {Map<string,Object>}
  */
 const PENDING_BY_HOST = new Map();
+
+/**
+ * prepared中に先着した観測で解決済みruntimeをhostname別に保持するMap。
+ *
+ * 【詳細説明】
+ * - runtimeには関数を含むため、公開snapshotへ含めるpending recordには保存しない。
+ * - 実運用ではstart観測側だけがruntimeを解決でき、transport送信成功側はruntimeを持たない。
+ * - そのためPREPARED中の観測をreplayするときだけ、内部Mapから同じruntimeを取り出す。
+ *
+ * @constant {Map<string,Object>}
+ */
+const QUEUED_RUNTIME_BY_HOST = new Map();
 
 /**
  * JSON互換値をdeep cloneする。
@@ -275,10 +287,12 @@ async function replayQueuedStartObservation(pending, input) {
     return null;
   }
   const queued = pending.queuedStartObservation;
+  const queuedRuntime = QUEUED_RUNTIME_BY_HOST.get(pending.hostname) || null;
+  QUEUED_RUNTIME_BY_HOST.delete(pending.hostname);
   pending.queuedStartObservation = null;
   return recordObservedMaterialAccountingPrintStart({
     ...queued,
-    runtime: input.runtime || queued.runtime,
+    runtime: input.runtime || queuedRuntime,
   });
 }
 
@@ -337,6 +351,7 @@ export function rememberMaterialAccountingPrintStartRequest(input = {}) {
     completionRecordedAt: null,
     queuedStartObservation: null,
   };
+  QUEUED_RUNTIME_BY_HOST.delete(hostname);
   PENDING_BY_HOST.set(hostname, pending);
   return clonePendingRecord(pending);
 }
@@ -398,6 +413,11 @@ export async function recordObservedMaterialAccountingPrintStart(input = {}) {
     return { ok: false, status: "blocked", reasons: ["pending-print-plan-required"] };
   }
   if (pending.status === "prepared") {
+    if (input.runtime) {
+      QUEUED_RUNTIME_BY_HOST.set(hostname, input.runtime);
+    } else {
+      QUEUED_RUNTIME_BY_HOST.delete(hostname);
+    }
     pending.queuedStartObservation = {
       hostname,
       printJobId,
@@ -516,6 +536,7 @@ export function forgetMaterialAccountingPrintStartRequest(input = {}) {
       return false;
     }
   }
+  QUEUED_RUNTIME_BY_HOST.delete(hostname);
   return PENDING_BY_HOST.delete(hostname);
 }
 
@@ -530,4 +551,5 @@ export function forgetMaterialAccountingPrintStartRequest(input = {}) {
  */
 export function clearMaterialAccountingPrintBindingLiveBridge() {
   PENDING_BY_HOST.clear();
+  QUEUED_RUNTIME_BY_HOST.clear();
 }

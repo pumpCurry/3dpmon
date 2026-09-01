@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1595 (PR #440)
+ * @version 1.390.1598 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 19:17:01
+ * @lastModified 2026-09-01 20:14:08
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -510,6 +510,39 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       commandId: commandRequest.commandId,
       submittedAt: "2026-09-01T08:01:03.000Z",
       runtime,
+    });
+
+    expect(prepared.ok).toBe(false);
+    expect(prepared.reasons).toContain("command-submit-not-confirmed");
+    expect(submitted.ok).toBe(true);
+    expect(runtime.recordObservedPrintStart).toHaveBeenCalledTimes(1);
+    expect(runtime.recordObservedPrintStart).toHaveBeenCalledWith(expect.objectContaining({
+      printJobId: "job:new-1001",
+    }));
+  });
+
+  it("本番同様にsubmitted通知側がruntimeを持たない場合も先着start観測を再評価する", async () => {
+    const runtime = {
+      recordObservedPrintStart: vi.fn(async () => ({ ok: true, status: "recorded" })),
+    };
+    const commandRequest = createCommandRequest();
+    rememberMaterialAccountingPrintStartRequest({
+      hostname: "K2Pro-69E7",
+      commandRequest,
+      materialBindingPlan: createBindingPlan(),
+      submittedAt: "2026-09-01T08:01:00.000Z",
+    });
+
+    const prepared = await recordObservedMaterialAccountingPrintStart({
+      hostname: "K2Pro-69E7",
+      printJobId: "job:new-1001",
+      firstObservedAt: "2026-09-01T08:01:05.000Z",
+      runtime,
+    });
+    const submitted = await markMaterialAccountingPrintStartRequestSubmitted({
+      hostname: "K2Pro-69E7",
+      commandId: commandRequest.commandId,
+      submittedAt: "2026-09-01T08:01:03.000Z",
     });
 
     expect(prepared.ok).toBe(false);

@@ -513,6 +513,11 @@ Gate 18.9 must cover:
   evaluation. TTL-expired, provider-disconnected, or restored-last-known
   observations may still produce source-specific JobMaterialSegment / shadow
   ledger evidence, but they do not become managed remaining debit candidates.
+  A fresh completion-time topology observation is not enough by itself: if the
+  MaterialSource change log records `source-changed`, `source-disappeared`, or
+  `source-merge-conflict` for the same canonical source or alias after
+  print-start and before completion, the runtime marks the segment as a
+  physical discontinuity and keeps `sourceContinuity:false`.
   Gate 18.9I-2 does not mutate managed spool remaining or legacy
   `usageHistory`.
 - ItemKeeper payload generation may read same-device `observed-used` /
