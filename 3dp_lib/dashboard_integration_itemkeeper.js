@@ -20,7 +20,7 @@
  * @license BSD-3-Clause
  * @version 1.390.1624 (PR #440)
  * @since 1.390.0 (Initial)
- * @lastModified 2026-09-02 07:23:40
+ * @lastModified 2026-09-02 08:28:00
  */
 
 "use strict";
@@ -35,6 +35,10 @@ import { extractHost } from "./dashboard_target_identity.js";
 import { attributedUsed, deriveSpoolRemaining } from "./dashboard_filament_ledger.js";
 import { notificationManager } from "./dashboard_notification_manager.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "./printer_core/dashboard_data_schema_v3.js";
 
 /** ペイロードスキーマ識別子 */
 const IK_SCHEMA = "3dpmon.ik.history.v1";
@@ -50,6 +54,10 @@ const CAMERA_CAPTURE_TIMEOUT_MS = 4500;
 const THUMB_FETCH_CONCURRENCY = 4;
 /** 1機あたりのサムネ取得上限枚数（暴走防止。超過分は thumbnailUrl のみ） */
 const THUMB_MAX_PER_DEVICE = 60;
+/** ItemKeeper source-aware projectionのmodule-owned認証authority名 */
+const ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY = "module-owned-live-certification-registry";
+/** live certification済みsource-aware projection digest集合 */
+const ITEMKEEPER_SOURCE_USAGE_PROJECTION_CERTIFICATIONS = new Set();
 
 /** 既定設定 */
 const DEFAULTS = Object.freeze({
@@ -108,13 +116,111 @@ function resolveItemKeeperPrinterCoreDeviceId(machine) {
 }
 
 /**
+ * ItemKeeper source-aware projection認証用の意味payloadを生成する。
+ *
+ * 【詳細説明】
+ * - imported JSONが`itemKeeperProjection.status="certified"`だけを偽装しても通らないように、
+ *   実際にItemKeeperへ投影するsource/slot/spool/usageの意味だけをdigest化する。
+ * - `itemKeeperProjection`自身はdigest入力へ含めず、認証証跡を付け直してもdigestが
+ *   自己参照で変わらないようにする。
+ *
+ * @private
+ * @function createItemKeeperSourceUsageProjectionCertificationPayload
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @returns {Object} 認証digestの意味payload。
+ */
+function createItemKeeperSourceUsageProjectionCertificationPayload(segment) {
+  return {
+    segmentId: String(segment?.segmentId || "").trim(),
+    printJobId: String(segment?.printJobId || segment?.jobId || segment?.printId || "").trim(),
+    printPlanId: String(segment?.printPlanId || "").trim(),
+    deviceId: String(segment?.deviceId || "").trim(),
+    spoolId: String(segment?.spoolId || "").trim(),
+    mountId: String(segment?.mountId || "").trim(),
+    materialSourceId: String(segment?.materialSourceId || "").trim(),
+    protocolToolAlias: String(segment?.protocolToolAlias || "").trim(),
+    usedLengthMm: Number(segment?.usedLengthMm),
+    usageState: String(segment?.usageState || "").trim(),
+    confidence: String(segment?.confidence || "").trim(),
+    order: Number.isFinite(Number(segment?.order)) ? Number(segment.order) : 0,
+    debitStatus: String(segment?.debit?.status || "").trim(),
+  };
+}
+
+/**
+ * ItemKeeper source-aware projection認証digestを生成する。
+ *
+ * 【詳細説明】
+ * - live certification gateで同じprocess内のmodule-owned registryへ登録されたdigestだけを
+ *   runtime ItemKeeper projectionへ通す。
+ * - digestには使用量とsource identityを含めるため、登録後にsource/order/usedLengthMmなどを
+ *   改変したsegmentは認証済みとして扱わない。
+ *
+ * @function createItemKeeperSourceUsageProjectionCertificationDigest
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @returns {string} source-aware projection認証digest。
+ * @example
+ * const digest = createItemKeeperSourceUsageProjectionCertificationDigest(segment);
+ */
+export function createItemKeeperSourceUsageProjectionCertificationDigest(segment) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId(
+    "itemkeeper-source-usage-projection-certification",
+    [stableStringifyPrinterCoreV3Value(createItemKeeperSourceUsageProjectionCertificationPayload(segment))]
+  )}`;
+}
+
+/**
+ * ItemKeeper source-aware projectionをmodule-owned registryへ登録する。
+ *
+ * 【詳細説明】
+ * - この関数は将来のlive certification gateから呼ばれる入口であり、import済みstoreの
+ *   plain fieldだけではprojectionを解禁しないためのprocess-local authorityである。
+ * - 戻り値を`segment.itemKeeperProjection`へ保存することで、UI/export側にも
+ *   どのdigestで認証されたかを診断情報として残せる。
+ *
+ * @function registerItemKeeperSourceUsageProjectionCertification
+ * @param {Object|null|undefined} segment - 認証するJobMaterialSegment。
+ * @returns {Object} segmentへ付与するItemKeeper projection認証証跡。
+ * @example
+ * segment.itemKeeperProjection = registerItemKeeperSourceUsageProjectionCertification(segment);
+ */
+export function registerItemKeeperSourceUsageProjectionCertification(segment) {
+  const digest = createItemKeeperSourceUsageProjectionCertificationDigest(segment);
+  ITEMKEEPER_SOURCE_USAGE_PROJECTION_CERTIFICATIONS.add(digest);
+  return Object.freeze({
+    status: "certified",
+    authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,
+    digest,
+  });
+}
+
+/**
+ * テスト用にItemKeeper source-aware projection認証registryを空にする。
+ *
+ * 【詳細説明】
+ * - module-owned registryはprocess-localなmutable authorityなので、unit test間の
+ *   汚染を防ぐため明示的にresetできるようにする。
+ * - production pathでは呼ばず、source-aware projectionの実解禁はregister関数経由に限定する。
+ *
+ * @function clearItemKeeperSourceUsageProjectionCertificationsForTest
+ * @returns {void}
+ * @example
+ * clearItemKeeperSourceUsageProjectionCertificationsForTest();
+ */
+export function clearItemKeeperSourceUsageProjectionCertificationsForTest() {
+  ITEMKEEPER_SOURCE_USAGE_PROJECTION_CERTIFICATIONS.clear();
+}
+
+/**
  * source-aware ItemKeeper projectionがlive certification済みか判定する。
  *
  * 【詳細説明】
  * - K2/CFSのsource別使用量は、materialUsed CSVとPrintPlan順序の対応を実機で証明するまで
  *   外部のspool使用実績として送らない。
- * - 将来のlive certification gateはJobMaterialSegmentへ`itemKeeperProjection.status="certified"`を
- *   付与し、このhelperだけを通して投影を解禁する。
+ * - 将来のlive certification gateはJobMaterialSegmentをmodule-owned registryへ登録し、
+ *   `authority`と`digest`を持つ証跡を付与する。
+ * - imported JSONやlocalStorage restoreが`status:"certified"`だけを持っていても、
+ *   process-local registryに一致digestが無ければprojectionしない。
  *
  * @private
  * @function isItemKeeperProjectionCertified
@@ -122,7 +228,14 @@ function resolveItemKeeperPrinterCoreDeviceId(machine) {
  * @returns {boolean} ItemKeeper source-aware projectionへ使用可能ならtrue。
  */
 function isItemKeeperProjectionCertified(segment) {
-  return String(segment?.itemKeeperProjection?.status || "").trim() === "certified";
+  const projection = segment?.itemKeeperProjection || {};
+  const digest = createItemKeeperSourceUsageProjectionCertificationDigest(segment);
+  return (
+    String(projection.status || "").trim() === "certified" &&
+    String(projection.authority || "").trim() === ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY &&
+    String(projection.digest || "").trim() === digest &&
+    ITEMKEEPER_SOURCE_USAGE_PROJECTION_CERTIFICATIONS.has(digest)
+  );
 }
 
 /**

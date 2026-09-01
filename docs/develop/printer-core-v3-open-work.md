@@ -142,9 +142,11 @@ source-aware mountとして扱わない。
    continuity比較には使わない。source-specific freshnessは該当sourceの観測時刻だけで判定し、
    他sourceで更新されたdevice-level `lastObservedAt`へfallbackしない。
    さらに、MaterialSource event logはboundedであるため、device-level event coverageと
-   source固有event coverageの両方がprint-start以前から残っていることを要求する。coverage欠落、
-   source初回観測がprint-start以後、またはtrim後にどちらかのcoverage開始がprint-startより後ろへ
-   進んだrecordは、source-specific segmentを保存してもmanaged debit候補へ昇格しない。印刷区間中の
+   source固有event coverageの両方がoperator-confirmed mountのopenまたは再確認以前から
+   残っていることを要求する。coverage欠落、
+   source初回観測がmount open / 再確認時刻以後、またはtrim後にどちらかのcoverage開始が
+   mount open / 再確認時刻より後ろへ進んだrecordは、source-specific segmentを保存しても
+   managed debit候補へ昇格しない。印刷区間中の
    provider disconnect/reconnectやproviderGeneration変更は、同じslot/material状態へ戻った場合でも
    provisional source全体のphysical discontinuityとして扱う。completion通知後にCAS失敗などで
    pendingが残った場合も、live bridgeは初回completion受信時刻を
@@ -152,8 +154,9 @@ source-aware mountとして扱わない。
   Gate 18.9I-3では、このshadow storeに保存された同一device + printJobIdの
   `observed-used` / `confirmed-unused` `JobMaterialSegment` をItemKeeper送信用
   `jobs[].filaments[]` へread-only投影する。projectionには同一device ID、source-aware
-  `debit.status:"eligible"`、およびlive certification済みの
-  `itemKeeperProjection.status:"certified"` を要求し、未certifiedのK2 materialUsed CSV順序は
+  `debit.status:"eligible"`、およびmodule-owned registryでlive certification済みの
+  `itemKeeperProjection.status:"certified"` + `authority` + 現segmentと一致する`digest`を要求し、
+  plain import / localStorage restore上の文字列だけではsource-aware投影を解禁しない。未certifiedのK2 materialUsed CSV順序は
   ItemKeeperへsource別true usageとして送らない。
   ただしmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
   への書き込みはまだ行わない。

@@ -672,10 +672,10 @@ function resolveMaterialSourceEventCoverageStartedAt(deviceRecord, snapshot, obs
 }
 
 /**
- * print interval全体のMaterialSource event coverageを検査する。
+ * mount continuity interval全体のMaterialSource event coverageを検査する。
  *
  * 【詳細説明】
- * - bounded event logである以上、「breaking eventが無い」ことは保持範囲がprint-start以前から
+ * - bounded event logである以上、「breaking eventが無い」ことは保持範囲がmount open/reconfirm以前から
  *   残っている場合だけcontinuity証拠になる。
  * - 古い保存データやtrim後データのようにcoverage開始時刻が証明できない場合は、実使用量は保存しつつ
  *   自動debit候補には昇格しない。
@@ -695,7 +695,7 @@ function deriveMaterialSourceEventCoverage(deviceRecord, snapshot, observedSourc
     deviceRecord?.eventsRetainedFromAt
   );
   const sourceStartedAt = resolveMaterialSourceEventCoverageStartedAt(deviceRecord, snapshot, observedSource);
-  const startMs = Date.parse(resolvePrintStartObservedReceivedAt(snapshot) || "");
+  const startMs = Date.parse(resolveMaterialSourceContinuityStartedAt(snapshot) || "");
   const completedMs = Date.parse(completedObservedAt || "");
   if (!Number.isFinite(startMs) || !Number.isFinite(completedMs)) {
     return { ok: false, startedAt, sourceStartedAt, reason: "material-source-event-coverage-interval-required" };

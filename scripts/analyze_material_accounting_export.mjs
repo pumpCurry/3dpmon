@@ -20,7 +20,7 @@
  *
  * @version 1.390.1624 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 07:23:40
+ * @lastModified 2026-09-02 08:28:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -29,6 +29,17 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "../3dp_lib/printer_core/dashboard_data_schema_v3.js";
+
+/**
+ * ItemKeeper source-aware projectionのmodule-owned認証authority名。
+ *
+ * @constant {string}
+ */
+const ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY = "module-owned-live-certification-registry";
 
 /**
  * CLI usage text。
@@ -433,6 +444,71 @@ function resolvePrintJobId(record) {
 }
 
 /**
+ * ItemKeeper source-aware projection認証用の意味payloadを生成する。
+ *
+ * 【詳細説明】
+ * - Runtime側と同じsource/slot/spool/usage意味をdigest入力にし、export analyzerでも
+ *   plain `status:"certified"` をready evidenceとして扱わない。
+ * - Analyzerはprocess-local registryを持たないため、authority名とdigest整合だけを
+ *   read-only診断する。
+ *
+ * @private
+ * @function createItemKeeperProjectionCertificationPayload
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @returns {Object} 認証digest用payload。
+ */
+function createItemKeeperProjectionCertificationPayload(segment) {
+  return {
+    segmentId: toText(segment?.segmentId),
+    printJobId: resolvePrintJobId(segment),
+    printPlanId: toText(segment?.printPlanId),
+    deviceId: toText(segment?.deviceId),
+    spoolId: toText(segment?.spoolId),
+    mountId: toText(segment?.mountId),
+    materialSourceId: toText(segment?.materialSourceId),
+    protocolToolAlias: toText(segment?.protocolToolAlias),
+    usedLengthMm: Number(segment?.usedLengthMm),
+    usageState: toText(segment?.usageState),
+    confidence: toText(segment?.confidence),
+    order: Number.isFinite(Number(segment?.order)) ? Number(segment.order) : 0,
+    debitStatus: toText(segment?.debit?.status),
+  };
+}
+
+/**
+ * ItemKeeper source-aware projection認証digestを生成する。
+ *
+ * @private
+ * @function createItemKeeperProjectionCertificationDigest
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @returns {string} 認証digest。
+ */
+function createItemKeeperProjectionCertificationDigest(segment) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId(
+    "itemkeeper-source-usage-projection-certification",
+    [stableStringifyPrinterCoreV3Value(createItemKeeperProjectionCertificationPayload(segment))]
+  )}`;
+}
+
+/**
+ * export上のItemKeeper source-aware projection証跡が整合しているか判定する。
+ *
+ * @private
+ * @function hasConsistentItemKeeperProjectionCertification
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @returns {boolean} authority/digestがsegment内容と整合していればtrue。
+ */
+function hasConsistentItemKeeperProjectionCertification(segment) {
+  const projection = segment?.itemKeeperProjection || {};
+  const expectedDigest = createItemKeeperProjectionCertificationDigest(segment);
+  return (
+    toText(projection.status) === "certified" &&
+    toText(projection.authority) === ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY &&
+    toText(projection.digest) === expectedDigest
+  );
+}
+
+/**
  * segmentがItemKeeper projectionへ渡せる条件を満たすか判定する。
  *
  * 【詳細説明】
@@ -451,7 +527,6 @@ function isItemKeeperEligibleSegment(segment, deviceId) {
   const usageState = toText(segment?.usageState);
   const usedLengthMm = toFiniteNumberOrNull(segment?.usedLengthMm);
   const debitStatus = toText(segment?.debit?.status);
-  const itemKeeperProjectionStatus = toText(segment?.itemKeeperProjection?.status);
   if (!segment || typeof segment !== "object") {
     return false;
   }
@@ -463,7 +538,7 @@ function isItemKeeperEligibleSegment(segment, deviceId) {
     toText(segment.spoolId) &&
     ["observed-used", "confirmed-unused"].includes(usageState) &&
     debitStatus === "eligible" &&
-    itemKeeperProjectionStatus === "certified" &&
+    hasConsistentItemKeeperProjectionCertification(segment) &&
     usedLengthMm !== null &&
     usedLengthMm >= 0
   );

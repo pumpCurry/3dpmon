@@ -17,7 +17,7 @@
  *
  * @version 1.390.1624 (PR #440)
  * @since   1.390.1575 (PR #440)
- * @lastModified 2026-09-02 06:58:30
+ * @lastModified 2026-09-02 08:28:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -142,6 +142,77 @@ describe("MaterialAccountingSpoolMountStore", () => {
     const store = normalizeStoredMaterialAccountingSpoolMountStore({
       spoolMounts: [mount],
       events: [],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "missing-creation-operation-event",
+        record: mount,
+      }),
+    ]));
+  });
+
+  it("operator-mountのevent operationIdがmountOperationIdと異なる場合はcreation evidenceにしない", () => {
+    const mount = createMount();
+    const mismatchedOperationId = "mount-op:other";
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [
+        createEvent({
+          eventId: "event:mismatched-operation",
+          operationId: mismatchedOperationId,
+          recordRefs: [mount.mountId],
+          payload: {
+            kind: "operator-mount",
+            operatorActionId: "action:mount:1",
+            operationId: mismatchedOperationId,
+            materialSourceId: mount.materialSourceId,
+            spoolId: mount.spoolId,
+          },
+        }),
+      ],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "missing-creation-operation-event",
+        record: mount,
+      }),
+    ]));
+  });
+
+  it("operator-replaceのeventがnew mountIdだけを参照する場合はcreation evidenceにしない", () => {
+    const mount = createMount({
+      mountId: "mount:replace:new",
+      materialSourceId: "material-source:k2:1b",
+      spoolId: "spool:replacement",
+      mountOperationId: "mount-op:replace-open:new",
+    });
+    const payload = {
+      kind: "operator-replace",
+      operatorActionId: "action:replace:1",
+      operationId: "mount-op:replace:parent",
+      materialSourceId: mount.materialSourceId,
+      spoolId: "spool:old",
+      newSpoolId: mount.spoolId,
+    };
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [{
+        eventId: "event:replace:parent",
+        kind: "operator-replace",
+        operatorActionId: payload.operatorActionId,
+        operationId: payload.operationId,
+        payloadDigest: createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+        payload,
+        recordRefs: [mount.mountId],
+        createdAt: "2026-09-01T00:00:00.000Z",
+        actor: "operator",
+      }],
     });
 
     expect(store.spoolMounts).toEqual([]);

@@ -21,7 +21,7 @@
  *
  * @version 1.390.1624 (PR #440)
  * @since   1.390.1575 (PR #440)
- * @lastModified 2026-09-02 06:58:30
+ * @lastModified 2026-09-02 08:28:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
@@ -671,6 +671,11 @@ function normalizeOperationEvents(candidates, mounts) {
  * 【詳細説明】
  * - restart後のoperation idempotencyはdurable eventsから再構築するため、
  *   mountだけが残り作成eventが無い状態をactive authorityへ戻さない。
+ * - `operator-mount`はmountを作成したoperationそのものがeventとして残るため、
+ *   event.operationIdとmount.mountOperationIdの一致を必須にする。
+ * - `operator-replace`はclose+openを1つの親operation eventで保存するため、
+ *   new mountのrecord IDとmountOperationIdの両方がrecordRefsに含まれる場合だけ
+ *   作成receiptとして扱う。
  * - `operator-mount`はpayload.spoolId、`operator-replace`はpayload.newSpoolIdを
  *   作成されたmountのspool evidenceとして照合する。
  *
@@ -689,9 +694,16 @@ function isCreationEventForMount(event, mount) {
   const recordRefs = Array.isArray(event.recordRefs)
     ? event.recordRefs.map((ref) => toTrimmedString(ref)).filter(Boolean)
     : [];
-  const referencesMount =
-    recordRefs.includes(toTrimmedString(mount.mountId)) ||
-    recordRefs.includes(toTrimmedString(mount.mountOperationId));
+  const mountId = toTrimmedString(mount.mountId);
+  const mountOperationId = toTrimmedString(mount.mountOperationId);
+
+  if (kind === "operator-mount" && toTrimmedString(event.operationId) !== mountOperationId) {
+    return false;
+  }
+
+  const referencesMount = kind === "operator-replace"
+    ? recordRefs.includes(mountId) && recordRefs.includes(mountOperationId)
+    : recordRefs.includes(mountId) || recordRefs.includes(mountOperationId);
   if (!referencesMount) {
     return false;
   }

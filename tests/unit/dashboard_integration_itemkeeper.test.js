@@ -10,7 +10,7 @@
  *
  * @version 1.390.1624 (PR #440)
  * @since 1.390.0 (Initial)
- * @lastModified 2026-09-02 07:23:40
+ * @lastModified 2026-09-02 08:28:00
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
@@ -79,7 +79,24 @@ vi.doMock("../../3dp_lib/dashboard_printmanager.js", () => ({
   getFileList: (host) => mockFiles[host] || []
 }));
 
-const { ItemKeeperIntegration } = await import("../../3dp_lib/dashboard_integration_itemkeeper.js");
+const {
+  ItemKeeperIntegration,
+  clearItemKeeperSourceUsageProjectionCertificationsForTest,
+  registerItemKeeperSourceUsageProjectionCertification,
+} = await import("../../3dp_lib/dashboard_integration_itemkeeper.js");
+
+/**
+ * テスト用JobMaterialSegmentへmodule-owned ItemKeeper projection証跡を付与する。
+ *
+ * @function certifyItemKeeperSegment
+ * @param {Object} segment - source-aware projection候補。
+ * @returns {Object} 認証証跡を付与したsegment。
+ */
+function certifyItemKeeperSegment(segment) {
+  const certified = { ...segment };
+  certified.itemKeeperProjection = registerItemKeeperSourceUsageProjectionCertification(certified);
+  return certified;
+}
 
 /** 設定済みインスタンスを生成 */
 function newIK(settings = {}) {
@@ -108,6 +125,7 @@ function job(o) {
 }
 
 beforeEach(() => {
+  clearItemKeeperSourceUsageProjectionCertificationsForTest();
   mockMonitorData.machines = {};
   mockMonitorData.appSettings = { connectionTargets: [], itemkeeper: {} };
   mockMonitorData.materialAccountingPrintBindingStore = {
@@ -122,6 +140,10 @@ beforeEach(() => {
     retainedUnsupportedEntries: [],
     invariants: {}
   };
+});
+
+afterEach(() => {
+  clearItemKeeperSourceUsageProjectionCertificationsForTest();
 });
 
 describe("normalizeEndpoint", () => {
@@ -204,7 +226,7 @@ describe("buildFilaments", () => {
   });
   it("K2/CFSのsource別print binding segmentをItemKeeper filamentsへ投影する", () => {
     mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(
-      {
+      certifyItemKeeperSegment({
         segmentId: "seg:t1b",
         printJobId: "8",
         deviceId: "serial:k2-a",
@@ -216,10 +238,9 @@ describe("buildFilaments", () => {
         usageState: "observed-used",
         confidence: "high",
         debit: { status: "eligible", canDebit: true, reasons: [] },
-        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 1
-      },
-      {
+      }),
+      certifyItemKeeperSegment({
         segmentId: "seg:t1a",
         printJobId: "8",
         deviceId: "serial:k2-a",
@@ -231,9 +252,8 @@ describe("buildFilaments", () => {
         usageState: "observed-used",
         confidence: "high",
         debit: { status: "eligible", canDebit: true, reasons: [] },
-        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 0
-      }
+      })
     );
 
     const fil = ik.buildFilaments(
@@ -263,7 +283,7 @@ describe("buildFilaments", () => {
       printStore: { history: [job({ id: 88, materialUsedMm: 6543, filamentInfo: [] })] }
     };
     mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(
-      {
+      certifyItemKeeperSegment({
         segmentId: "seg:a",
         printJobId: "88",
         printPlanId: "plan:a",
@@ -276,10 +296,9 @@ describe("buildFilaments", () => {
         usageState: "observed-used",
         confidence: "high",
         debit: { status: "eligible", canDebit: true, reasons: [] },
-        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 0
-      },
-      {
+      }),
+      certifyItemKeeperSegment({
         segmentId: "seg:b",
         printJobId: "88",
         printPlanId: "plan:b",
@@ -292,9 +311,8 @@ describe("buildFilaments", () => {
         usageState: "observed-used",
         confidence: "high",
         debit: { status: "eligible", canDebit: true, reasons: [] },
-        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 0
-      }
+      })
     );
 
     const snap = ik.buildSnapshot("print.finished", "k2-a");
@@ -383,9 +401,88 @@ describe("buildFilaments", () => {
 
     expect(fil).toEqual([]);
   });
+  it("import由来のplain certified segmentはItemKeeperへsource別投影しない", () => {
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push({
+      segmentId: "seg:plain-certified",
+      printJobId: "93",
+      printPlanId: "plan:plain-certified",
+      deviceId: "serial:k2-a",
+      spoolId: "s2",
+      mountId: "mount:plain-certified",
+      materialSourceId: "source:plain-certified",
+      protocolToolAlias: "T1B",
+      usedLengthMm: 6543,
+      usageState: "observed-used",
+      confidence: "high",
+      debit: { status: "eligible", canDebit: true, reasons: [] },
+      itemKeeperProjection: { status: "certified", evidence: "imported-json" },
+      order: 0
+    });
+
+    const fil = ik.buildFilaments(
+      job({ id: 93, materialUsedMm: 6543, filamentInfo: [] }),
+      { deviceId: "serial:k2-a" }
+    );
+
+    expect(fil).toEqual([]);
+  });
+  it("module-owned registryで認証されたsegmentだけItemKeeperへsource別投影する", () => {
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(certifyItemKeeperSegment({
+      segmentId: "seg:registered",
+      printJobId: "94",
+      printPlanId: "plan:registered",
+      deviceId: "serial:k2-a",
+      spoolId: "s2",
+      mountId: "mount:registered",
+      materialSourceId: "source:registered",
+      protocolToolAlias: "T1B",
+      usedLengthMm: 6543,
+      usageState: "observed-used",
+      confidence: "high",
+      debit: { status: "eligible", canDebit: true, reasons: [] },
+      order: 0
+    }));
+
+    const fil = ik.buildFilaments(
+      job({ id: 94, materialUsedMm: 6543, filamentInfo: [] }),
+      { deviceId: "serial:k2-a" }
+    );
+
+    expect(fil.map(f => [f.spoolId, f.usedMm, f.materialSourceId])).toEqual([
+      ["s2", 6543, "source:registered"]
+    ]);
+  });
+  it("認証後にsource-aware segmentの使用量が改変された場合はItemKeeperへsource別投影しない", () => {
+    const certifiedSegment = certifyItemKeeperSegment({
+      segmentId: "seg:tampered",
+      printJobId: "95",
+      printPlanId: "plan:tampered",
+      deviceId: "serial:k2-a",
+      spoolId: "s2",
+      mountId: "mount:tampered",
+      materialSourceId: "source:tampered",
+      protocolToolAlias: "T1B",
+      usedLengthMm: 6543,
+      usageState: "observed-used",
+      confidence: "high",
+      debit: { status: "eligible", canDebit: true, reasons: [] },
+      order: 0
+    });
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push({
+      ...certifiedSegment,
+      usedLengthMm: 1234,
+    });
+
+    const fil = ik.buildFilaments(
+      job({ id: 95, materialUsedMm: 1234, filamentInfo: [] }),
+      { deviceId: "serial:k2-a" }
+    );
+
+    expect(fil).toEqual([]);
+  });
   it("eligible print binding segmentはlegacy filamentInfoより優先してItemKeeperへ投影する", () => {
     mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(
-      {
+      certifyItemKeeperSegment({
         segmentId: "seg:universal-a",
         printJobId: "91",
         printPlanId: "plan:universal",
@@ -398,10 +495,9 @@ describe("buildFilaments", () => {
         usageState: "observed-used",
         confidence: "high",
         debit: { status: "eligible", canDebit: true, reasons: [] },
-        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 0
-      },
-      {
+      }),
+      certifyItemKeeperSegment({
         segmentId: "seg:universal-b",
         printJobId: "91",
         printPlanId: "plan:universal",
@@ -414,9 +510,8 @@ describe("buildFilaments", () => {
         usageState: "observed-used",
         confidence: "high",
         debit: { status: "eligible", canDebit: true, reasons: [] },
-        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 1
-      }
+      })
     );
 
     const fil = ik.buildFilaments(

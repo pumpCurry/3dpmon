@@ -16,7 +16,7 @@
  *
  * @version 1.390.1624 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 07:23:40
+ * @lastModified 2026-09-02 08:28:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -31,6 +31,62 @@ import {
   parseArgs,
   runMaterialAccountingExportAnalyzer,
 } from "../../scripts/analyze_material_accounting_export.mjs";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "../../3dp_lib/printer_core/dashboard_data_schema_v3.js";
+
+/**
+ * ItemKeeper source-aware projectionのmodule-owned認証authority名。
+ *
+ * @constant {string}
+ */
+const ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY = "module-owned-live-certification-registry";
+
+/**
+ * analyzer fixture用のItemKeeper projection digestを生成する。
+ *
+ * @function createItemKeeperProjectionDigest
+ * @param {Object} segment - JobMaterialSegment fixture。
+ * @returns {string} projection digest。
+ */
+function createItemKeeperProjectionDigest(segment) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId(
+    "itemkeeper-source-usage-projection-certification",
+    [stableStringifyPrinterCoreV3Value({
+      segmentId: String(segment?.segmentId || "").trim(),
+      printJobId: String(segment?.printJobId || segment?.jobId || segment?.printId || segment?.id || "").trim(),
+      printPlanId: String(segment?.printPlanId || "").trim(),
+      deviceId: String(segment?.deviceId || "").trim(),
+      spoolId: String(segment?.spoolId || "").trim(),
+      mountId: String(segment?.mountId || "").trim(),
+      materialSourceId: String(segment?.materialSourceId || "").trim(),
+      protocolToolAlias: String(segment?.protocolToolAlias || "").trim(),
+      usedLengthMm: Number(segment?.usedLengthMm),
+      usageState: String(segment?.usageState || "").trim(),
+      confidence: String(segment?.confidence || "").trim(),
+      order: Number.isFinite(Number(segment?.order)) ? Number(segment.order) : 0,
+      debitStatus: String(segment?.debit?.status || "").trim(),
+    })]
+  )}`;
+}
+
+/**
+ * analyzer fixture用JobMaterialSegmentへItemKeeper projection証跡を付与する。
+ *
+ * @function certifyItemKeeperProjectionSegment
+ * @param {Object} segment - JobMaterialSegment fixture。
+ * @returns {Object} 認証証跡つきsegment。
+ */
+function certifyItemKeeperProjectionSegment(segment) {
+  const certified = { ...segment };
+  certified.itemKeeperProjection = {
+    status: "certified",
+    authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,
+    digest: createItemKeeperProjectionDigest(certified),
+  };
+  return certified;
+}
 
 /**
  * K2/CFSを含む最小export payloadを生成する。
@@ -90,7 +146,7 @@ function createExportPayload(options = {}) {
       : [],
     jobMaterialSegments: options.includeSegments
       ? [
-          {
+          certifyItemKeeperProjectionSegment({
             segmentId: "seg:t1a",
             deviceId: "serial:k2",
             printJobId: "job:1",
@@ -102,10 +158,9 @@ function createExportPayload(options = {}) {
             usageState: "observed-used",
             confidence: "high",
             debit: { status: "eligible", canDebit: true, reasons: [] },
-            itemKeeperProjection: { status: "certified", evidence: "unit-test" },
             order: 0,
-          },
-          {
+          }),
+          certifyItemKeeperProjectionSegment({
             segmentId: "seg:t1b",
             deviceId: "serial:k2",
             printJobId: "job:1",
@@ -117,9 +172,8 @@ function createExportPayload(options = {}) {
             usageState: "observed-used",
             confidence: "high",
             debit: { status: "eligible", canDebit: true, reasons: [] },
-            itemKeeperProjection: { status: "certified", evidence: "unit-test" },
             order: 1,
-          },
+          }),
         ]
       : [],
     unattributedUsage: [],
@@ -296,7 +350,7 @@ describe("analyze_material_accounting_export", () => {
         aliases: ["source:k2:cfs:1a", "T1A"],
       },
     };
-    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = {
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = certifyItemKeeperProjectionSegment({
       ...payload.materialAccountingPrintBindingStore.jobMaterialSegments[0],
       materialSourceId: "material-source:k2:f012:cfs:1:0",
       sourceId: "cfs:1:slot:0",
@@ -306,7 +360,7 @@ describe("analyze_material_accounting_export", () => {
         sourceId: "cfs:1:slot:0",
         aliases: ["source:k2:cfs:1a", "T1A"],
       },
-    };
+    });
     payload.appSettings.connectionTargets.push({
       dest: "192.168.54.154:9999",
       hostname: "K2Pro-Other",
@@ -418,13 +472,12 @@ describe("analyze_material_accounting_export", () => {
       includeMountStore: true,
       includeSegments: true,
     });
-    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = {
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = certifyItemKeeperProjectionSegment({
       ...payload.materialAccountingPrintBindingStore.jobMaterialSegments[0],
       usageState: "confirmed-unused",
       usedLengthMm: 0,
       debit: { status: "eligible", canDebit: false, reasons: [] },
-      itemKeeperProjection: { status: "certified", evidence: "unit-test" },
-    };
+    });
 
     const report = analyzeMaterialAccountingExport(payload);
     const sourceSummary = report.devices[0].sources.find((entry) => entry.displayLabel === "1A");
@@ -505,6 +558,26 @@ describe("analyze_material_accounting_export", () => {
     const sourceSummary = report.devices[0].sources.find((entry) => entry.displayLabel === "1A");
 
     expect(sourceSummary).toMatchObject({
+      itemKeeperEligibleUsageCount: 0,
+      itemKeeperEligibleUsedLengthMm: 0,
+    });
+  });
+
+  it("plain certifiedだけのJobMaterialSegmentはItemKeeper projection readyとして扱わない", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: true,
+    });
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = {
+      ...payload.materialAccountingPrintBindingStore.jobMaterialSegments[0],
+      itemKeeperProjection: { status: "certified", evidence: "imported-json" },
+    };
+
+    const report = analyzeMaterialAccountingExport(payload);
+    const sourceSummary = report.devices[0].sources.find((entry) => entry.displayLabel === "1A");
+
+    expect(sourceSummary).toMatchObject({
+      sourceSpecificUsageCount: 1,
       itemKeeperEligibleUsageCount: 0,
       itemKeeperEligibleUsedLengthMm: 0,
     });

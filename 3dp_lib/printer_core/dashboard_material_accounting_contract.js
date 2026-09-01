@@ -34,9 +34,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1595 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-09-01 19:17:01
+ * @lastModified 2026-09-02 07:45:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -1960,6 +1960,9 @@ export function evaluateMaterialDebitEligibility(input = {}) {
   }
   if (continuity.sourceContinuity === false) {
     pending.push("source-continuity-required");
+  }
+  if (continuity?.eventCoverage?.ok === false && toTrimmedString(continuity.eventCoverage.reason)) {
+    pending.push(toTrimmedString(continuity.eventCoverage.reason));
   }
 
   const identityStrengthValues = enumValues(MATERIAL_IDENTITY_STRENGTH);
