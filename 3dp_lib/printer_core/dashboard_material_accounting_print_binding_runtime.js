@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start binding runtimeを生成
  *
- * @version 1.390.1590 (PR #440)
+ * @version 1.390.1592 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 18:41:23
+ * @lastModified 2026-09-01 18:47:47
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でcompletion usage observation runtimeを接続する
@@ -101,17 +101,28 @@ function normalizeObservedTime(value) {
  * 【詳細説明】
  * - job IDだけではprint-start時刻がcaller suppliedになってしまうため、機器状態に付随する
  *   `startTime` / `startedAt` / `firstObservedAt` / `printStartTime`も同時に保持する。
+ * - `runtimeData.printerCoreV3Shadow`にあるdevice/session観測を同じrecordへ束縛し、別機器の現在ジョブを
+ *   PrintPlanの開始証跡として流用しない。
  * - 同じIDが複数経路から見える場合は、最初に得られた時刻を採用する。
  *
  * @private
  * @function collectCurrentPrintJobObservationsFromMachine
  * @param {Object|null|undefined} machine - MachineData候補。
- * @returns {Array<{printJobId:string,firstObservedAt:string|null}>} 現在ジョブ観測候補。
+ * @returns {Array<{printJobId:string,firstObservedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null}>} 現在ジョブ観測候補。
  */
 function collectCurrentPrintJobObservationsFromMachine(machine) {
   const observationsById = new Map();
   const current = machine?.printStore?.current || {};
   const storedPrintStartTime = readStoredDatumValue(machine?.storedData?.printStartTime);
+  const shadowRecord = machine?.runtimeData?.printerCoreV3Shadow || {};
+  const deviceId = toTrimmedString(shadowRecord.deviceId || shadowRecord.printerCoreV3ShadowDeviceId);
+  const sessionId = toTrimmedString(shadowRecord.sessionId || shadowRecord.printerCoreV3ShadowSessionId);
+  const connectionGenerationCandidate = Number(
+    shadowRecord.connectionGeneration || shadowRecord.printerCoreV3ConnectionGeneration
+  );
+  const connectionGeneration = Number.isFinite(connectionGenerationCandidate) && connectionGenerationCandidate > 0
+    ? connectionGenerationCandidate
+    : null;
   const candidates = [
     {
       id: current.id,
@@ -142,6 +153,9 @@ function collectCurrentPrintJobObservationsFromMachine(machine) {
     observationsById.set(id, {
       printJobId: id,
       firstObservedAt: normalizeObservedTime(candidate.observedAt),
+      deviceId,
+      sessionId,
+      connectionGeneration,
     });
   }
   return Array.from(observationsById.values());
@@ -248,62 +262,107 @@ function getCachedFirstObservedAt(cache, printPlan, printJobId, observedAt) {
  * @function resolveObservedPrintJob
  * @param {Object} data - monitorData互換データ。
  * @param {Object} request - runtime request。
- * @returns {{ok:boolean,printJobId:string,firstObservedAt:string|null,reasons:string[],observedPrintJobIds:string[]}} 解決結果。
+ * @returns {{ok:boolean,printJobId:string,firstObservedAt:string|null,deviceId:string,sessionId:string,connectionGeneration:number|null,reasons:string[],observedPrintJobIds:string[]}} 解決結果。
  */
 function resolveObservedPrintJob(data, request) {
   const requestedPrintJobId = toTrimmedString(request.printJobId || request.observedPrintJobId);
   const hostname = toTrimmedString(request.hostname || request.host);
+  const expectedDeviceId = toTrimmedString(request.printPlan?.deviceId || request.deviceId);
+  const expectedSessionId = toTrimmedString(request.sessionId || request.expectedSessionId);
+  const expectedConnectionGeneration = Number(request.connectionGeneration || request.expectedConnectionGeneration || 0);
   const machines = data?.machines && typeof data.machines === "object" ? data.machines : {};
   const machineEntries = hostname
     ? [[hostname, machines[hostname]]]
     : Object.entries(machines);
-  const observationsById = new Map();
+  const observations = [];
   for (const [, machine] of machineEntries) {
     for (const observation of collectCurrentPrintJobObservationsFromMachine(machine)) {
-      if (!observationsById.has(observation.printJobId)) {
-        observationsById.set(observation.printJobId, observation);
-      }
+      observations.push(observation);
     }
   }
-  const observedIds = Array.from(observationsById.keys());
-  if (requestedPrintJobId) {
-    const observation = observationsById.get(requestedPrintJobId);
-    if (observation) {
-      return {
-        ok: true,
-        printJobId: requestedPrintJobId,
-        firstObservedAt: observation.firstObservedAt,
-        reasons: [],
-        observedPrintJobIds: observedIds,
-      };
+  const observedIds = [...new Set(observations.map((observation) => observation.printJobId))];
+  const validateObservation = (observation) => {
+    if (!observation.deviceId) {
+      return "observed-print-device-required";
     }
+    if (expectedDeviceId && observation.deviceId !== expectedDeviceId) {
+      return "observed-print-device-mismatch";
+    }
+    if (!observation.sessionId) {
+      return "observed-print-session-required";
+    }
+    if (expectedSessionId && observation.sessionId !== expectedSessionId) {
+      return "observed-print-session-mismatch";
+    }
+    if (expectedConnectionGeneration > 0) {
+      if (observation.connectionGeneration === null) {
+        return "observed-print-connection-generation-required";
+      }
+      if (observation.connectionGeneration !== expectedConnectionGeneration) {
+        return "observed-print-connection-generation-mismatch";
+      }
+    }
+    return null;
+  };
+  const createOkResolution = (observation) => ({
+    ok: true,
+    printJobId: observation.printJobId,
+    firstObservedAt: observation.firstObservedAt,
+    deviceId: observation.deviceId,
+    sessionId: observation.sessionId,
+    connectionGeneration: observation.connectionGeneration,
+    reasons: [],
+    observedPrintJobIds: observedIds,
+  });
+  if (requestedPrintJobId) {
+    const matchingObservations = observations.filter((observation) => observation.printJobId === requestedPrintJobId);
+    for (const observation of matchingObservations) {
+      const rejectionReason = validateObservation(observation);
+      if (!rejectionReason) {
+        return createOkResolution(observation);
+      }
+    }
+    const rejectionReasons = matchingObservations
+      .map((observation) => validateObservation(observation))
+      .filter(Boolean);
     return {
       ok: false,
       printJobId: "",
       firstObservedAt: null,
+      deviceId: "",
+      sessionId: "",
+      connectionGeneration: null,
       reasons: observedIds.length > 0
-        ? ["observed-print-job-id-mismatch"]
+        ? (rejectionReasons.length > 0 ? [...new Set(rejectionReasons)] : ["observed-print-job-id-mismatch"])
         : ["observed-print-job-id-required"],
       observedPrintJobIds: observedIds,
     };
   }
-  if (observedIds.length === 1) {
-    const observation = observationsById.get(observedIds[0]);
-    return {
-      ok: true,
-      printJobId: observedIds[0],
-      firstObservedAt: observation.firstObservedAt,
-      reasons: [],
-      observedPrintJobIds: observedIds,
-    };
+  const validObservations = [];
+  const rejectionReasons = [];
+  for (const observation of observations) {
+    const rejectionReason = validateObservation(observation);
+    if (rejectionReason) {
+      rejectionReasons.push(rejectionReason);
+      continue;
+    }
+    validObservations.push(observation);
+  }
+  const uniqueValidIds = [...new Set(validObservations.map((observation) => observation.printJobId))];
+  if (uniqueValidIds.length === 1) {
+    const observation = validObservations.find((entry) => entry.printJobId === uniqueValidIds[0]);
+    return createOkResolution(observation);
   }
   return {
     ok: false,
     printJobId: "",
     firstObservedAt: null,
-    reasons: observedIds.length > 1
+    deviceId: "",
+    sessionId: "",
+    connectionGeneration: null,
+    reasons: uniqueValidIds.length > 1
       ? ["observed-print-job-id-ambiguous"]
-      : ["observed-print-job-id-required"],
+      : (rejectionReasons.length > 0 ? [...new Set(rejectionReasons)] : ["observed-print-job-id-required"]),
     observedPrintJobIds: observedIds,
   };
 }
@@ -446,8 +505,7 @@ async function persistPrintBindingStoreWithUnifiedStorage(input = {}) {
  * @returns {boolean} 成功扱いできる場合true。
  */
 function isPersistOk(result) {
-  return result === undefined || result === null || result === true ||
-    (typeof result === "object" && result.ok !== false);
+  return Boolean(result && typeof result === "object" && result.ok === true && result.casApplied === true);
 }
 
 /**
@@ -541,6 +599,9 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
         printJobId,
         capturedAt,
         bindingOperationId,
+        observedDeviceId: printJobResolution.deviceId,
+        observedSessionId: printJobResolution.sessionId,
+        observedConnectionGeneration: printJobResolution.connectionGeneration,
       },
     });
     if (!isPersistOk(persistResult)) {

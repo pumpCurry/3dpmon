@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1590 (PR #440)
+ * @version 1.390.1592 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 18:41:23
+ * @lastModified 2026-09-01 18:47:47
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -159,12 +159,20 @@ function createRuntimeData() {
  * @param {Object} data - runtime data。
  * @param {Object=} options - 観測値オプション。
  * @param {string=} options.hostname - 対象ホスト名。
+ * @param {string=} options.deviceId - Printer Core v3 device ID。
+ * @param {string=} options.sessionId - Printer Core v3 live shadow session ID。
+ * @param {number=} options.connectionGeneration - WebSocket接続世代。
  * @param {string=} options.printJobId - 実機で観測したPrintJob ID。
  * @param {string|null=} options.firstObservedAt - 実機で観測した印刷開始時刻。
  * @returns {string} 設定したホスト名。
  */
 function attachObservedPrintJob(data, options = {}) {
   const hostname = options.hostname || "K2Pro-69E7";
+  const deviceId = options.deviceId || "serial:k2";
+  const sessionId = options.sessionId || "session:k2-live";
+  const connectionGeneration = options.connectionGeneration === null
+    ? null
+    : (options.connectionGeneration || 7);
   const printJobId = options.printJobId || "job:actual-1001";
   const firstObservedAt = options.firstObservedAt === null
     ? null
@@ -182,7 +190,14 @@ function attachObservedPrintJob(data, options = {}) {
           : { id: printJobId },
         history: [],
       },
-      runtimeData: {},
+      runtimeData: {
+        printerCoreV3Shadow: {
+          deviceId,
+          sessionId,
+          ...(connectionGeneration === null ? {} : { connectionGeneration }),
+          family: "k2",
+        },
+      },
     },
   };
   return hostname;
@@ -294,7 +309,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     const hostname = attachObservedPrintJob(data);
     const persist = vi.fn(async ({ nextStore }) => {
       data.materialAccountingPrintBindingStore = nextStore;
-      return { ok: true, persisted: true, backend: "test" };
+      return { ok: true, casApplied: true, persisted: true, backend: "test" };
     });
     const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
 
@@ -330,7 +345,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     });
     const persist = vi.fn(async ({ nextStore }) => {
       data.materialAccountingPrintBindingStore = nextStore;
-      return { ok: true, persisted: true, backend: "test" };
+      return { ok: true, casApplied: true, persisted: true, backend: "test" };
     });
     const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
 
@@ -456,6 +471,96 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     expect(result.ok).toBe(false);
     expect(result.reasons).toContain("print-binding-persist-failed");
     expect(data.materialAccountingPrintBindingStore).toBe(before);
+  });
+
+  it("custom persistがcasAppliedを返さない場合はruntime storeを更新しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:loose-persist" });
+    const before = data.materialAccountingPrintBindingStore;
+    const runtime = createMaterialAccountingPrintBindingRuntime({
+      data,
+      persist: vi.fn(async () => ({ ok: true, persisted: true, backend: "test" })),
+    });
+
+    const result = await runtime.recordObservedPrintStart({
+      printPlan: createPlan(data),
+      hostname,
+      printJobId: "job:loose-persist",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("print-binding-persist-failed");
+    expect(data.materialAccountingPrintBindingStore).toBe(before);
+  });
+
+  it("別deviceの現在ジョブ観測だけではPrintPlanのsnapshotを保存しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:wrong-device",
+      deviceId: "serial:k2-other",
+      sessionId: "session:k2-other",
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({
+      data,
+      persist: vi.fn(),
+    });
+
+    const result = await runtime.recordObservedPrintStart({
+      printPlan: createPlan(data),
+      hostname,
+      printJobId: "job:wrong-device",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("observed-print-device-mismatch");
+    expect(data.materialAccountingPrintBindingStore.printStartSnapshots).toEqual([]);
+  });
+
+  it("現在sessionが観測できないPrintJobはtrusted snapshotへ昇格しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:missing-session" });
+    delete data.machines[hostname].runtimeData.printerCoreV3Shadow.sessionId;
+    const runtime = createMaterialAccountingPrintBindingRuntime({
+      data,
+      persist: vi.fn(),
+    });
+
+    const result = await runtime.recordObservedPrintStart({
+      printPlan: createPlan(data),
+      hostname,
+      printJobId: "job:missing-session",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("observed-print-session-required");
+    expect(data.materialAccountingPrintBindingStore.printStartSnapshots).toEqual([]);
+  });
+
+  it("要求時のconnectionGenerationを観測側で確認できないPrintJobは保存しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:missing-generation",
+      connectionGeneration: null,
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({
+      data,
+      persist: vi.fn(),
+    });
+
+    const result = await runtime.recordObservedPrintStart({
+      printPlan: createPlan(data),
+      hostname,
+      printJobId: "job:missing-generation",
+      connectionGeneration: 7,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("observed-print-connection-generation-required");
+    expect(data.materialAccountingPrintBindingStore.printStartSnapshots).toEqual([]);
   });
 
   it("caller自己申告だけのprintJobIdは実機観測済みjobと一致しなければsnapshotを保存しない", async () => {

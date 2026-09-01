@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1589 (PR #440)
+ * @version 1.390.1592 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 18:15:11
+ * @lastModified 2026-09-01 18:47:47
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -237,6 +237,7 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("hostObservationWatermark", mocks.monitorData.hostObservationWatermark);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialSourceObservations", mocks.monitorData.materialSourceObservations);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialAccountingMigrationJournal", mocks.monitorData.materialAccountingMigrationJournal);
+    expect(mocks.queueSharedWrite).not.toHaveBeenCalledWith("materialAccountingPrintBindingStore", mocks.monitorData.materialAccountingPrintBindingStore);
     expect(mocks.queueSharedWrite).not.toHaveBeenCalledWith("materialAccountingSpoolMountStore", mocks.monitorData.materialAccountingSpoolMountStore);
     expect(mocks.events.indexOf("queue:inferredCandidateStore")).toBeGreaterThanOrEqual(0);
     expect(mocks.events[mocks.events.length - 1]).toBe("flush");
@@ -516,6 +517,84 @@ describe("saveUnifiedStorageDurably", () => {
       reason: "production-cas-unavailable",
     });
     expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("PrintBinding importはCAS成功前にruntime storeへ反映しない", async () => {
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+    const incomingStore = normalizeStoredMaterialAccountingPrintBindingStore({
+      unattributedUsage: [
+        {
+          printJobId: "job:import",
+          printPlanId: "plan:import",
+          deviceId: "device:k2",
+          usedLengthMm: 321,
+          reason: "unit-test",
+        },
+      ],
+    });
+    mocks.monitorData.materialAccountingPrintBindingStore = baseStore;
+    mocks.compareAndSwapSharedValue.mockImplementationOnce(async ({ key, expectedDigest, nextValue }) => {
+      expect(key).toBe("materialAccountingPrintBindingStore");
+      expect(expectedDigest).toBe(createMaterialAccountingPrintBindingStoreDigest(baseStore));
+      expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(baseStore);
+      expect(nextValue.unattributedUsage).toHaveLength(1);
+      return {
+        ok: true,
+        casApplied: true,
+        backend: "indexedDB",
+        key,
+        reason: "cas-applied",
+        currentDigest: expectedDigest,
+        nextDigest: createMaterialAccountingPrintBindingStoreDigest(nextValue),
+      };
+    });
+
+    await importAllData({
+      materialAccountingPrintBindingStore: incomingStore,
+    });
+
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingPrintBindingStore",
+      expectedDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+    }));
+    expect(mocks.monitorData.materialAccountingPrintBindingStore.unattributedUsage).toEqual([
+      expect.objectContaining({ printJobId: "job:import", usedLengthMm: 321 }),
+    ]);
+  });
+
+  it("PrintBinding importのCAS不一致時はruntime storeを更新しない", async () => {
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+    const incomingStore = normalizeStoredMaterialAccountingPrintBindingStore({
+      unattributedUsage: [
+        {
+          printJobId: "job:import-mismatch",
+          printPlanId: "plan:import-mismatch",
+          deviceId: "device:k2",
+          usedLengthMm: 654,
+          reason: "unit-test",
+        },
+      ],
+    });
+    mocks.monitorData.materialAccountingPrintBindingStore = baseStore;
+    mocks.compareAndSwapSharedValue.mockResolvedValueOnce({
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingPrintBindingStore",
+      reason: "cas-mismatch",
+      currentDigest: "digest:other",
+      nextDigest: createMaterialAccountingPrintBindingStoreDigest(incomingStore),
+    });
+
+    await importAllData({
+      materialAccountingPrintBindingStore: incomingStore,
+    });
+
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingPrintBindingStore",
+      expectedDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+    }));
+    expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(baseStore);
   });
 
   it("SpoolMount production commitはmount/replace operationのprecondition欠落を拒否する", async () => {

@@ -361,8 +361,11 @@ Gate 18.9I-1:
 - runtime print-start から PrintPlan + production SpoolMount snapshot を保存する。
   caller が渡した `printJobId` は自己申告として扱い、対象 `hostname` の
   `monitorData.machines[hostname]` に現在観測されている `printStore.current.id`
-  または `storedData.printId` と一致する場合だけ採用する。実機観測済み
-  `printJobId` が無い場合、または一致しない場合は保存しない。
+  または `storedData.printId` と一致する場合だけ採用する。さらに対象machineの
+  `runtimeData.printerCoreV3Shadow.deviceId/sessionId` を同じ観測へ束縛し、
+  送信側がconnection generationを束縛した場合は観測側にも同じgenerationを要求する。
+  PrintPlan deviceと異なるcurrent job、またはsession不明のcurrent jobはtrusted
+  print-startへ昇格しない。実機観測済み `printJobId` が無い場合、または一致しない場合も保存しない。
 - `capturedAt` はcaller supplied値をauthorityとして使わず、既存snapshotまたは
   現在機器観測のstart timeから解決する。開始時刻が無い観測では保存しない。
 - binding operation ID は `deviceId + printPlanId + printJobId` で安定化し、
@@ -372,7 +375,12 @@ Gate 18.9I-1:
 - print-start時点で現在 `OPEN` なsource別SpoolMountが揃わない場合もblockedにする。
 - `materialAccountingPrintBindingStore` は通常flush queue投入だけでは成功扱いにせず、
   `commitMaterialAccountingPrintBindingStoreDurably()` のIndexedDB CASが
-  `casApplied:true` を返した後だけruntime storeへ反映する。
+  `casApplied:true` を返した後だけruntime storeへ反映する。custom persistも
+  `{ok:true, casApplied:true}` を返す場合だけ成功扱いにする。
+- `materialAccountingPrintBindingStore` はIndexedDB通常flush queueのCAS protected keyとして扱い、
+  import時はbase/current storeとincoming storeをsemantic ID単位でmerge/quarantineした候補を
+  IndexedDB CASへ渡し、CAS成功後だけruntimeへ反映する。restore時も同じmerge規則を使い、
+  同一IDでpayloadが異なるrecordは勝者を作らず `retainedUnsupportedEntries` へ隔離する。
 - managed remaining、legacy `usageHistory`、ItemKeeper projection、
   completion observation はまだ接続しない。
 

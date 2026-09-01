@@ -24,9 +24,9 @@
  * - {@link importAllIdb}：単一オブジェクトから全データを書き込み
  * - {@link compareAndSwapSharedValue}：shared keyを同一transaction内でCAS更新する
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1592 (PR #440)
  * @since   1.390.787 (PR #366)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-01 18:47:47
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -138,13 +138,14 @@ const SHARED_KEYS = [
  * 通常flush queueでは保存せず、専用CASだけを成功境界にするshared key集合。
  *
  * 【詳細説明】
- * - operator-managed SpoolMount storeはproduction authorityなので、throttled saveで古いsnapshotを
- *   後から書き込むとCAS成功値を壊す危険がある。
+ * - PrintBinding storeとoperator-managed SpoolMount storeはsource-aware accounting authorityの根拠なので、
+ *   throttled saveで古いsnapshotを後から書き込むとCAS成功値を壊す危険がある。
  * - export/import対象としてはSHARED_KEYSへ残しつつ、通常queueだけを拒否する。
  *
  * @constant {ReadonlySet<string>}
  */
 const CAS_PROTECTED_SHARED_KEYS = Object.freeze(new Set([
+  "materialAccountingPrintBindingStore",
   "materialAccountingSpoolMountStore",
 ]));
 

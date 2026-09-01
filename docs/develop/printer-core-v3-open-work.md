@@ -81,8 +81,13 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   OPEN/reservation中spoolの未確定化も拒否する。
 - Gate 18.9I-1では、runtimeからprint-start binding repositoryを呼び出し、
   caller指定の `printJobId` が対象hostの現在観測済み `printStore.current.id`
-  または `storedData.printId` と一致し、print-start時点で現在 `OPEN` なsource別
-  SpoolMountが揃う場合だけ `materialAccountingPrintBindingStore` へsnapshotを保存する。
+  または `storedData.printId` と一致し、かつ対象machineの
+  `runtimeData.printerCoreV3Shadow.deviceId/sessionId` がPrintPlanのdeviceと矛盾しない場合だけ
+  print-start観測として採用する。送信側がconnection generationを束縛した場合は、
+  観測側にも同じgenerationが必要になる。PrintJob IDだけが一致しても、device/session観測が無い、
+  または別deviceの現在ジョブである場合は保存しない。
+  print-start時点で現在 `OPEN` なsource別SpoolMountが揃う場合だけ
+  `materialAccountingPrintBindingStore` へsnapshotを保存する。
   `capturedAt` はcaller supplied値をauthorityにせず、同一job/planの既存snapshot時刻、
   または現在機器観測の `printStore.current.startTime` / `firstObservedAt` /
   `storedData.printStartTime` から解決する。開始時刻が観測できない場合は保存しない。
@@ -91,8 +96,13 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   runtimeはcontract module内のtrusted print-start issuer注入済みrepositoryを使い、
   saved snapshotを後続I-2のdebit eligibility候補にできる形へ昇格する。
   snapshot保存は通常flush queueではなく専用 `commitMaterialAccountingPrintBindingStoreDurably()` の
-  IndexedDB CAS `casApplied:true` を成功境界とし、未観測/不一致job ID、CAS不一致、
-  IndexedDB未使用ではruntime storeを進めない。
+  IndexedDB CAS `casApplied:true` を成功境界とし、custom persistでも
+  `{ok:true, casApplied:true}` 以外は成功扱いにしない。未観測/不一致job ID、
+  device/session不一致、CAS不一致、IndexedDB未使用ではruntime storeを進めない。
+  `materialAccountingPrintBindingStore` はIndexedDB通常flushのCAS protected shared keyへ追加し、
+  import時もbase/currentからmerge候補を作り、CAS成功後だけruntimeへ反映する。
+  restore時のmergeはsemantic ID単位でdedupeし、同一IDのpayload conflictは
+  `retainedUnsupportedEntries` へ隔離する。
   この段階ではcompletion usage observation、managed spool残量debit、
   legacy `usageHistory`、ItemKeeper projectionへはまだ接続しない。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。

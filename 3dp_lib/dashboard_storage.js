@@ -29,9 +29,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1589 (PR #440)
+ * @version 1.390.1592 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 18:15:11
+ * @lastModified 2026-09-01 18:47:47
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -244,12 +244,194 @@ function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
   const currentStore = normalizeStoredMaterialAccountingPrintBindingStore(
     monitorData.materialAccountingPrintBindingStore
   );
-  const restoredStore = normalizeStoredMaterialAccountingPrintBindingStore(incomingStore);
   monitorData.materialAccountingPrintBindingStore =
-    (restoredStore.ledgerEvents || []).length >= (currentStore.ledgerEvents || []).length
-      ? restoredStore
-      : currentStore;
+    _createMergedMaterialAccountingPrintBindingStoreTarget(currentStore, incomingStore);
   return true;
+}
+
+/**
+ * PrintBinding storeが空かどうかを判定する。
+ *
+ * @private
+ * @function _isEmptyMaterialAccountingPrintBindingStore
+ * @param {Object} store - 正規化済みPrintBinding store。
+ * @returns {boolean} authority recordを含まない場合true。
+ */
+function _isEmptyMaterialAccountingPrintBindingStore(store) {
+  return (store.printStartSnapshots || []).length === 0 &&
+    (store.usageEvidence || []).length === 0 &&
+    (store.jobMaterialSegments || []).length === 0 &&
+    (store.ledgerEvents || []).length === 0 &&
+    (store.unattributedUsage || []).length === 0 &&
+    (store.retainedUnsupportedEntries || []).length === 0;
+}
+
+/**
+ * 2つのJSON互換recordが同一か判定する。
+ *
+ * @private
+ * @function _isSameJsonRecord
+ * @param {*} left - 比較対象。
+ * @param {*} right - 比較対象。
+ * @returns {boolean} stable JSONとして一致する場合true。
+ */
+function _isSameJsonRecord(left, right) {
+  return stableStringifyPrinterCoreV3Value(left) === stableStringifyPrinterCoreV3Value(right);
+}
+
+/**
+ * storage merge用にJSON互換値をcloneする。
+ *
+ * @private
+ * @function _cloneStorageJsonValue
+ * @param {*} value - clone対象。
+ * @returns {*} clone済み値。
+ */
+function _cloneStorageJsonValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * ID付きPrintBinding record配列を衝突隔離しながらmergeする。
+ *
+ * @private
+ * @function _mergePrintBindingRecordArrayById
+ * @param {Object[]} currentRecords - 現在record配列。
+ * @param {Object[]} incomingRecords - incoming record配列。
+ * @param {string} idKey - record ID key。
+ * @param {string} recordType - 隔離記録用record type。
+ * @param {Object[]} retainedUnsupportedEntries - 隔離entry配列。
+ * @returns {Object[]} merge済みrecord配列。
+ */
+function _mergePrintBindingRecordArrayById(currentRecords, incomingRecords, idKey, recordType, retainedUnsupportedEntries) {
+  const merged = Array.isArray(currentRecords) ? currentRecords.map((record) => _cloneStorageJsonValue(record)) : [];
+  const byId = new Map();
+  for (const record of merged) {
+    const id = String(record?.[idKey] || "").trim();
+    if (id) {
+      byId.set(id, record);
+    }
+  }
+  for (const incomingRecord of Array.isArray(incomingRecords) ? incomingRecords : []) {
+    const id = String(incomingRecord?.[idKey] || "").trim();
+    if (!id) {
+      continue;
+    }
+    const existing = byId.get(id);
+    if (!existing) {
+      const clonedRecord = _cloneStorageJsonValue(incomingRecord);
+      merged.push(clonedRecord);
+      byId.set(id, clonedRecord);
+      continue;
+    }
+    if (!_isSameJsonRecord(existing, incomingRecord)) {
+      retainedUnsupportedEntries.push({
+        recordType,
+        index: id,
+        reason: "print-binding-record-id-conflict",
+        currentDigest: createPrinterCoreV3DeterministicId("print-binding-current-record", [
+          stableStringifyPrinterCoreV3Value(existing),
+        ]),
+        incomingDigest: createPrinterCoreV3DeterministicId("print-binding-incoming-record", [
+          stableStringifyPrinterCoreV3Value(incomingRecord),
+        ]),
+        record: _cloneStorageJsonValue(incomingRecord),
+      });
+    }
+  }
+  return merged;
+}
+
+/**
+ * IDを持たない未帰属使用量recordを重複排除しながらmergeする。
+ *
+ * @private
+ * @function _mergePrintBindingUnattributedUsage
+ * @param {Object[]} currentRecords - 現在record配列。
+ * @param {Object[]} incomingRecords - incoming record配列。
+ * @returns {Object[]} merge済みrecord配列。
+ */
+function _mergePrintBindingUnattributedUsage(currentRecords, incomingRecords) {
+  const merged = Array.isArray(currentRecords) ? currentRecords.map((record) => _cloneStorageJsonValue(record)) : [];
+  const fingerprints = new Set(merged.map((record) => stableStringifyPrinterCoreV3Value(record)));
+  for (const incomingRecord of Array.isArray(incomingRecords) ? incomingRecords : []) {
+    const fingerprint = stableStringifyPrinterCoreV3Value(incomingRecord);
+    if (fingerprints.has(fingerprint)) {
+      continue;
+    }
+    fingerprints.add(fingerprint);
+    merged.push(_cloneStorageJsonValue(incomingRecord));
+  }
+  return merged;
+}
+
+/**
+ * 現在storeとincoming storeからPrintBinding import/restore後の候補storeを作成する。
+ *
+ * 【詳細説明】
+ * - empty restoreは保存済みstoreをそのまま採用する。
+ * - 既存storeとincoming storeの両方にrecordがある場合、semantic ID単位で同一recordをdedupeし、
+ *   同一IDかつ内容が異なるrecordは勝者を作らずretainedUnsupportedEntriesへ隔離する。
+ * - import時はこの候補storeをIndexedDB CASへ渡し、CAS成功後だけruntimeへ反映する。
+ *
+ * @private
+ * @function _createMergedMaterialAccountingPrintBindingStoreTarget
+ * @param {Object} currentStore - 現在の正規化済みPrintBinding store。
+ * @param {Object|null|undefined} incomingStore - import/restore候補store。
+ * @returns {Object} merge候補store。
+ */
+function _createMergedMaterialAccountingPrintBindingStoreTarget(currentStore, incomingStore) {
+  const normalizedCurrentStore = normalizeStoredMaterialAccountingPrintBindingStore(currentStore);
+  const restoredStore = normalizeStoredMaterialAccountingPrintBindingStore(incomingStore);
+  const currentDigest = createMaterialAccountingPrintBindingStoreDigest(normalizedCurrentStore);
+  const restoredDigest = createMaterialAccountingPrintBindingStoreDigest(restoredStore);
+  if (_isEmptyMaterialAccountingPrintBindingStore(normalizedCurrentStore) || currentDigest === restoredDigest) {
+    return restoredStore;
+  }
+  const retainedUnsupportedEntries = [
+    ...(normalizedCurrentStore.retainedUnsupportedEntries || []).map((entry) => _cloneStorageJsonValue(entry)),
+    ...(restoredStore.retainedUnsupportedEntries || []).map((entry) => _cloneStorageJsonValue(entry)),
+  ];
+  return normalizeStoredMaterialAccountingPrintBindingStore({
+    ...normalizedCurrentStore,
+    printStartSnapshots: _mergePrintBindingRecordArrayById(
+      normalizedCurrentStore.printStartSnapshots,
+      restoredStore.printStartSnapshots,
+      "snapshotId",
+      "printStartSnapshot",
+      retainedUnsupportedEntries,
+    ),
+    usageEvidence: _mergePrintBindingRecordArrayById(
+      normalizedCurrentStore.usageEvidence,
+      restoredStore.usageEvidence,
+      "evidenceId",
+      "usageEvidence",
+      retainedUnsupportedEntries,
+    ),
+    jobMaterialSegments: _mergePrintBindingRecordArrayById(
+      normalizedCurrentStore.jobMaterialSegments,
+      restoredStore.jobMaterialSegments,
+      "segmentId",
+      "jobMaterialSegment",
+      retainedUnsupportedEntries,
+    ),
+    ledgerEvents: _mergePrintBindingRecordArrayById(
+      normalizedCurrentStore.ledgerEvents,
+      restoredStore.ledgerEvents,
+      "ledgerEventId",
+      "ledgerEvent",
+      retainedUnsupportedEntries,
+    ),
+    unattributedUsage: _mergePrintBindingUnattributedUsage(
+      normalizedCurrentStore.unattributedUsage,
+      restoredStore.unattributedUsage,
+    ),
+    operationsById: {},
+    retainedUnsupportedEntries,
+  });
 }
 
 /**
@@ -949,7 +1131,7 @@ export async function importAllData(data) {
   // ── Gate 18.9E: print-start binding / source-aware usage shadow storeをimportする ──
   //    importしてもlegacy usageHistoryやspool残量へは投影しない。
   if (data.materialAccountingPrintBindingStore && typeof data.materialAccountingPrintBindingStore === "object") {
-    _mergeMaterialAccountingPrintBindingStore(data.materialAccountingPrintBindingStore);
+    await _importMaterialAccountingPrintBindingStoreDurably(data.materialAccountingPrintBindingStore);
   }
 
   // ── Gate 18.9H: operator-managed SpoolMount production storeをimportする ──
@@ -1556,6 +1738,72 @@ async function _commitMaterialAccountingPrintBindingStoreDurably(input = {}) {
     reason: "cas-applied",
     currentDigest: result.currentDigest,
     nextDigest: result.nextDigest,
+  };
+}
+
+/**
+ * importされたPrintBinding shadow storeをCAS成功後だけruntimeへ反映する。
+ *
+ * 【詳細説明】
+ * - import payloadは外部入力なので、source-specific usage/debit根拠を通常mergeだけで現在authorityへ昇格しない。
+ * - 現在runtime storeをbase `C`、incomingをmergeした結果をtarget `R`として構築し、
+ *   IndexedDB shared keyがまだ`C`であることをCASで確認できた場合だけ`monitorData`へ反映する。
+ * - IndexedDB CASが使えない環境では成功扱いせず、既存runtime storeを維持する。
+ *
+ * @private
+ * @function _importMaterialAccountingPrintBindingStoreDurably
+ * @param {Object|null|undefined} incomingStore - import候補PrintBinding store。
+ * @returns {Promise<Object|null>} CAS結果、または処理対象外ならnull。
+ */
+async function _importMaterialAccountingPrintBindingStoreDurably(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return null;
+  }
+  const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(
+    monitorData.materialAccountingPrintBindingStore
+  );
+  const targetStore = _createMergedMaterialAccountingPrintBindingStoreTarget(baseStore, incomingStore);
+  const baseDigest = createMaterialAccountingPrintBindingStoreDigest(baseStore);
+  const targetDigest = createMaterialAccountingPrintBindingStoreDigest(targetStore);
+  if (baseDigest === targetDigest) {
+    monitorData.materialAccountingPrintBindingStore = targetStore;
+    return {
+      ok: true,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingPrintBindingStore",
+      reason: "unchanged",
+    };
+  }
+  if (!_idbInitialized || !isIdbAvailable()) {
+    console.warn("[importAllData] PrintBinding store import skipped: IndexedDB CAS is unavailable.");
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingPrintBindingStore",
+      reason: "production-cas-unavailable",
+    };
+  }
+  const result = await compareAndSwapSharedValue({
+    key: "materialAccountingPrintBindingStore",
+    expectedDigest: baseDigest,
+    createDigest: createMaterialAccountingPrintBindingStoreDigest,
+    nextValue: targetStore,
+  });
+  if (result?.ok === true && result.casApplied === true) {
+    monitorData.materialAccountingPrintBindingStore = targetStore;
+    return result;
+  }
+  console.warn(
+    `[importAllData] PrintBinding store import CASが未適用: ${result?.reason || result?.error || "unknown"}`
+  );
+  return result || {
+    ok: false,
+    casApplied: false,
+    backend: "indexedDB",
+    key: "materialAccountingPrintBindingStore",
+    reason: "durable-cas-not-applied",
   };
 }
 
@@ -2185,8 +2433,8 @@ function _flushStorage() {
       queueSharedWrite("materialAccountingMigrationJournal", monitorData.materialAccountingMigrationJournal);
       // ★ Gate 18.9D-2: durable shadow commit storeを証跡として保存する。
       queueSharedWrite("materialAccountingMigrationShadowStore", monitorData.materialAccountingMigrationShadowStore);
-      // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを証跡として保存する。
-      queueSharedWrite("materialAccountingPrintBindingStore", monitorData.materialAccountingPrintBindingStore);
+      // ★ Gate 18.9I: PrintBinding storeはsource-specific debit rootになるため通常queueへ積まない。
+      //   runtime/importの成功判定とIndexedDB書き込みは専用CASだけで行い、localStorage backup/exportで可視性だけ維持する。
       // ★ Gate 18.9H: operator-managed SpoolMount storeは通常queueへ積まない。
       //   production成功判定とIndexedDB書き込みは専用CASだけで行い、localStorage backup/exportで可視性だけ維持する。
       // ★ Gate 19 prep: 物理コマンド復旧ラッチは未解決確認の証跡のみ保存し、自動再送材料は保存しない。

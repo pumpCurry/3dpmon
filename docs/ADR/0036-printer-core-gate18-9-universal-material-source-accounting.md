@@ -490,11 +490,15 @@ Gate 18.9 must cover:
 - print-start snapshot preserving historical attribution even if current mount
   changes later
 - print-start binding accepting a job ID only after it matches the current
-  machine-observed job ID, resolving print-start time from machine observation
-  or an existing snapshot rather than caller authority, issuing runtime
-  snapshots through the trusted print-start issuer, keeping duplicate
-  print-start observations idempotent, then committing the snapshot through a
-  durable CAS boundary before advancing runtime state
+  machine-observed job ID and the current Printer Core v3 device/session
+  observation, requiring matching connection generation when the caller binds
+  one, resolving print-start time from machine observation or an
+  existing snapshot rather than caller authority, issuing runtime snapshots
+  through the trusted print-start issuer, keeping duplicate print-start
+  observations idempotent, then committing the snapshot through a durable CAS
+  boundary before advancing runtime state. PrintBinding store import uses the
+  same CAS boundary, normal shared flush cannot write this key, and restore
+  quarantines same-ID payload conflicts instead of picking a silent winner.
 - legacy cutover sealing future jobs out of legacy intervals
 
 ## Consequences
