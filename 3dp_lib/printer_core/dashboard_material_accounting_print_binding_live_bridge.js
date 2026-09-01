@@ -22,9 +22,9 @@
  * - {@link forgetMaterialAccountingPrintStartRequest}：hostname単位のpending登録を破棄
  * - {@link clearMaterialAccountingPrintBindingLiveBridge}：テスト用にpending状態を初期化
  *
- * @version 1.390.1604 (PR #440)
+ * @version 1.390.1611 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 21:41:00
+ * @lastModified 2026-09-01 23:00:18
  * -----------------------------------------------------------
  * @todo
  * - Gate 20 restart recoveryでpending print-startの再認証/再構築を永続session registryへ移す
@@ -270,6 +270,31 @@ function resolveObservedReceivedAt(input) {
 }
 
 /**
+ * print-start観測を3DPmonが初めて受け取った時刻をpendingへ固定する。
+ *
+ * 【詳細説明】
+ * - runtime/CAS保存に失敗してpendingが残る場合、後続retryで新しい受信時刻を採用すると、
+ *   開始直後に発生したMaterialSource breaking eventが印刷開始前扱いへずれ込み得る。
+ * - そのためstartもcompletionと同様に、最初に観測したlocal receipt timeをpendingへ一度だけ保存し、
+ *   retry時も同じ時刻をruntimeへ渡す。
+ *
+ * @private
+ * @function resolveStartFirstObservedReceivedAt
+ * @param {Object} pending - pending record。
+ * @param {Object} input - start観測入力。
+ * @returns {string} 固定済みstart local receipt time。
+ */
+function resolveStartFirstObservedReceivedAt(pending, input) {
+  const existing = normalizeIsoTime(pending?.startFirstObservedReceivedAt);
+  if (existing) {
+    return existing;
+  }
+  const observedReceivedAt = normalizeIsoTime(input.observedReceivedAt || input.receivedAt || input.observedAt) || new Date().toISOString();
+  pending.startFirstObservedReceivedAt = observedReceivedAt;
+  return observedReceivedAt;
+}
+
+/**
  * print-completion観測を3DPmonが初めて受け取った時刻をpendingへ固定する。
  *
  * 【詳細説明】
@@ -418,6 +443,7 @@ export function rememberMaterialAccountingPrintStartRequest(input = {}) {
     materialBindingPlan,
     printPlan: materialBindingPlan,
     observedPrintJobId: null,
+    startFirstObservedReceivedAt: null,
     startRecordedAt: null,
     completionFirstObservedReceivedAt: null,
     completionRecordedAt: null,
@@ -516,10 +542,13 @@ export async function recordObservedMaterialAccountingPrintStart(input = {}) {
   if (!runtime || typeof runtime.recordObservedPrintStart !== "function") {
     return { ok: false, status: "blocked", reasons: ["print-binding-runtime-required"] };
   }
+  const startObservedReceivedAt = resolveStartFirstObservedReceivedAt(pending, {
+    observedReceivedAt: correlation.observedReceivedAt,
+  });
   const result = await runtime.recordObservedPrintStart(createRuntimeRequest(pending, {
     printJobId,
     capturedAt: correlation.capturedAt,
-    observedReceivedAt: correlation.observedReceivedAt,
+    observedReceivedAt: startObservedReceivedAt,
   }));
   if (!isRuntimeAccepted(result)) {
     return { ...result, pending: clonePendingRecord(pending) };

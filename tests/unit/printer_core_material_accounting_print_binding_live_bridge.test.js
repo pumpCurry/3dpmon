@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1604 (PR #440)
+ * @version 1.390.1611 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 21:41:00
+ * @lastModified 2026-09-01 23:00:18
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -485,6 +485,50 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
     expect(runtime.recordObservedPrintCompletion).toHaveBeenCalledTimes(2);
     expect(runtime.recordObservedPrintCompletion.mock.calls[0][0].observedReceivedAt).toBe("2026-09-01T10:30:00.000Z");
     expect(runtime.recordObservedPrintCompletion.mock.calls[1][0].observedReceivedAt).toBe("2026-09-01T10:30:00.000Z");
+  });
+
+  it("start runtimeが失敗してpendingが残った場合も初回start受信時刻をretryへ固定する", async () => {
+    const runtime = {
+      recordObservedPrintStart: vi.fn()
+        .mockResolvedValueOnce({ ok: false, status: "blocked", reasons: ["cas-write-failed"] })
+        .mockResolvedValueOnce({ ok: true, status: "recorded" }),
+    };
+    rememberMaterialAccountingPrintStartRequest({
+      hostname: "K2Pro-69E7",
+      commandRequest: createCommandRequest(),
+      materialBindingPlan: createBindingPlan(),
+      preparedAt: "2026-09-01T10:00:00.000Z",
+    });
+    markMaterialAccountingPrintStartRequestSubmitted({
+      hostname: "K2Pro-69E7",
+      commandId: "cmd:k2:print-start:001",
+      submittedAt: "2026-09-01T10:00:00.000Z",
+    });
+
+    const first = await recordObservedMaterialAccountingPrintStart({
+      hostname: "K2Pro-69E7",
+      printJobId: "1785991119",
+      firstObservedAt: "2026-09-01T10:00:05.000Z",
+      observedReceivedAt: "2026-09-01T10:00:05.000Z",
+      runtime,
+    });
+    const pendingAfterFirst = getMaterialAccountingPrintBindingLiveBridgeSnapshot()
+      .pendingByHost["K2Pro-69E7"];
+    const second = await recordObservedMaterialAccountingPrintStart({
+      hostname: "K2Pro-69E7",
+      printJobId: "1785991119",
+      firstObservedAt: "2026-09-01T10:00:05.000Z",
+      observedReceivedAt: "2026-09-01T10:01:00.000Z",
+      runtime,
+    });
+
+    expect(first.ok).toBe(false);
+    expect(first.reasons).toContain("cas-write-failed");
+    expect(pendingAfterFirst.startFirstObservedReceivedAt).toBe("2026-09-01T10:00:05.000Z");
+    expect(second.ok).toBe(true);
+    expect(runtime.recordObservedPrintStart).toHaveBeenCalledTimes(2);
+    expect(runtime.recordObservedPrintStart.mock.calls[0][0].observedReceivedAt).toBe("2026-09-01T10:00:05.000Z");
+    expect(runtime.recordObservedPrintStart.mock.calls[1][0].observedReceivedAt).toBe("2026-09-01T10:00:05.000Z");
   });
 
   it("実runtime retryでも初回completion後のsource観測を完了intervalへ遡及採用しない", async () => {
