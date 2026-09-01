@@ -18,9 +18,9 @@
  *
  * @author pumpCurry
  * @license BSD-3-Clause
- * @version 1.390.1596 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since 1.390.0 (Initial)
- * @lastModified 2026-09-01 19:56:42
+ * @lastModified 2026-09-02 07:23:40
  */
 
 "use strict";
@@ -105,6 +105,24 @@ function resolveItemKeeperPrinterCoreDeviceId(machine) {
     machine?.printerCoreV3Identity?.deviceId ||
     ""
   ).trim();
+}
+
+/**
+ * source-aware ItemKeeper projectionがlive certification済みか判定する。
+ *
+ * 【詳細説明】
+ * - K2/CFSのsource別使用量は、materialUsed CSVとPrintPlan順序の対応を実機で証明するまで
+ *   外部のspool使用実績として送らない。
+ * - 将来のlive certification gateはJobMaterialSegmentへ`itemKeeperProjection.status="certified"`を
+ *   付与し、このhelperだけを通して投影を解禁する。
+ *
+ * @private
+ * @function isItemKeeperProjectionCertified
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @returns {boolean} ItemKeeper source-aware projectionへ使用可能ならtrue。
+ */
+function isItemKeeperProjectionCertified(segment) {
+  return String(segment?.itemKeeperProjection?.status || "").trim() === "certified";
 }
 
 /**
@@ -249,6 +267,39 @@ export class ItemKeeperIntegration {
   }
 
   /**
+   * 指定ジョブにPrinter Core v3 print-binding scopeが存在するか判定する。
+   *
+   * 【詳細説明】
+   * - source-specific accounting storeは全機器共有なので、deviceIdが未確定のときは
+   *   printJobIdだけでscopeが存在するとみなさず、従来単一スプールfallbackを許す。
+   * - deviceIdが確定しており、同じjobIdのsnapshotまたはsegmentがある場合は、
+   *   legacy `filamentInfo[]` へ黙って戻さないためのblock条件として使う。
+   *
+   * @private
+   * @function _hasScopedPrintBindingForJob
+   * @param {Object|null|undefined} job - printStore.history のレコード。
+   * @param {{deviceId?:string,hostname?:string}=} context - 機器scope情報。
+   * @returns {boolean} 指定device/jobにprint-binding scopeが存在する場合はtrue。
+   */
+  _hasScopedPrintBindingForJob(job, context = {}) {
+    const jobId = String(job?.id ?? job?.printId ?? "").trim();
+    const expectedDeviceId = String(context?.deviceId || "").trim();
+    if (!jobId || !expectedDeviceId) {
+      return false;
+    }
+    const store = monitorData.materialAccountingPrintBindingStore || {};
+    const matchesScope = (record) => (
+      record &&
+      String(record.printJobId ?? record.jobId ?? record.printId ?? record.id ?? "").trim() === jobId &&
+      String(record.deviceId || "").trim() === expectedDeviceId
+    );
+    return (
+      (Array.isArray(store.printStartSnapshots) && store.printStartSnapshots.some(matchesScope)) ||
+      (Array.isArray(store.jobMaterialSegments) && store.jobMaterialSegments.some(matchesScope))
+    );
+  }
+
+  /**
    * print binding storeから対象ジョブのsource別usage segmentを取得する。
    *
    * 【詳細説明】
@@ -267,15 +318,23 @@ export class ItemKeeperIntegration {
     const jobId = String(job?.id ?? job?.printId ?? "").trim();
     if (!jobId) return [];
     const expectedDeviceId = String(context?.deviceId || "").trim();
+    if (!expectedDeviceId) {
+      return [];
+    }
     const store = monitorData.materialAccountingPrintBindingStore || {};
     const segments = Array.isArray(store.jobMaterialSegments) ? store.jobMaterialSegments : [];
     return segments
       .filter(segment => {
         if (!segment || String(segment.printJobId ?? "").trim() !== jobId) return false;
-        if (expectedDeviceId && String(segment.deviceId || "").trim() !== expectedDeviceId) return false;
+        if (String(segment.deviceId || "").trim() !== expectedDeviceId) return false;
         if (!segment.spoolId) return false;
         const usageState = String(segment.usageState || "").trim();
-        return usageState === "observed-used" || usageState === "confirmed-unused";
+        const debitStatus = String(segment.debit?.status || "").trim();
+        return (
+          (usageState === "observed-used" || usageState === "confirmed-unused") &&
+          debitStatus === "eligible" &&
+          isItemKeeperProjectionCertified(segment)
+        );
       })
       .filter(segment => {
         const usedLengthMm = Number(segment.usedLengthMm);
@@ -336,6 +395,13 @@ export class ItemKeeperIntegration {
    */
   buildFilaments(job, context = {}) {
     const out = [];
+    const printBindingFilaments = this._buildFilamentsFromPrintBinding(job, context);
+    if (printBindingFilaments.length > 0) {
+      return printBindingFilaments;
+    }
+    if (this._hasScopedPrintBindingForJob(job, context)) {
+      return [];
+    }
     const fi = Array.isArray(job?.filamentInfo) ? job.filamentInfo : [];
     if (fi.length > 0) {
       for (const f of fi) {
@@ -344,10 +410,6 @@ export class ItemKeeperIntegration {
         out.push(this._filamentEntry(f || {}, spool, usedMm, job));
       }
     } else {
-      const printBindingFilaments = this._buildFilamentsFromPrintBinding(job, context);
-      if (printBindingFilaments.length > 0) {
-        return printBindingFilaments;
-      }
       // filamentInfo 欠落の旧ジョブ: 単一スプール扱いでフォールバック
       const spoolId = job?.filamentId || null;
       const spool = spoolId ? getSpoolById(spoolId) : null;

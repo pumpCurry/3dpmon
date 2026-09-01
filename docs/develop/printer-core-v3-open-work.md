@@ -132,9 +132,10 @@ source-aware mountとして扱わない。
   device/session/generation境界、runtime MaterialSource observation resolver、正式freshness
    TTL、専用CAS `casApplied:true` を要求する。TTL切れ、provider disconnected、
    restored last-knownの場合、source-specific segmentは保存してもmanaged remaining debit候補へ
-   昇格しない。さらに、print-start後からcompletionまでに同じsourceの変更/消失/merge conflict
+   昇格しない。さらに、operator-confirmed mountのopenまたは再確認後からcompletionまでに同じsourceの変更/消失/merge conflict
    eventが観測された場合は、完了時点のtopologyがfreshでもsource continuityなしとして
-   managed debit候補へ昇格しない。provisional sourceのcontinuityは区間証拠として扱い、
+   managed debit候補へ昇格しない。これにはprint-start前に観測されたsource入替も含める。
+   provisional sourceのcontinuityは区間証拠として扱い、
    source/device観測時刻がtrusted print-start受信時刻以後かつcompletion受信時刻以前に入らない場合も、
    完了後fresh観測の遡及利用を避けるためmanaged debit候補へ昇格しない。`capturedAt` /
    `completedAt` はprinter clock evidenceとして保持し、MaterialSource `lastObservedAt` との
@@ -150,7 +151,10 @@ source-aware mountとして扱わない。
    `completionFirstObservedReceivedAt` として固定し、retryで後続受信時刻へ動かさない。
   Gate 18.9I-3では、このshadow storeに保存された同一device + printJobIdの
   `observed-used` / `confirmed-unused` `JobMaterialSegment` をItemKeeper送信用
-  `jobs[].filaments[]` へread-only投影する。
+  `jobs[].filaments[]` へread-only投影する。projectionには同一device ID、source-aware
+  `debit.status:"eligible"`、およびlive certification済みの
+  `itemKeeperProjection.status:"certified"` を要求し、未certifiedのK2 materialUsed CSV順序は
+  ItemKeeperへsource別true usageとして送らない。
   ただしmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
   への書き込みはまだ行わない。
   Gate 18.9I-4では、K2/CFS印刷開始UIで作ったPrinter Core command requestとは別に

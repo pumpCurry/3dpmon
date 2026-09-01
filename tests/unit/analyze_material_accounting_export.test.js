@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1622 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 02:36:00
+ * @lastModified 2026-09-02 07:23:40
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -101,6 +101,8 @@ function createExportPayload(options = {}) {
             usedLengthMm: 3210,
             usageState: "observed-used",
             confidence: "high",
+            debit: { status: "eligible", canDebit: true, reasons: [] },
+            itemKeeperProjection: { status: "certified", evidence: "unit-test" },
             order: 0,
           },
           {
@@ -114,6 +116,8 @@ function createExportPayload(options = {}) {
             usedLengthMm: 6543,
             usageState: "observed-used",
             confidence: "high",
+            debit: { status: "eligible", canDebit: true, reasons: [] },
+            itemKeeperProjection: { status: "certified", evidence: "unit-test" },
             order: 1,
           },
         ]
@@ -418,6 +422,8 @@ describe("analyze_material_accounting_export", () => {
       ...payload.materialAccountingPrintBindingStore.jobMaterialSegments[0],
       usageState: "confirmed-unused",
       usedLengthMm: 0,
+      debit: { status: "eligible", canDebit: false, reasons: [] },
+      itemKeeperProjection: { status: "certified", evidence: "unit-test" },
     };
 
     const report = analyzeMaterialAccountingExport(payload);
@@ -460,6 +466,65 @@ describe("analyze_material_accounting_export", () => {
       itemKeeperEligibleSegmentCount: 0,
     });
     expect(report.gate18_9I.status).toBe("waiting-live-shadow-accounting");
+  });
+
+  it("debit eligibleでないJobMaterialSegmentはItemKeeper projection readyとして扱わない", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: true,
+    });
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = {
+      ...payload.materialAccountingPrintBindingStore.jobMaterialSegments[0],
+      debit: { status: "blocked", canDebit: false, reasons: ["physical-discontinuity"] },
+    };
+
+    const report = analyzeMaterialAccountingExport(payload);
+    const sourceSummary = report.devices[0].sources.find((entry) => entry.displayLabel === "1A");
+
+    expect(sourceSummary).toMatchObject({
+      sourceSpecificUsageCount: 1,
+      itemKeeperEligibleUsageCount: 0,
+      itemKeeperEligibleUsedLengthMm: 0,
+    });
+    expect(report.gate18_9I.status).toBe("evidence-present");
+  });
+
+  it("null使用量のJobMaterialSegmentを0mmのItemKeeper projection readyとして扱わない", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: true,
+    });
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = {
+      ...payload.materialAccountingPrintBindingStore.jobMaterialSegments[0],
+      usageState: "confirmed-unused",
+      usedLengthMm: null,
+      debit: { status: "eligible", canDebit: false, reasons: [] },
+    };
+
+    const report = analyzeMaterialAccountingExport(payload);
+    const sourceSummary = report.devices[0].sources.find((entry) => entry.displayLabel === "1A");
+
+    expect(sourceSummary).toMatchObject({
+      itemKeeperEligibleUsageCount: 0,
+      itemKeeperEligibleUsedLengthMm: 0,
+    });
+  });
+
+  it("live certificationが無いJobMaterialSegmentはItemKeeper projection readyとして扱わない", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: true,
+    });
+    delete payload.materialAccountingPrintBindingStore.jobMaterialSegments[0].itemKeeperProjection;
+
+    const report = analyzeMaterialAccountingExport(payload);
+    const sourceSummary = report.devices[0].sources.find((entry) => entry.displayLabel === "1A");
+
+    expect(sourceSummary).toMatchObject({
+      sourceSpecificUsageCount: 1,
+      itemKeeperEligibleUsageCount: 0,
+      itemKeeperEligibleUsedLengthMm: 0,
+    });
   });
 
   it("certification panel exportを添付してread-only preflight状態を同じreportへ入れる", () => {

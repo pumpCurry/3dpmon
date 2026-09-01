@@ -575,8 +575,9 @@ Gate 18.9 must cover:
   topology observation is not enough by itself: if the
   MaterialSource change log records `source-changed`, `source-disappeared`,
   `source-merge-conflict`, a device-level provider disconnect/reconnect, or a
-  provider generation change after print-start and before completion, the
-  runtime marks the segment as a physical discontinuity and keeps
+  provider generation change after the operator-confirmed mount open or
+  reconfirmation and before completion, the runtime marks the segment as a
+  physical discontinuity and keeps
   `sourceContinuity:false`. The same check also requires retained event
   coverage from at least the print-start time at both the device-event-log level
   and the individual MaterialSource snapshot level; old restored records,
@@ -586,8 +587,9 @@ Gate 18.9 must cover:
   `usageHistory`.
 - ItemKeeper payload generation may read same-device `observed-used` /
   `confirmed-unused` JobMaterialSegment records as a projection source when
-  `job.filamentInfo[]` is absent. This projection sends per-spool
-  `filaments[]` evidence without mutating 3dpmon inventory state.
+  `job.filamentInfo[]` is absent only when the segment is debit eligible and
+  the source-specific projection is live certified. This projection sends
+  per-spool `filaments[]` evidence without mutating 3dpmon inventory state.
 - K2/CFS UI print-start sends create a module-attested MaterialBindingPlan
   separate from the transport command request, register it as prepared pending
   state immediately before transport dispatch, mark it submitted only after

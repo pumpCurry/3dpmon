@@ -29,9 +29,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1621 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 02:08:00
+ * @lastModified 2026-09-02 07:23:40
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -658,6 +658,7 @@ function _createMergedMaterialAccountingSpoolMountStoreTarget(currentStore, inco
  * - import payloadは外部入力であり、incoming Universal `OPEN` mountだけでlegacy割当を黙って破棄しない。
  * - 現在runtime storeをbase `C`、incomingをmergeした結果をtarget `R`として構築し、
  *   IndexedDB shared keyがまだ`C`であることをCASで確認できた場合だけ`monitorData`へ反映する。
+ * - IndexedDB CASが使えない環境ではsuccess扱いせず、既存runtime storeを維持する。
  *
  * @private
  * @function _importMaterialAccountingSpoolMountStoreDurably
@@ -679,8 +680,14 @@ async function _importMaterialAccountingSpoolMountStoreDurably(incomingStore) {
     return { ok: true, casApplied: false, backend: "indexedDB", key: "materialAccountingSpoolMountStore", reason: "unchanged" };
   }
   if (!_idbInitialized || !isIdbAvailable()) {
-    monitorData.materialAccountingSpoolMountStore = targetStore;
-    return { ok: true, casApplied: false, backend: "localStorage", key: "materialAccountingSpoolMountStore", reason: "fallback-import" };
+    console.warn("[importAllData] SpoolMount store import skipped: IndexedDB CAS is unavailable.");
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingSpoolMountStore",
+      reason: "production-cas-unavailable",
+    };
   }
   const result = await compareAndSwapSharedValue({
     key: "materialAccountingSpoolMountStore",
@@ -2526,7 +2533,7 @@ export function restoreUnifiedStorage() {
   // IndexedDB キャッシュがあればそこから復元
   const idbCache = getIdbCache();
   if (idbCache) {
-    _restoreFromData(idbCache.shared, idbCache.machines);
+    _restoreFromData(idbCache.shared, idbCache.machines, { source: "indexedDB" });
     console.debug("[restoreUnifiedStorage] IndexedDB から復元しました");
     Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
     _reconcileAfterRestore();
@@ -2548,7 +2555,7 @@ export function restoreUnifiedStorage() {
           machines[host] = JSON.parse(hostData);
         }
       }
-      _restoreFromData(shared, machines);
+      _restoreFromData(shared, machines, { source: "localStorage" });
       _lastSavedJson = globalSaved;
       console.debug(`[restoreUnifiedStorage] localStorage (per-host) から復元: ${hostKeys.size}ホスト`);
     } catch (e) {
@@ -2608,8 +2615,9 @@ function _reconcileAfterRestore() {
  * @private
  * @param {Object} shared - shared データ（appSettings, filamentSpools 等）
  * @param {Object} [machines] - per-host マシンデータ
+ * @param {{source?:string}=} options - 復元元情報。
  */
-function _restoreFromData(shared, machines) {
+function _restoreFromData(shared, machines, options = {}) {
   if (shared?.appSettings && typeof shared.appSettings === "object") {
     // ★ deep merge: connectionTargets等のネスト配列を保護
     for (const [key, val] of Object.entries(shared.appSettings)) {
@@ -3003,8 +3011,19 @@ function _restoreFromData(shared, machines) {
 
   // ★ Gate 18.9H: operator-managed SpoolMount production storeを復元する。
   //   復元してもlegacy hostSpoolMapやusage ledgerへは投影せず、専用storeとしてだけ保持する。
-  if (shared?.materialAccountingSpoolMountStore && typeof shared.materialAccountingSpoolMountStore === "object") {
+  if (
+    shared?.materialAccountingSpoolMountStore &&
+    typeof shared.materialAccountingSpoolMountStore === "object" &&
+    options.source === "indexedDB" &&
+    _idbInitialized &&
+    isIdbAvailable()
+  ) {
     _mergeMaterialAccountingSpoolMountStore(shared.materialAccountingSpoolMountStore);
+  } else if (shared?.materialAccountingSpoolMountStore && typeof shared.materialAccountingSpoolMountStore === "object") {
+    console.warn("[restoreUnifiedStorage] SpoolMount store restore skipped: IndexedDB CAS authority is unavailable.");
+    monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore(
+      monitorData.materialAccountingSpoolMountStore
+    );
   } else {
     monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore(
       monitorData.materialAccountingSpoolMountStore

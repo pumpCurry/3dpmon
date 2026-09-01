@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1592 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 18:47:47
+ * @lastModified 2026-09-02 06:58:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -169,6 +169,7 @@ vi.mock("../../3dp_lib/dashboard_storage_idb.js", () => ({
 const {
   initStorage,
   importAllData,
+  restoreUnifiedStorage,
   saveUnifiedStorageDurably,
   commitMaterialAccountingPrintBindingStoreDurably,
   commitMaterialAccountingSpoolMountStoreDurably,
@@ -670,10 +671,7 @@ describe("saveUnifiedStorageDurably", () => {
   });
 
   it("restore済みlegacy hostSpoolMapとのcross-backend reconcile結果はCAS保護storeへ専用書き戻しする", async () => {
-    const openMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
-      spoolMounts: [createDurableMountFixture()],
-      events: [],
-    });
+    const openMountStore = createDurableMountStoreFixture();
     mocks.monitorData.materialAccountingSpoolMountStore = openMountStore;
     mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
     mocks.monitorData.hostSpoolMap = { "K1Max-4A1B": "spool:a" };
@@ -683,12 +681,12 @@ describe("saveUnifiedStorageDurably", () => {
     });
 
     expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
-    expect(mocks.monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual([
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: "spoolMount",
         reason: "legacy-spool-backend-conflict",
       }),
-    ]);
+    ]));
     expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
       key: "materialAccountingSpoolMountStore",
       expectedDigest: openMountStore.storeDigest,
@@ -701,10 +699,7 @@ describe("saveUnifiedStorageDurably", () => {
   });
 
   it("Universal OPEN mount中のspoolはhostSpoolMap importでlegacy側へ二重装着しない", async () => {
-    const openMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
-      spoolMounts: [createDurableMountFixture()],
-      events: [],
-    });
+    const openMountStore = createDurableMountStoreFixture();
     mocks.monitorData.materialAccountingSpoolMountStore = openMountStore;
     mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
     mocks.monitorData.hostSpoolMap = {};
@@ -748,10 +743,7 @@ describe("saveUnifiedStorageDurably", () => {
 
   it("SpoolMount importはCAS成功前にruntime storeへ反映しない", async () => {
     const baseStore = createEmptyMaterialAccountingSpoolMountStore();
-    const importedMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
-      spoolMounts: [createDurableMountFixture()],
-      events: [],
-    });
+    const importedMountStore = createDurableMountStoreFixture();
     mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
     mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
     mocks.compareAndSwapSharedValue.mockImplementationOnce(async ({ expectedDigest, nextValue }) => {
@@ -781,11 +773,41 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toHaveLength(1);
   });
 
-  it("incoming Universal OPEN mountだけではlegacy hostSpoolMap importを黙って捨てない", async () => {
-    const importedMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
-      spoolMounts: [createDurableMountFixture()],
-      events: [],
+  it("SpoolMount importはCAS未使用環境ではruntime authorityへ反映しない", async () => {
+    mocks.idbAvailable = false;
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const importedMountStore = createDurableMountStoreFixture();
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+      materialAccountingSpoolMountStore: importedMountStore,
     });
+
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+    }));
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+  });
+
+  it("localStorage fallback restoreはSpoolMount storeをruntime authorityへ反映しない", () => {
+    mocks.idbAvailable = false;
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const restoredMountStore = createDurableMountStoreFixture();
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    globalThis.localStorage.setItem("3dpmon-global", JSON.stringify({
+      filamentSpools: [{ id: "spool:a" }],
+      materialAccountingSpoolMountStore: restoredMountStore,
+    }));
+
+    restoreUnifiedStorage();
+
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+  });
+
+  it("incoming Universal OPEN mountだけではlegacy hostSpoolMap importを黙って捨てない", async () => {
+    const importedMountStore = createDurableMountStoreFixture();
     mocks.monitorData.materialAccountingSpoolMountStore = createEmptyMaterialAccountingSpoolMountStore();
     mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
     mocks.monitorData.hostSpoolMap = {};
@@ -798,12 +820,12 @@ describe("saveUnifiedStorageDurably", () => {
 
     expect(mocks.monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool:a" });
     expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
-    expect(mocks.monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual([
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: "spoolMount",
         reason: "legacy-spool-backend-conflict",
       }),
-    ]);
+    ]));
   });
 });
 
@@ -852,6 +874,20 @@ function createDurableMountFixture() {
     openedBy: "operator",
     verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
     sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+  });
+}
+
+/**
+ * durable commit test用のcreation event付きSpoolMount storeを生成する。
+ *
+ * @function createDurableMountStoreFixture
+ * @returns {Object} 正規化済みSpoolMount store。
+ */
+function createDurableMountStoreFixture() {
+  const mount = createDurableMountFixture();
+  return normalizeStoredMaterialAccountingSpoolMountStore({
+    spoolMounts: [mount],
+    events: [createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] })],
   });
 }
 

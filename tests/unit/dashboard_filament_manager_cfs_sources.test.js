@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1586 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1402 (PR #434)
- * @lastModified 2026-09-01 17:48:30
+ * @lastModified 2026-09-02 06:58:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -33,6 +33,9 @@ import {
 import {
   normalizeK2BoxsInfo,
 } from "../../3dp_lib/printer_core/dashboard_normalized_state.js";
+import {
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
 
 const mockState = vi.hoisted(() => ({
   monitorData: {
@@ -320,6 +323,46 @@ function setupK2Runtime(options = {}) {
   };
 }
 
+/**
+ * UIテスト用のopen mount creation eventを生成する。
+ *
+ * @function createOpenMountEventFixture
+ * @param {Object} mount - SpoolMount fixture。
+ * @returns {Object} operator mount creation event。
+ */
+function createOpenMountEventFixture(mount) {
+  const payload = {
+    kind: "operator-mount",
+    operatorActionId: `action:${mount.mountOperationId}`,
+    operationId: mount.mountOperationId,
+    materialSourceId: mount.materialSourceId,
+    spoolId: mount.spoolId,
+  };
+  return {
+    eventId: `event:${mount.mountOperationId}`,
+    kind: "operator-mount",
+    operatorActionId: payload.operatorActionId,
+    operationId: mount.mountOperationId,
+    payload,
+    payloadDigest: createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+    recordRefs: [mount.mountId, mount.mountOperationId],
+    createdAt: mount.openedAt,
+    actor: "operator",
+  };
+}
+
+/**
+ * UIテスト用にSpoolMount storeへmountとcreation eventを同時に設定する。
+ *
+ * @function setOpenSpoolMountFixtures
+ * @param {Array<Object>} mounts - open mount fixtures。
+ * @returns {void}
+ */
+function setOpenSpoolMountFixtures(mounts) {
+  monitorData.materialAccountingSpoolMountStore.spoolMounts = mounts;
+  monitorData.materialAccountingSpoolMountStore.events = mounts.map((mount) => createOpenMountEventFixture(mount));
+}
+
 afterEach(() => {
   document.body.innerHTML = "";
   monitorData.appSettings.connectionTargets = [];
@@ -569,7 +612,7 @@ describe("filament manager CFS material source section", () => {
         filamentColor: "#f97316",
       },
     ];
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [
+    setOpenSpoolMountFixtures([
       {
         mountId: "mount:1a",
         mountOperationId: "operation:1a",
@@ -610,7 +653,7 @@ describe("filament manager CFS material source section", () => {
           },
         },
       },
-    ];
+    ]);
 
     const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
     const chip1a = section?.querySelector('[data-source-id="cfs:1:slot:0"]');
@@ -704,7 +747,7 @@ describe("filament manager CFS material source section", () => {
       remainingLengthMm: 300000,
       filamentColor: "#facc15",
     }];
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+    setOpenSpoolMountFixtures([{
       mountId: "mount:1a",
       mountOperationId: "operation:1a",
       materialSourceId: "cfs:1:slot:0",
@@ -718,7 +761,7 @@ describe("filament manager CFS material source section", () => {
         materialSourceId: "cfs:1:slot:0",
         locator: { kind: "cfs-slot", boxId: 1, slotIndex: 0, protocolSlotId: "1A" },
       },
-    }];
+    }]);
     const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
     const buttons = [...(section?.querySelectorAll('[data-source-id="cfs:1:slot:0"] .fm-material-source-actions button') || [])];
     const unmountButton = buttons.find((buttonElement) => buttonElement.textContent === "割当解除");
@@ -747,7 +790,7 @@ describe("filament manager CFS material source section", () => {
       totalLengthMm: 336000,
       remainingLengthMm: 120000,
     }];
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+    setOpenSpoolMountFixtures([{
       mountId: "mount:other",
       mountOperationId: "operation:other",
       materialSourceId: "cfs:1:slot:0",
@@ -761,7 +804,7 @@ describe("filament manager CFS material source section", () => {
         materialSourceId: "cfs:1:slot:0",
         locator: { kind: "cfs-slot", boxId: 1, slotIndex: 0, protocolSlotId: "1A" },
       },
-    }];
+    }]);
 
     const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
     const chip1a = section?.querySelector('[data-source-id="cfs:1:slot:0"]');
@@ -795,7 +838,7 @@ describe("filament manager CFS material source section", () => {
       remainingLengthMm: 300000,
       filamentColor: "#facc15",
     }];
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+    setOpenSpoolMountFixtures([{
       mountId: "mount:1a",
       mountOperationId: "operation:1a",
       materialSourceId: "material-source:serial-k2pro-69e7:cfs-1:slot-0",
@@ -809,7 +852,7 @@ describe("filament manager CFS material source section", () => {
         materialSourceId: "cfs:1:slot:0",
         locator: { kind: "cfs-slot", boxId: 1, slotIndex: 0, protocolSlotId: "1A" },
       },
-    }];
+    }]);
 
     const section = createFilamentManagerMaterialSupplySection("K2Pro-69E7");
     const chip1a = section?.querySelector('[data-source-id="cfs:1:slot:0"]');

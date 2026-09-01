@@ -19,9 +19,9 @@
  * - {@link createMaterialAccountingSpoolMountOperationPayloadDigest}：operation payload digestを生成
  * - {@link createMaterialAccountingSpoolMountStoreSnapshot}：store snapshotを生成
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1575 (PR #440)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-02 06:58:30
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
@@ -30,6 +30,7 @@
 "use strict";
 
 import {
+  SPOOL_MOUNT_VERIFICATION,
   validateSpoolMount,
 } from "./dashboard_material_accounting_contract.js";
 import {
@@ -405,6 +406,42 @@ function normalizeSpoolMounts(candidates) {
 }
 
 /**
+ * active authorityとして復元できないOPEN mountを隔離する。
+ *
+ * 【詳細説明】
+ * - Gate 18.9Hのproduction SpoolMountはoperator管理を初期authorityとするため、
+ *   OPEN mountを再起動後にactiveへ戻すにはoperator-confirmed evidenceを要求する。
+ * - migrated / legacy-projected / unverified は将来Gateで専用evidenceを持たせるまで、
+ *   OPEN active authorityへ復元しない。
+ *
+ * @private
+ * @function filterUnsupportedActiveMountVerification
+ * @param {Array<Object>} mounts - 正規化済みSpoolMount配列。
+ * @returns {{spoolMounts:Array<Object>, retainedUnsupportedEntries:Array<Object>}} filter結果。
+ */
+function filterUnsupportedActiveMountVerification(mounts) {
+  const retainedUnsupportedEntries = [];
+  const spoolMounts = [];
+
+  for (const mount of mounts || []) {
+    if (
+      mount?.status === "open" &&
+      mount.verification !== SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED
+    ) {
+      retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
+        kind: "spoolMount",
+        reason: "unsupported-active-mount-verification",
+        record: mount,
+      }));
+      continue;
+    }
+    spoolMounts.push(mount);
+  }
+
+  return { spoolMounts, retainedUnsupportedEntries };
+}
+
+/**
  * store eventの参照可能record ID集合を生成する。
  *
  * @private
@@ -629,6 +666,88 @@ function normalizeOperationEvents(candidates, mounts) {
 }
 
 /**
+ * eventがmountの作成receiptとして使えるか判定する。
+ *
+ * 【詳細説明】
+ * - restart後のoperation idempotencyはdurable eventsから再構築するため、
+ *   mountだけが残り作成eventが無い状態をactive authorityへ戻さない。
+ * - `operator-mount`はpayload.spoolId、`operator-replace`はpayload.newSpoolIdを
+ *   作成されたmountのspool evidenceとして照合する。
+ *
+ * @private
+ * @function isCreationEventForMount
+ * @param {Object} event - 正規化済みoperation event。
+ * @param {Object} mount - 正規化済みSpoolMount record。
+ * @returns {boolean} mountを裏付けるcreation eventならtrue。
+ */
+function isCreationEventForMount(event, mount) {
+  const kind = toTrimmedString(event?.kind);
+  if (!["operator-mount", "operator-replace"].includes(kind)) {
+    return false;
+  }
+
+  const recordRefs = Array.isArray(event.recordRefs)
+    ? event.recordRefs.map((ref) => toTrimmedString(ref)).filter(Boolean)
+    : [];
+  const referencesMount =
+    recordRefs.includes(toTrimmedString(mount.mountId)) ||
+    recordRefs.includes(toTrimmedString(mount.mountOperationId));
+  if (!referencesMount) {
+    return false;
+  }
+
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  const payloadSourceId = toTrimmedString(payload.materialSourceId);
+  const sourceAliases = Array.isArray(mount.sourceBindingAtOpen?.aliases)
+    ? mount.sourceBindingAtOpen.aliases.map((alias) => toTrimmedString(alias)).filter(Boolean)
+    : [];
+  const payloadSpoolId = kind === "operator-replace"
+    ? toTrimmedString(payload.newSpoolId)
+    : toTrimmedString(payload.spoolId);
+
+  return (
+    payloadSourceId === toTrimmedString(mount.materialSourceId) ||
+    sourceAliases.includes(payloadSourceId)
+  ) &&
+    payloadSpoolId === toTrimmedString(mount.spoolId);
+}
+
+/**
+ * creation eventを持たないmountをactive authorityから隔離する。
+ *
+ * 【詳細説明】
+ * - import/restoreされたstoreで`spoolMounts[]`だけが存在する場合、
+ *   operatorActionIdやpayloadDigestを復元できず、restart idempotencyが成立しない。
+ * - serviceが生成する正常storeはmountとoperation eventを同じtransactionで保存するため、
+ *   ここで落ちるのは破損storeまたは未対応schemaのauthority候補だけである。
+ *
+ * @private
+ * @function filterMountsWithoutCreationEvents
+ * @param {Array<Object>} mounts - 正規化済みSpoolMount配列。
+ * @param {Array<Object>} events - 正規化済みoperation event配列。
+ * @returns {{spoolMounts:Array<Object>, retainedUnsupportedEntries:Array<Object>}} filter結果。
+ */
+function filterMountsWithoutCreationEvents(mounts, events) {
+  const retainedUnsupportedEntries = [];
+  const spoolMounts = [];
+
+  for (const mount of mounts || []) {
+    const hasCreationEvent = (events || []).some((event) => isCreationEventForMount(event, mount));
+    if (hasCreationEvent) {
+      spoolMounts.push(mount);
+      continue;
+    }
+    retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
+      kind: "spoolMount",
+      reason: "missing-creation-operation-event",
+      record: mount,
+    }));
+  }
+
+  return { spoolMounts, retainedUnsupportedEntries };
+}
+
+/**
  * 保存済みMaterialAccounting SpoolMount storeを正規化する。
  *
  * 【詳細説明】
@@ -645,23 +764,33 @@ function normalizeOperationEvents(candidates, mounts) {
 export function normalizeStoredMaterialAccountingSpoolMountStore(stored) {
   const input = stored && typeof stored === "object" ? stored : {};
   const normalizedMounts = normalizeSpoolMounts(normalizeArray(input.spoolMounts));
-  const normalizedEvents = normalizeOperationEvents(normalizeArray(input.events), normalizedMounts.spoolMounts);
+  const verifiedMounts = filterUnsupportedActiveMountVerification(normalizedMounts.spoolMounts);
+  const normalizedEvents = normalizeOperationEvents(normalizeArray(input.events), verifiedMounts.spoolMounts);
+  const coveredMounts = filterMountsWithoutCreationEvents(
+    verifiedMounts.spoolMounts,
+    normalizedEvents.events
+  );
+  const coveredEvents = normalizeOperationEvents(normalizeArray(input.events), coveredMounts.spoolMounts);
   const base = {
     schemaVersion: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION,
     authority: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_AUTHORITY,
     storeRevision: normalizeNonNegativeInteger(input.storeRevision, 0),
     storeDigest: "",
-    spoolMounts: normalizedMounts.spoolMounts,
-    events: normalizedEvents.events,
+    spoolMounts: coveredMounts.spoolMounts,
+    events: coveredEvents.events,
     conflicts: [
       ...normalizeArray(input.conflicts),
       ...normalizedMounts.conflicts,
       ...normalizedEvents.conflicts,
+      ...coveredEvents.conflicts,
     ],
     retainedUnsupportedEntries: [
       ...normalizeArray(input.retainedUnsupportedEntries),
       ...normalizedMounts.retainedUnsupportedEntries,
+      ...verifiedMounts.retainedUnsupportedEntries,
       ...normalizedEvents.retainedUnsupportedEntries,
+      ...coveredMounts.retainedUnsupportedEntries,
+      ...coveredEvents.retainedUnsupportedEntries,
     ],
     invariants: { ...MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_INVARIANTS },
   };

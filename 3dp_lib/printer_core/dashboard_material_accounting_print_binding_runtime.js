@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1615 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 23:40:00
+ * @lastModified 2026-09-02 07:45:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -538,12 +538,13 @@ function isContinuityBreakingMaterialSourceEvent(event) {
 }
 
 /**
- * print-start後からcompletionまでにsource変更が観測されたかを検査する。
+ * mount continuity開始後からcompletionまでにsource変更が観測されたかを検査する。
  *
  * 【詳細説明】
  * - 完了時点で同じsourceがfreshでも、印刷中に材料交換/slot消失/merge conflictが観測されていれば
  *   自動debit候補としては連続性を証明できない。
- * - completion受信時刻が未取得の場合は、print-start受信後のbreaking eventを広く拒否する。
+ * - operator-confirmed mountを使う場合は、print-start前の抜き差しも同じ物理断絶として扱う。
+ * - completion受信時刻が未取得の場合は、continuity開始後のbreaking eventを広く拒否する。
  *
  * @private
  * @function findMaterialSourceContinuityBreakEvents
@@ -556,7 +557,7 @@ function isContinuityBreakingMaterialSourceEvent(event) {
 function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observedSource, completedObservedAt) {
   const sourceIds = createMaterialSourceContinuityLookupIds(snapshot, observedSource);
   const snapshotDeviceId = toTrimmedString(snapshot?.deviceId);
-  const startMs = Date.parse(resolvePrintStartObservedReceivedAt(snapshot) || "");
+  const startMs = Date.parse(resolveMaterialSourceContinuityStartedAt(snapshot) || "");
   const completedMs = Date.parse(completedObservedAt || "");
   if (!Number.isFinite(startMs) || sourceIds.size === 0 || !snapshotDeviceId) {
     return [];
@@ -580,6 +581,51 @@ function findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observe
     }
     return !Number.isFinite(completedMs) || eventMs <= completedMs;
   });
+}
+
+/**
+ * source continuityの検査を始めるlocal時刻を解決する。
+ *
+ * 【詳細説明】
+ * - source-specific debitは「mountを開いた後、印刷開始までに同じslotが入れ替わっていない」ことも
+ *   必要なため、print-start受信時刻だけを下限にしない。
+ * - 将来operator再確認時刻をsnapshotへ保存した場合は、mount openより新しい再確認を優先する。
+ * - print-startより後の候補はcompletion側の別検査範囲になるため、ここでは下限として採用しない。
+ *
+ * @private
+ * @function resolveMaterialSourceContinuityStartedAt
+ * @param {Object|null|undefined} snapshot - print-start snapshot。
+ * @returns {string|null} continuity検査開始時刻。
+ */
+function resolveMaterialSourceContinuityStartedAt(snapshot) {
+  const printStartObservedReceivedAt = resolvePrintStartObservedReceivedAt(snapshot);
+  const printStartMs = Date.parse(printStartObservedReceivedAt || "");
+  if (!Number.isFinite(printStartMs)) {
+    return null;
+  }
+  const candidates = [
+    snapshot?.sourceContinuityConfirmedAt,
+    snapshot?.operatorReconfirmedAt,
+    snapshot?.reconfirmedAt,
+    snapshot?.issuanceEvidence?.sourceContinuityConfirmedAt,
+    snapshot?.issuanceEvidence?.operatorReconfirmedAt,
+    snapshot?.issuanceEvidence?.reconfirmedAt,
+    snapshot?.spoolMount?.sourceContinuityConfirmedAt,
+    snapshot?.spoolMount?.operatorReconfirmedAt,
+    snapshot?.spoolMount?.reconfirmedAt,
+    snapshot?.spoolMount?.openedAt,
+    snapshot?.mount?.sourceContinuityConfirmedAt,
+    snapshot?.mount?.operatorReconfirmedAt,
+    snapshot?.mount?.reconfirmedAt,
+    snapshot?.mount?.openedAt,
+    snapshot?.openedAt,
+  ];
+  const validCandidates = candidates
+    .map(normalizeObservedTime)
+    .filter(Boolean)
+    .filter((candidate) => Date.parse(candidate) <= printStartMs)
+    .sort((a, b) => Date.parse(b) - Date.parse(a));
+  return validCandidates[0] || printStartObservedReceivedAt;
 }
 
 /**

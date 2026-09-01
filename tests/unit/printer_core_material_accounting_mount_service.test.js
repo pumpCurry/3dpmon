@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1576 (PR #440)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-02 06:58:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -37,6 +37,7 @@ import {
   createSpoolMountRecord,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
 import {
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
   normalizeStoredMaterialAccountingSpoolMountStore,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
 import {
@@ -159,6 +160,34 @@ function createOpenMount(overrides = {}) {
 }
 
 /**
+ * テスト用既存mountのcreation eventを生成する。
+ *
+ * @function createOpenMountEvent
+ * @param {Object} mount - SpoolMount record。
+ * @returns {Object} operator mount creation event。
+ */
+function createOpenMountEvent(mount) {
+  const payload = {
+    kind: "operator-mount",
+    operatorActionId: `action:${mount.mountOperationId}`,
+    operationId: mount.mountOperationId,
+    materialSourceId: mount.materialSourceId,
+    spoolId: mount.spoolId,
+  };
+  return {
+    eventId: `event:${mount.mountOperationId}`,
+    kind: "operator-mount",
+    operatorActionId: payload.operatorActionId,
+    operationId: mount.mountOperationId,
+    payload,
+    payloadDigest: createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+    recordRefs: [mount.mountId, mount.mountOperationId],
+    createdAt: mount.openedAt,
+    actor: mount.openedBy,
+  };
+}
+
+/**
  * mount済みserviceを生成する。
  *
  * @function createMountedService
@@ -172,7 +201,10 @@ function createMountedService(overrides = {}) {
   ];
   return createMaterialAccountingSpoolMountService(createServiceOptions({
     ...overrides,
-    store: normalizeStoredMaterialAccountingSpoolMountStore({ spoolMounts: mounts }),
+    store: normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: mounts,
+      events: mounts.map((mount) => createOpenMountEvent(mount)),
+    }),
     now: () => "2026-09-01T01:00:00.000Z",
   }));
 }

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1582 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1575 (PR #440)
- * @lastModified 2026-09-01 15:42:00
+ * @lastModified 2026-09-02 06:58:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -135,6 +135,73 @@ describe("MaterialAccountingSpoolMountStore", () => {
     expect(store.events).toEqual(stored.events);
     expect(store.storeDigest).toBe(createMaterialAccountingSpoolMountStoreDigest(store));
     expect(store.storeDigest).not.toBe("tampered");
+  });
+
+  it("creation eventがないmountはrestart idempotency authorityへ戻さず隔離する", () => {
+    const mount = createMount();
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "missing-creation-operation-event",
+        record: mount,
+      }),
+    ]));
+  });
+
+  it("operator-confirmedではないOPEN mountはactive authorityへ戻さず隔離する", () => {
+    const unverifiedMount = createMount({
+      mountOperationId: "mount-op:unverified",
+      verification: SPOOL_MOUNT_VERIFICATION.UNVERIFIED,
+    });
+    const legacyMount = createMount({
+      materialSourceId: "material-source:k2:1b",
+      spoolId: "spool:legacy",
+      mountOperationId: "mount-op:legacy",
+      verification: SPOOL_MOUNT_VERIFICATION.LEGACY_PROJECTED,
+    });
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [unverifiedMount, legacyMount],
+      events: [
+        createEvent({
+          eventId: "event:unverified",
+          operatorActionId: "action:mount:unverified",
+          operationId: unverifiedMount.mountOperationId,
+          recordRefs: [unverifiedMount.mountOperationId],
+          payload: {
+            kind: "operator-mount",
+            operatorActionId: "action:mount:unverified",
+            operationId: unverifiedMount.mountOperationId,
+            materialSourceId: unverifiedMount.materialSourceId,
+            spoolId: unverifiedMount.spoolId,
+          },
+        }),
+        createEvent({
+          eventId: "event:legacy",
+          operatorActionId: "action:mount:legacy",
+          operationId: legacyMount.mountOperationId,
+          recordRefs: [legacyMount.mountOperationId],
+          payload: {
+            kind: "operator-mount",
+            operatorActionId: "action:mount:legacy",
+            operationId: legacyMount.mountOperationId,
+            materialSourceId: legacyMount.materialSourceId,
+            spoolId: legacyMount.spoolId,
+          },
+        }),
+      ],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "spoolMount", reason: "unsupported-active-mount-verification", record: unverifiedMount }),
+      expect.objectContaining({ kind: "spoolMount", reason: "unsupported-active-mount-verification", record: legacyMount }),
+    ]));
   });
 
   it("invalid eventはoperation index authorityに残さずretainedUnsupportedEntriesへ隔離する", () => {

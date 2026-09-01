@@ -314,6 +314,10 @@ Gate 18.9I-3 では、`job.filamentInfo[]` が無いK2/CFS履歴でも、
 observed-usedまたはconfirmed-unused segmentが保存されていれば、ItemKeeper送信用
 `jobs[].filaments[]` へread-only投影する。これは外部送信用のprojectionであり、legacy `usageHistory`、
 `filamentSpools.remainingLengthMm`、3DPmon管理スプール残量、CFS物理状態は更新しない。
+この投影は、同一device ID、source-aware `debit.status:"eligible"`、および
+`itemKeeperProjection.status:"certified"` が揃うsegmentだけを対象にする。
+未certifiedのK2 `materialUsed` CSV source順序や、debit不適格segmentは
+ItemKeeperへper-spool true usageとして送らない。
 
 ## P0/P1 Tests
 

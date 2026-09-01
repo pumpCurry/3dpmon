@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1622 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 02:36:00
+ * @lastModified 2026-09-02 07:23:40
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -76,6 +76,9 @@ function toText(value) {
  * @returns {number|null} 有限数、またはnull。
  */
 function toFiniteNumberOrNull(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
 }
@@ -433,8 +436,9 @@ function resolvePrintJobId(record) {
  * segmentがItemKeeper projectionへ渡せる条件を満たすか判定する。
  *
  * 【詳細説明】
- * - 実際のItemKeeper連携はspoolId、deviceId、usageState、非負usedLengthMmを要求する。
- * - analyzerも同じ条件へ寄せ、pending/unknown/invalid segmentをready証跡として数えない。
+ * - 実際のItemKeeper連携はspoolId、deviceId一致、usageState、非負usedLengthMm、
+ *   およびdebit eligible証跡を要求する。
+ * - analyzerも同じ条件へ寄せ、pending/unknown/invalid/blocked segmentをready証跡として数えない。
  *
  * @private
  * @function isItemKeeperEligibleSegment
@@ -446,16 +450,20 @@ function isItemKeeperEligibleSegment(segment, deviceId) {
   const segmentDeviceId = toText(segment?.deviceId);
   const usageState = toText(segment?.usageState);
   const usedLengthMm = toFiniteNumberOrNull(segment?.usedLengthMm);
+  const debitStatus = toText(segment?.debit?.status);
+  const itemKeeperProjectionStatus = toText(segment?.itemKeeperProjection?.status);
   if (!segment || typeof segment !== "object") {
     return false;
   }
-  if (deviceId && segmentDeviceId !== deviceId) {
+  if (!deviceId || !segmentDeviceId || segmentDeviceId !== deviceId) {
     return false;
   }
   return Boolean(
     resolvePrintJobId(segment) &&
     toText(segment.spoolId) &&
     ["observed-used", "confirmed-unused"].includes(usageState) &&
+    debitStatus === "eligible" &&
+    itemKeeperProjectionStatus === "certified" &&
     usedLengthMm !== null &&
     usedLengthMm >= 0
   );
@@ -481,7 +489,7 @@ function findItemKeeperEligibleSegmentsForSource(source, segments, deviceId, sna
     snapshots
       .filter((snapshot) => {
         const snapshotDeviceId = toText(snapshot.deviceId);
-        return !snapshotDeviceId || !deviceId || snapshotDeviceId === deviceId;
+        return Boolean(deviceId && snapshotDeviceId && snapshotDeviceId === deviceId);
       })
       .map(resolvePrintJobId)
       .filter(Boolean)

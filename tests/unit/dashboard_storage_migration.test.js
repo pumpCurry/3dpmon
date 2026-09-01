@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1621 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-02 02:08:00
+ * @lastModified 2026-09-02 07:45:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -940,7 +940,7 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.usageHistory).toEqual([{ host: "K2Pro-69E7", spoolId: "legacy-single-spool", usedMm: 10 }]);
   });
 
-  it('Gate18.9H: materialAccountingSpoolMountStore は複数source割当を往復しlegacyへ投影しない', () => {
+  it('Gate18.9H: localStorage fallback restoreはSpoolMount storeをactive authorityへ復元しない', () => {
     monitorData.filamentSpools = [
       { id: "legacy-spool", remainingLengthMm: 100000, updatedAt: 100 },
       { id: "spool-031", remainingLengthMm: 235800, updatedAt: 100 },
@@ -983,14 +983,8 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
 
     expect(monitorData.materialAccountingSpoolMountStore).toMatchObject({
       authority: "material-accounting-spool-mount-store",
-      spoolMounts: [
-        { materialSourceId: "source:k2:cfs:1a", spoolId: "spool-031", status: SPOOL_MOUNT_STATUS.OPEN },
-        { materialSourceId: "source:k2:cfs:1b", spoolId: "spool-002", status: SPOOL_MOUNT_STATUS.OPEN },
-      ],
-      events: [
-        { operatorActionId: "action:k2:1a:031" },
-        { operatorActionId: "action:k2:1b:002" },
-      ],
+      spoolMounts: [],
+      events: [],
       invariants: {
         legacyHostSpoolMapWrites: false,
         legacyUsageHistoryWrites: false,
@@ -1009,7 +1003,7 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     expect(monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId).toEqual({});
   });
 
-  it('Gate18.9H: importAllData はdivergent non-empty SpoolMount storeをfirst-winせず隔離する', async () => {
+  it('Gate18.9H: localStorage fallback importはdivergent SpoolMount storeをactive authorityへ反映しない', async () => {
     monitorData.filamentSpools = [
       { id: "spool-031", remainingLengthMm: 235800 },
       { id: "spool-002", remainingLengthMm: 330000 },
@@ -1042,23 +1036,13 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
       "source:k2:cfs:1a",
       "source:k2:cfs:1b",
     ]);
-    expect(monitorData.materialAccountingSpoolMountStore.conflicts).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "spool-mount-store-import-conflict",
-        reason: "divergent-non-empty-spool-mount-store",
-      }),
-    ]));
-    expect(monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: "spoolMountStore",
-        reason: "divergent-non-empty-spool-mount-store",
-      }),
-    ]));
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual([]);
     expect(monitorData.hostSpoolMap).toEqual({});
     expect(monitorData.usageHistory).toEqual([]);
   });
 
-  it('Gate18.9H: importAllData はlegacy hostSpoolMapと衝突するUniversal mountをactive authorityから隔離する', async () => {
+  it('Gate18.9H: localStorage fallback importはlegacy hostSpoolMapと衝突するUniversal mountをactive authorityへ反映しない', async () => {
     monitorData.hostSpoolMap = { "K1Max-4A1B": "spool-031" };
     monitorData.filamentSpools = [
       { id: "spool-031", remainingLengthMm: 235800 },
@@ -1069,37 +1053,14 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
       materialAccountingSpoolMountStore: createSpoolMountStorageFixture(),
     });
 
-    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([
-      expect.objectContaining({
-        materialSourceId: "source:k2:cfs:1b",
-        spoolId: "spool-002",
-        status: SPOOL_MOUNT_STATUS.OPEN,
-      }),
-    ]);
-    expect(monitorData.materialAccountingSpoolMountStore.events).toEqual([
-      expect.objectContaining({ operatorActionId: "action:k2:1b:002" }),
-    ]);
-    expect(monitorData.materialAccountingSpoolMountStore.conflicts).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "spool-mount-cross-backend-conflict",
-        reason: "legacy-spool-backend-conflict",
-        spoolId: "spool-031",
-      }),
-    ]));
-    expect(monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: "spoolMount",
-        reason: "legacy-spool-backend-conflict",
-      }),
-      expect.objectContaining({
-        kind: "event",
-        reason: "orphan-event-record-ref",
-      }),
-    ]));
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.events).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual([]);
     expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool-031" });
   });
 
-  it('Gate18.9H: restore/import reconciliation はCLOSED Universal mount履歴をlegacy現在装着と衝突扱いしない', async () => {
+  it('Gate18.9H: localStorage fallback importはCLOSED Universal mount履歴もactive authorityへ反映しない', async () => {
     const closedMount = createSpoolMountRecord({
       mountId: "mount:k2:closed:031",
       materialSourceId: "source:k2:cfs:closed",
@@ -1126,13 +1087,7 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
       }),
     });
 
-    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([
-      expect.objectContaining({
-        mountId: "mount:k2:closed:031",
-        spoolId: "spool-031",
-        status: SPOOL_MOUNT_STATUS.CLOSED,
-      }),
-    ]);
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
     expect(monitorData.materialAccountingSpoolMountStore.conflicts).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
         reason: "legacy-spool-backend-conflict",

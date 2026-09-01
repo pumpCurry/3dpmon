@@ -7,6 +7,10 @@
  *
  * 依存モジュールは全て vi.doMock でモックする（dashboard_notification_manager は
  * モジュール読込時に document へ触れるため node 環境では必ずモックすること）。
+ *
+ * @version 1.390.1624 (PR #440)
+ * @since 1.390.0 (Initial)
+ * @lastModified 2026-09-02 07:23:40
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
@@ -203,6 +207,7 @@ describe("buildFilaments", () => {
       {
         segmentId: "seg:t1b",
         printJobId: "8",
+        deviceId: "serial:k2-a",
         spoolId: "s2",
         mountId: "mount:1b",
         materialSourceId: "source:1b",
@@ -210,11 +215,14 @@ describe("buildFilaments", () => {
         usedLengthMm: 6543,
         usageState: "observed-used",
         confidence: "high",
+        debit: { status: "eligible", canDebit: true, reasons: [] },
+        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 1
       },
       {
         segmentId: "seg:t1a",
         printJobId: "8",
+        deviceId: "serial:k2-a",
         spoolId: "s1",
         mountId: "mount:1a",
         materialSourceId: "source:1a",
@@ -222,11 +230,16 @@ describe("buildFilaments", () => {
         usedLengthMm: 3210,
         usageState: "observed-used",
         confidence: "high",
+        debit: { status: "eligible", canDebit: true, reasons: [] },
+        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 0
       }
     );
 
-    const fil = ik.buildFilaments(job({ id: 8, materialUsedMm: 9753, filamentInfo: [] }));
+    const fil = ik.buildFilaments(
+      job({ id: 8, materialUsedMm: 9753, filamentInfo: [] }),
+      { deviceId: "serial:k2-a" }
+    );
 
     expect(fil).toHaveLength(2);
     expect(fil.map(f => [f.spoolId, f.usedMm, f.materialSourceId, f.protocolToolAlias])).toEqual([
@@ -262,6 +275,8 @@ describe("buildFilaments", () => {
         usedLengthMm: 3210,
         usageState: "observed-used",
         confidence: "high",
+        debit: { status: "eligible", canDebit: true, reasons: [] },
+        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 0
       },
       {
@@ -276,6 +291,8 @@ describe("buildFilaments", () => {
         usedLengthMm: 6543,
         usageState: "observed-used",
         confidence: "high",
+        debit: { status: "eligible", canDebit: true, reasons: [] },
+        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
         order: 0
       }
     );
@@ -289,6 +306,127 @@ describe("buildFilaments", () => {
     ]);
     expect(deviceB.jobs[0].filaments.map(f => [f.spoolId, f.usedMm, f.materialSourceId])).toEqual([
       ["s2", 6543, "source:b"]
+    ]);
+  });
+  it("Printer Core deviceId未観測時は共有print binding segmentを拾わずlegacy fallbackに戻す", () => {
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push({
+      segmentId: "seg:foreign",
+      printJobId: "89",
+      printPlanId: "plan:foreign",
+      deviceId: "serial:k2-foreign",
+      spoolId: "s2",
+      mountId: "mount:foreign",
+      materialSourceId: "source:foreign",
+      protocolToolAlias: "T1B",
+      usedLengthMm: 6543,
+      usageState: "observed-used",
+      confidence: "high",
+      debit: { status: "eligible", canDebit: true, reasons: [] },
+      order: 0
+    });
+
+    const fil = ik.buildFilaments(
+      job({ id: 89, filamentId: "s1", materialUsedMm: 500, filamentInfo: [] }),
+      {}
+    );
+
+    expect(fil).toHaveLength(1);
+    expect(fil[0]).toMatchObject({ spoolId: "s1", usedMm: 500 });
+    expect(fil[0]).not.toHaveProperty("materialSourceId");
+    expect(fil[0]).not.toHaveProperty("protocolToolAlias");
+  });
+  it("print binding segmentはdebit eligibleでなければItemKeeperへspool帰属しない", () => {
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push({
+      segmentId: "seg:blocked",
+      printJobId: "90",
+      printPlanId: "plan:blocked",
+      deviceId: "serial:k2-a",
+      spoolId: "s2",
+      mountId: "mount:blocked",
+      materialSourceId: "source:blocked",
+      protocolToolAlias: "T1B",
+      usedLengthMm: 6543,
+      usageState: "observed-used",
+      confidence: "high",
+      debit: { status: "blocked", canDebit: false, reasons: ["physical-discontinuity"] },
+      order: 0
+    });
+
+    const fil = ik.buildFilaments(
+      job({ id: 90, filamentId: "s1", materialUsedMm: 500, filamentInfo: [] }),
+      { deviceId: "serial:k2-a" }
+    );
+
+    expect(fil).toEqual([]);
+  });
+  it("live certificationが無いprint binding segmentはItemKeeperへsource別投影しない", () => {
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push({
+      segmentId: "seg:uncertified",
+      printJobId: "92",
+      printPlanId: "plan:uncertified",
+      deviceId: "serial:k2-a",
+      spoolId: "s2",
+      mountId: "mount:uncertified",
+      materialSourceId: "source:uncertified",
+      protocolToolAlias: "T1B",
+      usedLengthMm: 6543,
+      usageState: "observed-used",
+      confidence: "high",
+      debit: { status: "eligible", canDebit: true, reasons: [] },
+      order: 0
+    });
+
+    const fil = ik.buildFilaments(
+      job({ id: 92, materialUsedMm: 6543, filamentInfo: [] }),
+      { deviceId: "serial:k2-a" }
+    );
+
+    expect(fil).toEqual([]);
+  });
+  it("eligible print binding segmentはlegacy filamentInfoより優先してItemKeeperへ投影する", () => {
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(
+      {
+        segmentId: "seg:universal-a",
+        printJobId: "91",
+        printPlanId: "plan:universal",
+        deviceId: "serial:k2-a",
+        spoolId: "s1",
+        mountId: "mount:universal-a",
+        materialSourceId: "source:1a",
+        protocolToolAlias: "T1A",
+        usedLengthMm: 3210,
+        usageState: "observed-used",
+        confidence: "high",
+        debit: { status: "eligible", canDebit: true, reasons: [] },
+        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
+        order: 0
+      },
+      {
+        segmentId: "seg:universal-b",
+        printJobId: "91",
+        printPlanId: "plan:universal",
+        deviceId: "serial:k2-a",
+        spoolId: "s2",
+        mountId: "mount:universal-b",
+        materialSourceId: "source:1b",
+        protocolToolAlias: "T1B",
+        usedLengthMm: 6543,
+        usageState: "observed-used",
+        confidence: "high",
+        debit: { status: "eligible", canDebit: true, reasons: [] },
+        itemKeeperProjection: { status: "certified", evidence: "unit-test" },
+        order: 1
+      }
+    );
+
+    const fil = ik.buildFilaments(
+      job({ id: 91, filamentInfo: [{ spoolId: "legacy-only", usedMm: 9753 }] }),
+      { deviceId: "serial:k2-a" }
+    );
+
+    expect(fil.map(f => [f.spoolId, f.usedMm, f.materialSourceId])).toEqual([
+      ["s1", 3210, "source:1a"],
+      ["s2", 6543, "source:1b"],
     ]);
   });
   it("§6.6 必須フィールドが揃う", () => {

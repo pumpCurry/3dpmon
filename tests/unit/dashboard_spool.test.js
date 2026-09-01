@@ -9,9 +9,9 @@
  * - getMaterialDensity
  * - buildSpoolAnalytics
  *
- * @version 1.390.1588 (PR #440)
+ * @version 1.390.1624 (PR #440)
  * @since   1.390.0 (Initial)
- * @lastModified 2026-09-01 18:35:00
+ * @lastModified 2026-09-02 07:45:00
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -117,6 +117,64 @@ const {
 const {
   reserveUniversalSpoolAssignment,
 } = await import('../../3dp_lib/printer_core/dashboard_material_accounting_spool_assignment_guard.js');
+const {
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js');
+
+/**
+ * Universal OPEN SpoolMountとcreation eventを同時に設定する。
+ *
+ * 【詳細説明】
+ * - Gate 18.9HではOPEN mountをactive authorityへ復元するために、
+ *   operator-confirmed mount本体だけでなく、対応するcreation operation eventも必須にする。
+ * - legacy hostSpoolMapとの排他テストでは、production store normalization後もOPEN mountが
+ *   有効に残るfixtureを使う必要があるため、mount/eventを常にペアで作る。
+ *
+ * @function setUniversalOpenMount
+ * @param {string} spoolId - 3DPmon管理スプールID。
+ * @param {Object=} options - fixtureオプション。
+ * @param {string=} options.materialSourceId - MaterialSource ID。
+ * @param {string=} options.mountId - mount ID。
+ * @param {string=} options.mountOperationId - mount operation ID。
+ * @param {string=} options.openedAt - mount開始時刻。
+ * @returns {Object} 作成したSpoolMount record。
+ */
+function setUniversalOpenMount(spoolId, options = {}) {
+  const materialSourceId = options.materialSourceId || 'source:k2:cfs:1a';
+  const mountId = options.mountId || `mount:k2:1a:${spoolId}`;
+  const mountOperationId = options.mountOperationId || `operation:k2:1a:${spoolId}`;
+  const operatorActionId = options.operatorActionId || `action:k2:1a:${spoolId}`;
+  const mount = createSpoolMountRecord({
+    mountId,
+    materialSourceId,
+    spoolId,
+    status: SPOOL_MOUNT_STATUS.OPEN,
+    openedAt: options.openedAt || '2026-09-01T04:00:00.000Z',
+    mountOperationId,
+    verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+    sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+  });
+  const payload = {
+    kind: 'operator-mount',
+    operatorActionId,
+    operationId: mountOperationId,
+    materialSourceId,
+    spoolId,
+  };
+  monitorData.materialAccountingSpoolMountStore.spoolMounts = [mount];
+  monitorData.materialAccountingSpoolMountStore.events = [{
+    eventId: `event:${operatorActionId}`,
+    kind: 'operator-mount',
+    operatorActionId,
+    operationId: mountOperationId,
+    payload,
+    payloadDigest: createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+    recordRefs: [mount.mountId, mount.mountOperationId],
+    createdAt: mount.openedAt,
+    actor: 'operator',
+  }];
+  return mount;
+}
 
 // =============================================
 // legacy hostSpoolMap と Universal SpoolMount の排他
@@ -156,18 +214,7 @@ describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
   });
 
   it('Universal OPEN mount済みspoolはlegacy setCurrentSpoolIdで二重装着しない', () => {
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
-      ...createSpoolMountRecord({
-        mountId: 'mount:k2:1a:S1',
-        materialSourceId: 'source:k2:cfs:1a',
-        spoolId: 'S1',
-        status: SPOOL_MOUNT_STATUS.OPEN,
-        openedAt: '2026-09-01T04:00:00.000Z',
-        mountOperationId: 'operation:k2:1a:S1',
-        verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-        sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
-      }),
-    }];
+    setUniversalOpenMount('S1');
 
     const ok = setCurrentSpoolId('S1', 'K1Max-4A1B');
 
@@ -198,16 +245,7 @@ describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
   });
 
   it('Universal OPEN mount済みspoolはdeleteSpoolで廃棄しない', () => {
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
-      mountId: 'mount:k2:1a:S1',
-      materialSourceId: 'source:k2:cfs:1a',
-      spoolId: 'S1',
-      status: SPOOL_MOUNT_STATUS.OPEN,
-      openedAt: '2026-09-01T04:00:00.000Z',
-      mountOperationId: 'operation:k2:1a:S1',
-      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
-    })];
+    setUniversalOpenMount('S1');
 
     deleteSpool('S1');
 
@@ -245,16 +283,7 @@ describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
       isInUse: true,
     }];
     monitorData.hostSpoolMap = { 'K2Pro-69E7': 'S1' };
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
-      mountId: 'mount:k2:1a:S1',
-      materialSourceId: 'source:k2:cfs:1a',
-      spoolId: 'S1',
-      status: SPOOL_MOUNT_STATUS.OPEN,
-      openedAt: '2026-09-01T04:00:00.000Z',
-      mountOperationId: 'operation:k2:1a:S1',
-      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
-    })];
+    setUniversalOpenMount('S1');
 
     const restored = revertInferredSpool('S1');
 
@@ -294,16 +323,7 @@ describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
       },
     ];
     monitorData.hostSpoolMap = { 'K1Max-4A1B': 'NEW' };
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
-      mountId: 'mount:k2:1a:OLD',
-      materialSourceId: 'source:k2:cfs:1a',
-      spoolId: 'OLD',
-      status: SPOOL_MOUNT_STATUS.OPEN,
-      openedAt: '2026-09-01T04:00:00.000Z',
-      mountOperationId: 'operation:k2:1a:OLD',
-      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
-    })];
+    setUniversalOpenMount('OLD');
 
     const restored = revertInferredSpool('NEW');
 
@@ -389,16 +409,7 @@ describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
   });
 
   it('Universal OPEN mount済みspoolはupdateSpoolのdeleted patchで廃棄しない', () => {
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
-      mountId: 'mount:k2:1a:S1',
-      materialSourceId: 'source:k2:cfs:1a',
-      spoolId: 'S1',
-      status: SPOOL_MOUNT_STATUS.OPEN,
-      openedAt: '2026-09-01T04:00:00.000Z',
-      mountOperationId: 'operation:k2:1a:S1',
-      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
-    })];
+    setUniversalOpenMount('S1');
 
     updateSpool('S1', { deleted: true, isDeleted: true, name: 'Renamed safely' });
 
@@ -408,16 +419,7 @@ describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
   });
 
   it('Universal OPEN mount済みspoolはupdateSpoolのid patchで識別子を変更しない', () => {
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
-      mountId: 'mount:k2:1a:S1',
-      materialSourceId: 'source:k2:cfs:1a',
-      spoolId: 'S1',
-      status: SPOOL_MOUNT_STATUS.OPEN,
-      openedAt: '2026-09-01T04:00:00.000Z',
-      mountOperationId: 'operation:k2:1a:S1',
-      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
-    })];
+    setUniversalOpenMount('S1');
 
     updateSpool('S1', { id: 'S1-renamed', spoolId: 'S1-renamed', name: 'Name can change' });
 
@@ -428,16 +430,7 @@ describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
   });
 
   it('Universal OPEN mount済みspoolはupdateSpoolの未確定lifecycle flagへ戻さない', () => {
-    monitorData.materialAccountingSpoolMountStore.spoolMounts = [createSpoolMountRecord({
-      mountId: 'mount:k2:1a:S1',
-      materialSourceId: 'source:k2:cfs:1a',
-      spoolId: 'S1',
-      status: SPOOL_MOUNT_STATUS.OPEN,
-      openedAt: '2026-09-01T04:00:00.000Z',
-      mountOperationId: 'operation:k2:1a:S1',
-      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
-    })];
+    setUniversalOpenMount('S1');
 
     updateSpool('S1', { inferred: true, isPending: true, name: 'Still confirmed' });
 
@@ -497,17 +490,9 @@ describe('getSpoolState', () => {
         },
       },
     };
+    const mount = setUniversalOpenMount('S1', { materialSourceId: 'cfs:1:slot:0' });
     monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
-      ...createSpoolMountRecord({
-        mountId: 'mount:k2:1a:S1',
-        materialSourceId: 'cfs:1:slot:0',
-        spoolId: 'S1',
-        status: SPOOL_MOUNT_STATUS.OPEN,
-        openedAt: '2026-09-01T04:00:00.000Z',
-        mountOperationId: 'operation:k2:1a:S1',
-        verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-        sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
-      }),
+      ...mount,
       sourceBindingAtOpen: {
         deviceId: 'serial:k2pro-69e7',
         materialSourceId: 'cfs:1:slot:0',
