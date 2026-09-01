@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingSpoolMountService}：SpoolMount serviceを生成
  *
- * @version 1.390.1578 (PR #440)
+ * @version 1.390.1579 (PR #440)
  * @since   1.390.1576 (PR #440)
- * @lastModified 2026-09-01 13:22:00
+ * @lastModified 2026-09-01 13:34:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9H-1bでmonitorData/shared storage/IndexedDB CASへ接続する
@@ -452,6 +452,9 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     const expectedDeviceId = toTrimmedString(request.expectedDeviceId);
     const spoolId = toTrimmedString(request.spoolId);
     const createdAt = now();
+    if (!operatorActionId) {
+      return createServiceResult({ ok: false, action: "mount", reason: "operator-action-id-required", store: currentStore });
+    }
     const sourceValidation = validateOperatorMaterialSource(request.materialSource, expectedDeviceId);
     if (!sourceValidation.ok) {
       return createServiceResult({
@@ -563,6 +566,9 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     const materialSourceId = toTrimmedString(request.materialSourceId);
     const expectedMountId = toTrimmedString(request.expectedMountId);
     const createdAt = now();
+    if (!operatorActionId) {
+      return createServiceResult({ ok: false, action: "unmount", reason: "operator-action-id-required", store: currentStore });
+    }
     const payload = {
       kind: "operator-unmount",
       operatorActionId,
@@ -641,6 +647,9 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     const newSpoolId = toTrimmedString(request.newSpoolId);
     const expectedDeviceId = toTrimmedString(request.materialSource?.deviceId);
     const createdAt = now();
+    if (!operatorActionId) {
+      return createServiceResult({ ok: false, action: "replace", reason: "operator-action-id-required", store: currentStore });
+    }
     const sourceValidation = validateOperatorMaterialSource(request.materialSource, expectedDeviceId);
     if (!sourceValidation.ok) {
       return createServiceResult({

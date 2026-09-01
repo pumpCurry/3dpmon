@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1576 (PR #440)
+ * @version 1.390.1579 (PR #440)
  * @since   1.390.1576 (PR #440)
- * @lastModified 2026-09-01 13:20:00
+ * @lastModified 2026-09-01 13:34:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -181,6 +181,38 @@ describe("MaterialAccountingSpoolMountService", () => {
     expect(result).toMatchObject({ ok: false, reason: "durable-cas-not-applied" });
     expect(result.store.spoolMounts).toEqual([]);
     expect(service.snapshot().spoolMounts).toEqual([]);
+  });
+
+  it("operatorActionIdが空のmount/replaceはevent無しauthorityを作らず拒否する", async () => {
+    const mountService = createMaterialAccountingSpoolMountService({
+      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+      managedSpools: [{ id: "spool:a" }, { id: "spool:b" }],
+      legacyHostSpoolMap: {},
+      persist: vi.fn(async () => ({ ok: true, casApplied: true })),
+      now: () => "2026-09-01T00:00:00.000Z",
+    });
+
+    const mountResult = await mountService.operatorMountSource({
+      ...createMountInput(),
+      operatorActionId: "",
+    });
+
+    expect(mountResult).toMatchObject({ ok: false, reason: "operator-action-id-required" });
+    expect(mountService.snapshot().spoolMounts).toEqual([]);
+    expect(mountService.snapshot().events).toEqual([]);
+
+    const replaceService = createMountedService();
+    const oldMount = replaceService.snapshot().spoolMounts[0];
+    const replaceResult = await replaceService.operatorReplaceSourceMount({
+      operatorActionId: "",
+      materialSource: createSource({ materialSourceId: "source:k2:cfs:1a" }),
+      expectedOldMountId: oldMount.mountId,
+      newSpoolId: "spool:b",
+      actor: "operator",
+    });
+
+    expect(replaceResult).toMatchObject({ ok: false, reason: "operator-action-id-required" });
+    expect(replaceService.snapshot().spoolMounts).toEqual([oldMount]);
   });
 
   it("legacy hostSpoolMapで装着中のspoolはUniversal mountへ重複装着しない", async () => {
