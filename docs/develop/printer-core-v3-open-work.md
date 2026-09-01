@@ -108,7 +108,10 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   帰属する。K2/Creality履歴の `materialUsed` CSVはPrintPlan assignment順に展開して
   `T1A` / `T1B` などのprotocol aliasへ対応付ける。caller supplied `completedAt` やusage payloadだけでは
   完了扱いにせず、device/session/generation境界と専用CAS `casApplied:true` を要求する。
-  この段階ではmanaged spool残量debit、legacy `usageHistory`、ItemKeeper projectionへはまだ接続しない。
+  Gate 18.9I-3では、このshadow storeに保存されたsource-specific / confirmed-unused
+  `JobMaterialSegment` をItemKeeper送信用 `jobs[].filaments[]` へread-only投影する。
+  ただしmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
+  への書き込みはまだ行わない。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
 - K2/CFS print semantics certification は未完。Gate9.5 で selected-source guard は確認しているが、command lifecycle完了と物理的なfilament供給/押出成功は別証跡として実機captureで確定する必要がある。
@@ -134,7 +137,7 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
 ## UIに繋ぐべきだが、まだ繋いでいないもの
 
 - CFS/CFS-C の操作候補hookは通常フィラメントパネルへ接続済み。ただしproduction有効化前はrenderer側`canSendCommands:false`とcomposition-bound scaffold側`enabled:false`で二重に閉じ、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。production有効化には、現在接続世代へbindされた`/info`、fresh topology、module-owned immutable certification registry登録済み証跡が必要で、保存済みtarget設定やUI clickごとのdispatcher/context/enabled注入だけでは有効化しない。
-- フィラメント管理のsource cardには、3DPmon管理スプールをsource別に設定/交換/割当解除するUIを接続済み。これはoperator-managed `SpoolMount` のみを更新し、CFSの物理操作や残量debit、ItemKeeper payload送信は行わない。
+- フィラメント管理のsource cardには、3DPmon管理スプールをsource別に設定/交換/割当解除するUIを接続済み。これはoperator-managed `SpoolMount` のみを更新し、CFSの物理操作や残量debitは行わない。ItemKeeper payloadは保存済みprint binding segmentがある場合だけread-only projectionとしてsource別usageを送れる。
 - CFS Debug / Certification panel は、選択状態の完全性と未解決physical command recovery blockerをpreflightとして表示する。保存済み復旧ラッチで `unresolvedByCommandId` のkeyとrecord内commandIdが食い違う場合は、どちらのIDで問い合わせてもintegrity quarantineとしてblockする。
 - CFS/CFS-C のslot選択状態は表示するが、ユーザーが3dpmon側でslotを選ぶ本番UIはまだ提供しない。
 - CFS/CFS-C の残量値は表示するが、手動スプール台帳の残量へ自動反映しない。

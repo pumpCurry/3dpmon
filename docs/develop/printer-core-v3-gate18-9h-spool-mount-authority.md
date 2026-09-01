@@ -309,6 +309,12 @@ multi-source job で total-only usage しかない場合は、source 数、色�
 表示順、経過時間から推測配分しない。`unattributedUsage` として隔離し、
 ItemKeeper へ per-spool true usage として送らない。
 
+Gate 18.9I-3 では、`job.filamentInfo[]` が無いK2/CFS履歴でも、
+`materialAccountingPrintBindingStore.jobMaterialSegments[]` にsource-specificまたは
+confirmed-unused segmentが保存されていれば、ItemKeeper送信用 `jobs[].filaments[]`
+へread-only投影する。これは外部送信用のprojectionであり、legacy `usageHistory`、
+`filamentSpools.remainingLengthMm`、3DPmon管理スプール残量、CFS物理状態は更新しない。
+
 ## P0/P1 Tests
 
 H-1a/H-1b では最低限以下を固定する。
@@ -406,6 +412,18 @@ Gate 18.9I-2:
   managed spool残量、legacy `usageHistory`、ItemKeeper projectionへは反映しない。
 - completion writeも専用CAS境界を必須とし、`casApplied:true` が無いpersist結果では
   runtime storeを進めない。
+
+Gate 18.9I-3:
+
+- ItemKeeper `buildFilaments()` は、既存 `job.filamentInfo[]` があるジョブでは従来通りそれを優先する。
+- `job.filamentInfo[]` が無いジョブでも、print binding storeに同じPrintJob IDの
+  source-specific / confirmed-unused `JobMaterialSegment` があれば、segment順で
+  `jobs[].filaments[]` へread-only投影する。
+- projectionは `spoolId` / `usedMm` に加えて、診断用に `materialSourceId`、
+  `mountId`、`protocolToolAlias`、`usageState`、`confidence` をadditive fieldとして送る。
+- total-only usageやspool未解決segmentは、per-spool true usageとしてItemKeeperへ送らない。
+- この接続は外部payload projectionだけであり、managed spool残量debit、legacy
+  `usageHistory`、`filamentSpools.remainingLengthMm` は更新しない。
 
 Gate 19 / 19.5:
 

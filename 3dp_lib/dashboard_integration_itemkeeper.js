@@ -18,6 +18,9 @@
  *
  * @author pumpCurry
  * @license BSD-3-Clause
+ * @version 1.390.1594 (PR #440)
+ * @since 1.390.0 (Initial)
+ * @lastModified 2026-09-01 19:08:32
  */
 
 "use strict";
@@ -222,6 +225,77 @@ export class ItemKeeperIntegration {
   }
 
   /**
+   * print binding storeから対象ジョブのsource別usage segmentを取得する。
+   *
+   * 【詳細説明】
+   * - Gate 18.9I以降のK2/CFSやK1+CFS-Cでは、1つのdeviceに複数MaterialSourceが存在する。
+   * - 既存の`job.filamentInfo[]`が無い履歴でも、print-start snapshotへ紐付いた
+   *   `JobMaterialSegment` があれば、ItemKeeperへsource別の使用量を投影できる。
+   * - ここではread-only projectionだけを行い、3DPmon側の残量やlegacy履歴は更新しない。
+   *
+   * @private
+   * @function _getPrintBindingSegmentsForJob
+   * @param {Object|null|undefined} job - printStore.history のレコード。
+   * @returns {Array<Object>} 対象ジョブに対応するsource別usage segment。
+   */
+  _getPrintBindingSegmentsForJob(job) {
+    const jobId = String(job?.id ?? job?.printId ?? "").trim();
+    if (!jobId) return [];
+    const store = monitorData.materialAccountingPrintBindingStore || {};
+    const segments = Array.isArray(store.jobMaterialSegments) ? store.jobMaterialSegments : [];
+    return segments
+      .filter(segment => {
+        if (!segment || String(segment.printJobId ?? "").trim() !== jobId) return false;
+        if (!segment.spoolId) return false;
+        const usageState = String(segment.usageState || "").trim();
+        return usageState === "source-specific" || usageState === "confirmed-unused";
+      })
+      .filter(segment => {
+        const usedLengthMm = Number(segment.usedLengthMm);
+        return Number.isFinite(usedLengthMm) && usedLengthMm >= 0;
+      })
+      .sort((a, b) => {
+        const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 0;
+        const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 0;
+        if (orderA !== orderB) return orderA - orderB;
+        return String(a.segmentId || "").localeCompare(String(b.segmentId || ""));
+      });
+  }
+
+  /**
+   * print binding segmentからItemKeeper用filaments[]を生成する。
+   *
+   * 【詳細説明】
+   * - `JobMaterialSegment`はprint-start時点のMaterialSource/SpoolMount snapshotへ基づくため、
+   *   完了後にCFS slotへ別スプールを割り当てても過去ジョブを再解釈しない。
+   * - ItemKeeper既存schemaの`spoolId`/`usedMm`へ合わせつつ、K2/CFS診断用に
+   *   `materialSourceId`、`mountId`、`protocolToolAlias`をadditive fieldとして添付する。
+   *
+   * @private
+   * @function _buildFilamentsFromPrintBinding
+   * @param {Object|null|undefined} job - printStore.history のレコード。
+   * @returns {Array<Object>} ItemKeeper `filaments[]` 互換entry。
+   */
+  _buildFilamentsFromPrintBinding(job) {
+    return this._getPrintBindingSegmentsForJob(job).map(segment => {
+      const spool = getSpoolById(segment.spoolId);
+      return {
+        ...this._filamentEntry(
+          { spoolId: segment.spoolId },
+          spool,
+          Number(segment.usedLengthMm) || 0,
+          job
+        ),
+        materialSourceId: segment.materialSourceId || "",
+        mountId: segment.mountId || "",
+        protocolToolAlias: segment.protocolToolAlias || "",
+        usageState: segment.usageState || "",
+        confidence: segment.confidence || ""
+      };
+    });
+  }
+
+  /**
    * 1 件の履歴レコード（filamentInfo[]）から filaments[] を組み立てる。
    * 真値は usedMm（mm）。usedGram は密度からの派生。spoolRemainMm は参考値。
    *
@@ -238,6 +312,10 @@ export class ItemKeeperIntegration {
         out.push(this._filamentEntry(f || {}, spool, usedMm, job));
       }
     } else {
+      const printBindingFilaments = this._buildFilamentsFromPrintBinding(job);
+      if (printBindingFilaments.length > 0) {
+        return printBindingFilaments;
+      }
       // filamentInfo 欠落の旧ジョブ: 単一スプール扱いでフォールバック
       const spoolId = job?.filamentId || null;
       const spool = spoolId ? getSpoolById(spoolId) : null;

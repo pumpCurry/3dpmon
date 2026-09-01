@@ -13,7 +13,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 /** モック monitorData */
 const mockMonitorData = {
   machines: {},
-  appSettings: { connectionTargets: [], itemkeeper: {} }
+  appSettings: { connectionTargets: [], itemkeeper: {} },
+  materialAccountingPrintBindingStore: {
+    schemaVersion: 1,
+    authority: "material-accounting-print-binding-store",
+    printStartSnapshots: [],
+    usageEvidence: [],
+    jobMaterialSegments: [],
+    ledgerEvents: [],
+    unattributedUsage: [],
+    operationsById: {},
+    retainedUnsupportedEntries: [],
+    invariants: {}
+  }
 };
 /** モックスプール辞書 */
 const mockSpools = {
@@ -94,6 +106,18 @@ function job(o) {
 beforeEach(() => {
   mockMonitorData.machines = {};
   mockMonitorData.appSettings = { connectionTargets: [], itemkeeper: {} };
+  mockMonitorData.materialAccountingPrintBindingStore = {
+    schemaVersion: 1,
+    authority: "material-accounting-print-binding-store",
+    printStartSnapshots: [],
+    usageEvidence: [],
+    jobMaterialSegments: [],
+    ledgerEvents: [],
+    unattributedUsage: [],
+    operationsById: {},
+    retainedUnsupportedEntries: [],
+    invariants: {}
+  };
 });
 
 describe("normalizeEndpoint", () => {
@@ -173,6 +197,42 @@ describe("buildFilaments", () => {
     expect(fil).toHaveLength(1);
     expect(fil[0].spoolId).toBe("s1");
     expect(fil[0].usedMm).toBe(500);
+  });
+  it("K2/CFSのsource別print binding segmentをItemKeeper filamentsへ投影する", () => {
+    mockMonitorData.materialAccountingPrintBindingStore.jobMaterialSegments.push(
+      {
+        segmentId: "seg:t1b",
+        printJobId: "8",
+        spoolId: "s2",
+        mountId: "mount:1b",
+        materialSourceId: "source:1b",
+        protocolToolAlias: "T1B",
+        usedLengthMm: 6543,
+        usageState: "source-specific",
+        confidence: "high",
+        order: 1
+      },
+      {
+        segmentId: "seg:t1a",
+        printJobId: "8",
+        spoolId: "s1",
+        mountId: "mount:1a",
+        materialSourceId: "source:1a",
+        protocolToolAlias: "T1A",
+        usedLengthMm: 3210,
+        usageState: "source-specific",
+        confidence: "high",
+        order: 0
+      }
+    );
+
+    const fil = ik.buildFilaments(job({ id: 8, materialUsedMm: 9753, filamentInfo: [] }));
+
+    expect(fil).toHaveLength(2);
+    expect(fil.map(f => [f.spoolId, f.usedMm, f.materialSourceId, f.protocolToolAlias])).toEqual([
+      ["s1", 3210, "source:1a", "T1A"],
+      ["s2", 6543, "source:1b", "T1B"]
+    ]);
   });
   it("§6.6 必須フィールドが揃う", () => {
     const fil = ik.buildFilaments(job({ id: 7, filamentInfo: [{ spoolId: "s1", usedMm: 100 }] }));

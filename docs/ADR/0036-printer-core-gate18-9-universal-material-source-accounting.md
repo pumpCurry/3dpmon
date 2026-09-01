@@ -505,8 +505,12 @@ Gate 18.9 must cover:
   supplied completion time or usage payload alone is insufficient.
 - K2/Creality `materialUsed` CSV is parsed in PrintPlan tool-assignment order
   and stored as source-specific JobMaterialSegment / shadow ledger evidence.
-  It does not mutate managed spool remaining, legacy `usageHistory`, or
-  ItemKeeper projection in Gate 18.9I-2.
+  It does not mutate managed spool remaining or legacy `usageHistory` in
+  Gate 18.9I-2.
+- ItemKeeper payload generation may read source-specific / confirmed-unused
+  JobMaterialSegment records as a projection source when `job.filamentInfo[]`
+  is absent. This projection sends per-spool `filaments[]` evidence without
+  mutating 3dpmon inventory state.
 - trusted print-start snapshots restored from same-process CAS store may regain
   debit eligibility only through module-owned attestation validation. Restart
   or import loses that process-local trust and must revalidate before debit.
