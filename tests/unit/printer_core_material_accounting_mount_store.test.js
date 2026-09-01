@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1578 (PR #440)
+ * @version 1.390.1581 (PR #440)
  * @since   1.390.1575 (PR #440)
- * @lastModified 2026-09-01 11:42:00
+ * @lastModified 2026-09-01 14:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -67,9 +67,11 @@ function createMount(overrides = {}) {
  * @returns {Object} operation event。
  */
 function createEvent(overrides = {}) {
+  const operationId = overrides.operationId || "mount-op:001";
   const payload = overrides.payload || {
     kind: "operator-mount",
     operatorActionId: "action:mount:1",
+    operationId,
     materialSourceId: "material-source:k2:1a",
     spoolId: "spool:silver-pla",
   };
@@ -77,10 +79,12 @@ function createEvent(overrides = {}) {
     eventId: overrides.eventId || "event:mount:1",
     kind: overrides.kind || "operator-mount",
     operatorActionId: overrides.operatorActionId || "action:mount:1",
-    operationId: overrides.operationId || "mount-op:001",
+    operationId,
     payloadDigest: overrides.payloadDigest || createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
     payload,
-    recordRefs: overrides.recordRefs || ["mount-op:001"],
+    recordRefs: Object.prototype.hasOwnProperty.call(overrides, "recordRefs")
+      ? overrides.recordRefs
+      : ["mount-op:001"],
     createdAt: overrides.createdAt || "2026-09-01T00:00:00.000Z",
     actor: overrides.actor || "operator",
   };
@@ -168,6 +172,50 @@ describe("MaterialAccountingSpoolMountStore", () => {
     ]));
   });
 
+  it("operator eventのrecordRefsが空ならphantom receiptとして隔離する", () => {
+    const mount = createMount();
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [
+        createEvent({
+          eventId: "event:phantom",
+          operationId: mount.mountOperationId,
+          recordRefs: [],
+        }),
+      ],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", reason: expect.stringContaining("missing-event-record-refs") }),
+    ]));
+  });
+
+  it("event外側とpayloadのkind/action/operationIdが不一致なら隔離する", () => {
+    const mount = createMount();
+    const mismatched = createEvent({
+      eventId: "event:mismatched",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+      payload: {
+        kind: "operator-mount",
+        operatorActionId: "action:other",
+        operationId: mount.mountOperationId,
+        materialSourceId: "material-source:k2:1a",
+        spoolId: "spool:silver-pla",
+      },
+    });
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [mismatched],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", reason: expect.stringContaining("payload-operatorActionId-mismatch") }),
+    ]));
+  });
+
   it("同じeventIdでpayload差異がある場合はfirst-winせず双方を隔離する", () => {
     const mount = createMount();
     const first = createEvent({
@@ -182,6 +230,7 @@ describe("MaterialAccountingSpoolMountStore", () => {
       payload: {
         kind: "operator-mount",
         operatorActionId: "action:mount:1",
+        operationId: mount.mountOperationId,
         materialSourceId: "material-source:k2:1a",
         spoolId: "spool:changed",
       },
@@ -197,6 +246,44 @@ describe("MaterialAccountingSpoolMountStore", () => {
       expect.objectContaining({
         type: "event-id-payload-conflict",
         reason: "same-event-id-different-payload",
+      }),
+    ]));
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", record: first }),
+      expect.objectContaining({ kind: "event", record: second }),
+    ]));
+  });
+
+  it("同じoperation semantic keyでpayload差異がある場合はfirst-winせず双方を隔離する", () => {
+    const mount = createMount();
+    const first = createEvent({
+      eventId: "event:semantic:first",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+    });
+    const second = createEvent({
+      eventId: "event:semantic:second",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+      payload: {
+        kind: "operator-mount",
+        operatorActionId: "action:mount:1",
+        operationId: mount.mountOperationId,
+        materialSourceId: "material-source:k2:1a",
+        spoolId: "spool:changed",
+      },
+    });
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [second, first],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "operation-semantic-payload-conflict",
+        reason: "same-operation-semantic-key-different-payload",
       }),
     ]));
     expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
@@ -240,7 +327,7 @@ describe("MaterialAccountingSpoolMountStore", () => {
     ]));
   });
 
-  it("closed adjacent intervalは復元し、overlapだけquarantineする", () => {
+  it("closed adjacent intervalは復元し、overlapした衝突集合はactive authorityから外す", () => {
     const closed = createMount({
       status: SPOOL_MOUNT_STATUS.CLOSED,
       closedAt: "2026-09-01T01:00:00.000Z",
@@ -265,7 +352,7 @@ describe("MaterialAccountingSpoolMountStore", () => {
       spoolMounts: [closed, adjacent, overlap],
     });
 
-    expect(store.spoolMounts).toEqual([closed, adjacent]);
+    expect(store.spoolMounts).toEqual([]);
     expect(store.conflicts).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: "source-interval-overlap-conflict",
@@ -274,8 +361,10 @@ describe("MaterialAccountingSpoolMountStore", () => {
     ]));
     expect(store.conflicts).toHaveLength(2);
     expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "spoolMount", record: closed }),
+      expect.objectContaining({ kind: "spoolMount", record: adjacent }),
       expect.objectContaining({ kind: "spoolMount", record: overlap }),
     ]));
-    expect(store.retainedUnsupportedEntries).toHaveLength(2);
+    expect(store.retainedUnsupportedEntries.length).toBeGreaterThanOrEqual(3);
   });
 });

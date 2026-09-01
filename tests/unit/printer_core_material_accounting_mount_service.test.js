@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1579 (PR #440)
+ * @version 1.390.1581 (PR #440)
  * @since   1.390.1576 (PR #440)
- * @lastModified 2026-09-01 13:34:00
+ * @lastModified 2026-09-01 14:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -70,10 +70,72 @@ function createSource(overrides = {}) {
     unitId: unit.unitId,
     kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
     locator,
+    identity: overrides.identity,
     materialSourceId: overrides.materialSourceId || "source:k2:cfs:1a",
     identityStrength: overrides.identityStrength || MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
     displayLabel: overrides.displayLabel || "1A",
   });
+}
+
+/**
+ * テスト用の現在値resolver群を生成する。
+ *
+ * @function createTrustedResolvers
+ * @param {Object} overrides - 上書き値。
+ * @returns {Object} serviceへ渡すresolver群。
+ */
+function createTrustedResolvers(overrides = {}) {
+  const sourceById = overrides.sourceById || new Map([
+    ["source:k2:cfs:1a", createSource({ materialSourceId: "source:k2:cfs:1a", slotIndex: 0 })],
+    ["source:k2:cfs:1b", createSource({ materialSourceId: "source:k2:cfs:1b", slotIndex: 1 })],
+  ]);
+  const spoolsRef = overrides.spoolsRef || { current: overrides.managedSpools || [{ id: "spool:a" }, { id: "spool:b" }] };
+  const legacyRef = overrides.legacyRef || { current: overrides.legacyHostSpoolMap || {} };
+  return {
+    spoolsRef,
+    legacyRef,
+    resolveMaterialSource: overrides.resolveMaterialSource || vi.fn((request) => sourceById.get(request.materialSourceId) || null),
+    resolveManagedSpool: overrides.resolveManagedSpool || vi.fn((request) => {
+      const target = String(request.spoolId || "").trim();
+      return (spoolsRef.current || []).find((spool) => String(spool?.id || spool?.spoolId || "").trim() === target) || null;
+    }),
+    resolveLegacyOccupancy: overrides.resolveLegacyOccupancy || vi.fn((request) => {
+      const target = String(request.spoolId || "").trim();
+      const expectedDeviceId = String(request.expectedDeviceId || "").trim();
+      for (const [host, spoolId] of Object.entries(legacyRef.current || {})) {
+        if (String(spoolId || "").trim() !== target) {
+          continue;
+        }
+        return {
+          host,
+          spoolId: target,
+          reason: String(host || "").trim() === expectedDeviceId
+            ? "legacy-spool-occupancy-requires-migration"
+            : "legacy-spool-already-mounted",
+        };
+      }
+      return null;
+    }),
+  };
+}
+
+/**
+ * テスト用service入力を生成する。
+ *
+ * @function createServiceOptions
+ * @param {Object} overrides - 上書き値。
+ * @returns {Object} service入力。
+ */
+function createServiceOptions(overrides = {}) {
+  const resolvers = createTrustedResolvers(overrides);
+  return {
+    store: overrides.store === undefined ? normalizeStoredMaterialAccountingSpoolMountStore(null) : overrides.store,
+    resolveMaterialSource: resolvers.resolveMaterialSource,
+    resolveManagedSpool: resolvers.resolveManagedSpool,
+    resolveLegacyOccupancy: resolvers.resolveLegacyOccupancy,
+    persist: overrides.persist || vi.fn(async () => ({ ok: true, casApplied: true })),
+    now: overrides.now || (() => "2026-09-01T00:00:00.000Z"),
+  };
 }
 
 /**
@@ -108,13 +170,11 @@ function createMountedService(overrides = {}) {
     createOpenMount(),
     ...(overrides.extraMounts || []),
   ];
-  return createMaterialAccountingSpoolMountService({
+  return createMaterialAccountingSpoolMountService(createServiceOptions({
+    ...overrides,
     store: normalizeStoredMaterialAccountingSpoolMountStore({ spoolMounts: mounts }),
-    managedSpools: overrides.managedSpools || [{ id: "spool:a" }, { id: "spool:b" }],
-    legacyHostSpoolMap: overrides.legacyHostSpoolMap || {},
-    persist: overrides.persist || vi.fn(async () => ({ ok: true, casApplied: true })),
     now: () => "2026-09-01T01:00:00.000Z",
-  });
+  }));
 }
 
 /**
@@ -128,6 +188,7 @@ function createMountInput(overrides = {}) {
   return {
     operatorActionId: overrides.operatorActionId || "action:mount:1",
     expectedDeviceId: overrides.expectedDeviceId || "device:k2",
+    materialSourceId: overrides.materialSourceId || "source:k2:cfs:1a",
     materialSource: overrides.materialSource || createSource({
       materialSourceId: overrides.materialSourceId || "source:k2:cfs:1a",
       deviceId: overrides.sourceDeviceId || "device:k2",
@@ -141,13 +202,10 @@ function createMountInput(overrides = {}) {
 describe("MaterialAccountingSpoolMountService", () => {
   it("operatorMountSourceはCAS成功後だけmountを返す", async () => {
     const persist = vi.fn(async () => ({ ok: true, casApplied: true }));
-    const service = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const service = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a", deleted: false }],
-      legacyHostSpoolMap: {},
       persist,
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
 
     const result = await service.operatorMountSource(createMountInput());
 
@@ -163,18 +221,19 @@ describe("MaterialAccountingSpoolMountService", () => {
       baseStoreDigest: expect.any(String),
       nextStore: expect.objectContaining({ spoolMounts: expect.any(Array) }),
       operation: expect.objectContaining({ kind: "operator-mount" }),
+      preconditions: expect.objectContaining({
+        managedSpool: expect.objectContaining({ spoolId: "spool:a", deleted: false }),
+        materialSource: expect.objectContaining({ materialSourceId: "source:k2:cfs:1a" }),
+      }),
     }));
     expect(service.snapshot().spoolMounts).toHaveLength(1);
   });
 
   it("casApplied falseならmountを成功扱いにせずcurrent storeを保持する", async () => {
-    const service = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const service = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a", deleted: false }],
-      legacyHostSpoolMap: {},
       persist: async () => ({ ok: true, casApplied: false }),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
 
     const result = await service.operatorMountSource(createMountInput());
 
@@ -184,13 +243,10 @@ describe("MaterialAccountingSpoolMountService", () => {
   });
 
   it("operatorActionIdが空のmount/replaceはevent無しauthorityを作らず拒否する", async () => {
-    const mountService = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const mountService = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a" }, { id: "spool:b" }],
-      legacyHostSpoolMap: {},
       persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
 
     const mountResult = await mountService.operatorMountSource({
       ...createMountInput(),
@@ -205,7 +261,8 @@ describe("MaterialAccountingSpoolMountService", () => {
     const oldMount = replaceService.snapshot().spoolMounts[0];
     const replaceResult = await replaceService.operatorReplaceSourceMount({
       operatorActionId: "",
-      materialSource: createSource({ materialSourceId: "source:k2:cfs:1a" }),
+      expectedDeviceId: "device:k2",
+      materialSourceId: "source:k2:cfs:1a",
       expectedOldMountId: oldMount.mountId,
       newSpoolId: "spool:b",
       actor: "operator",
@@ -215,14 +272,26 @@ describe("MaterialAccountingSpoolMountService", () => {
     expect(replaceService.snapshot().spoolMounts).toEqual([oldMount]);
   });
 
-  it("legacy hostSpoolMapで装着中のspoolはUniversal mountへ重複装着しない", async () => {
+  it("trusted MaterialSource resolverなしではcaller supplied sourceをauthorityとして扱わない", async () => {
     const service = createMaterialAccountingSpoolMountService({
       store: normalizeStoredMaterialAccountingSpoolMountStore(null),
-      managedSpools: [{ id: "spool:a", deleted: false }],
-      legacyHostSpoolMap: { "K1Max-4A1B": "spool:a" },
+      resolveManagedSpool: vi.fn(() => ({ id: "spool:a" })),
+      resolveLegacyOccupancy: vi.fn(() => null),
       persist: vi.fn(async () => ({ ok: true, casApplied: true })),
       now: () => "2026-09-01T00:00:00.000Z",
     });
+
+    const result = await service.operatorMountSource(createMountInput());
+
+    expect(result).toMatchObject({ ok: false, reason: "trusted-material-source-resolver-required" });
+    expect(result.store.spoolMounts).toEqual([]);
+  });
+
+  it("legacy hostSpoolMapで装着中のspoolはUniversal mountへ重複装着しない", async () => {
+    const service = createMaterialAccountingSpoolMountService(createServiceOptions({
+      managedSpools: [{ id: "spool:a", deleted: false }],
+      legacyHostSpoolMap: { "K1Max-4A1B": "spool:a" },
+    }));
 
     const result = await service.operatorMountSource(createMountInput());
 
@@ -231,13 +300,10 @@ describe("MaterialAccountingSpoolMountService", () => {
   });
 
   it("同じmulti-source deviceのlegacy spoolはmigration確認が必要な占有として拒否する", async () => {
-    const service = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const service = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a", deleted: false }],
       legacyHostSpoolMap: { "device:k2": "spool:a" },
-      persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
 
     const result = await service.operatorMountSource(createMountInput());
 
@@ -247,13 +313,10 @@ describe("MaterialAccountingSpoolMountService", () => {
 
   it("同一deviceの別sourceへ別spoolを同時openできる", async () => {
     const persist = vi.fn(async () => ({ ok: true, casApplied: true }));
-    const service = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const service = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a" }, { id: "spool:b" }],
-      legacyHostSpoolMap: {},
       persist,
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
 
     expect(await service.operatorMountSource(createMountInput({
       operatorActionId: "action:mount:1a",
@@ -273,13 +336,12 @@ describe("MaterialAccountingSpoolMountService", () => {
   });
 
   it("unknown identity sourceはmanual mountしない", async () => {
-    const service = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const service = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a", deleted: false }],
-      legacyHostSpoolMap: {},
-      persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+      sourceById: new Map([
+        ["source:k2:cfs:1a", createSource({ identityStrength: MATERIAL_IDENTITY_STRENGTH.UNKNOWN })],
+      ]),
+    }));
 
     const result = await service.operatorMountSource(createMountInput({
       identityStrength: MATERIAL_IDENTITY_STRENGTH.UNKNOWN,
@@ -290,13 +352,12 @@ describe("MaterialAccountingSpoolMountService", () => {
   });
 
   it("wrong-device sourceはmanual mountしない", async () => {
-    const service = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const service = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a", deleted: false }],
-      legacyHostSpoolMap: {},
-      persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+      sourceById: new Map([
+        ["source:k2:cfs:1a", createSource({ deviceId: "device:k2-b" })],
+      ]),
+    }));
 
     const result = await service.operatorMountSource(createMountInput({
       expectedDeviceId: "device:k2-a",
@@ -308,20 +369,12 @@ describe("MaterialAccountingSpoolMountService", () => {
   });
 
   it("missing/deleted managed spoolはmanual mountしない", async () => {
-    const missingService = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const missingService = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [],
-      legacyHostSpoolMap: {},
-      persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
-    const deletedService = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    }));
+    const deletedService = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a", deleted: true }],
-      legacyHostSpoolMap: {},
-      persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
 
     expect(await missingService.operatorMountSource(createMountInput())).toMatchObject({
       ok: false,
@@ -385,7 +438,8 @@ describe("MaterialAccountingSpoolMountService", () => {
 
     const result = await service.operatorReplaceSourceMount({
       operatorActionId: "action:replace",
-      materialSource: createSource({ materialSourceId: "source:k2:cfs:1a" }),
+      expectedDeviceId: "device:k2",
+      materialSourceId: "source:k2:cfs:1a",
       expectedOldMountId: oldMount.mountId,
       newSpoolId: "spool:b",
       actor: "operator",
@@ -405,7 +459,8 @@ describe("MaterialAccountingSpoolMountService", () => {
 
     const result = await service.operatorReplaceSourceMount({
       operatorActionId: "action:replace",
-      materialSource: createSource({ materialSourceId: "source:k2:cfs:1a" }),
+      expectedDeviceId: "device:k2",
+      materialSourceId: "source:k2:cfs:1a",
       expectedOldMountId: oldMount.mountId,
       newSpoolId: "spool:b",
       actor: "operator",
@@ -427,7 +482,8 @@ describe("MaterialAccountingSpoolMountService", () => {
 
     const result = await service.operatorReplaceSourceMount({
       operatorActionId: "action:replace",
-      materialSource: createSource({ materialSourceId: "source:k2:cfs:1a" }),
+      expectedDeviceId: "device:k2",
+      materialSourceId: "source:k2:cfs:1a",
       expectedOldMountId: oldMount.mountId,
       newSpoolId: "spool:b",
       actor: "operator",
@@ -438,21 +494,16 @@ describe("MaterialAccountingSpoolMountService", () => {
   });
 
   it("restart後も同operation同payloadはidempotentに扱う", async () => {
-    const firstService = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const firstService = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a" }],
-      legacyHostSpoolMap: {},
       persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
     const first = await firstService.operatorMountSource(createMountInput({ operatorActionId: "action:repeat" }));
-    const restoredService = createMaterialAccountingSpoolMountService({
+    const restoredService = createMaterialAccountingSpoolMountService(createServiceOptions({
       store: first.store,
       managedSpools: [{ id: "spool:a" }],
-      legacyHostSpoolMap: {},
       persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
 
     const retry = await restoredService.operatorMountSource(createMountInput({ operatorActionId: "action:repeat" }));
 
@@ -462,24 +513,19 @@ describe("MaterialAccountingSpoolMountService", () => {
   });
 
   it("restart後の同operation異payloadはconflictにする", async () => {
-    const firstService = createMaterialAccountingSpoolMountService({
-      store: normalizeStoredMaterialAccountingSpoolMountStore(null),
+    const firstService = createMaterialAccountingSpoolMountService(createServiceOptions({
       managedSpools: [{ id: "spool:a" }, { id: "spool:b" }],
-      legacyHostSpoolMap: {},
       persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
     const first = await firstService.operatorMountSource(createMountInput({
       operatorActionId: "action:repeat",
       spoolId: "spool:a",
     }));
-    const restoredService = createMaterialAccountingSpoolMountService({
+    const restoredService = createMaterialAccountingSpoolMountService(createServiceOptions({
       store: first.store,
       managedSpools: [{ id: "spool:a" }, { id: "spool:b" }],
-      legacyHostSpoolMap: {},
       persist: vi.fn(async () => ({ ok: true, casApplied: true })),
-      now: () => "2026-09-01T00:00:00.000Z",
-    });
+    }));
 
     const retry = await restoredService.operatorMountSource(createMountInput({
       operatorActionId: "action:repeat",
@@ -488,5 +534,89 @@ describe("MaterialAccountingSpoolMountService", () => {
 
     expect(retry).toMatchObject({ ok: false, reason: "operator-action-payload-conflict" });
     expect(restoredService.snapshot().spoolMounts).toEqual(first.store.spoolMounts);
+  });
+
+  it("managed spoolとlegacy占有はservice生成時snapshotではなく送信時resolver結果で判定する", async () => {
+    const spoolsRef = { current: [{ id: "spool:a", deleted: false }] };
+    const legacyRef = { current: {} };
+    const service = createMaterialAccountingSpoolMountService(createServiceOptions({
+      spoolsRef,
+      legacyRef,
+    }));
+
+    spoolsRef.current = [{ id: "spool:a", isDeleted: true }];
+    expect(await service.operatorMountSource(createMountInput({
+      operatorActionId: "action:deleted-at-send",
+    }))).toMatchObject({ ok: false, reason: "managed-spool-deleted" });
+
+    spoolsRef.current = [{ id: "spool:a", deleted: false }];
+    legacyRef.current = { "K1Max-4A1B": "spool:a" };
+    expect(await service.operatorMountSource(createMountInput({
+      operatorActionId: "action:occupied-at-send",
+    }))).toMatchObject({ ok: false, reason: "legacy-spool-already-mounted" });
+  });
+
+  it("replaceはrequest内sourceではなくresolverで得たdeviceをexpectedDeviceIdへ照合する", async () => {
+    const service = createMountedService({
+      sourceById: new Map([
+        ["source:k2:cfs:1a", createSource({ materialSourceId: "source:k2:cfs:1a", deviceId: "device:k2-b" })],
+      ]),
+    });
+    const oldMount = service.snapshot().spoolMounts[0];
+
+    const result = await service.operatorReplaceSourceMount({
+      operatorActionId: "action:replace:wrong-device",
+      expectedDeviceId: "device:k2-a",
+      materialSourceId: "source:k2:cfs:1a",
+      expectedOldMountId: oldMount.mountId,
+      newSpoolId: "spool:b",
+      actor: "operator",
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: "material-source-device-mismatch" });
+  });
+
+  it("source identity evidenceが変わるとsourceIdentityDigestAtOpenも変わる", async () => {
+    const firstPersist = vi.fn(async () => ({ ok: true, casApplied: true }));
+    const secondPersist = vi.fn(async () => ({ ok: true, casApplied: true }));
+    const firstService = createMaterialAccountingSpoolMountService(createServiceOptions({
+      persist: firstPersist,
+      sourceById: new Map([
+        ["source:k2:cfs:1a", createSource({
+          identity: { namespace: "material-source", parts: ["device:k2", "unit:k2:cfs:1", "cfs-slot", 0, "rfid-a"] },
+        })],
+      ]),
+    }));
+    const secondService = createMaterialAccountingSpoolMountService(createServiceOptions({
+      persist: secondPersist,
+      sourceById: new Map([
+        ["source:k2:cfs:1a", createSource({
+          identity: { namespace: "material-source", parts: ["device:k2", "unit:k2:cfs:1", "cfs-slot", 0, "rfid-b"] },
+        })],
+      ]),
+    }));
+
+    const first = await firstService.operatorMountSource(createMountInput({ operatorActionId: "action:identity:a" }));
+    const second = await secondService.operatorMountSource(createMountInput({ operatorActionId: "action:identity:b" }));
+
+    expect(first.record.sourceBindingAtOpen.identity).toEqual({
+      namespace: "material-source",
+      parts: ["device:k2", "unit:k2:cfs:1", "cfs-slot", 0, "rfid-a"],
+    });
+    expect(first.record.sourceBindingAtOpen.sourceIdentityDigest)
+      .not.toBe(second.record.sourceBindingAtOpen.sourceIdentityDigest);
+  });
+
+  it("durable writer例外はthrowせず失敗結果としてcurrent storeを保持する", async () => {
+    const service = createMaterialAccountingSpoolMountService(createServiceOptions({
+      persist: vi.fn(async () => {
+        throw new Error("disk failed");
+      }),
+    }));
+
+    const result = await service.operatorMountSource(createMountInput());
+
+    expect(result).toMatchObject({ ok: false, reason: "durable-writer-threw" });
+    expect(service.snapshot().spoolMounts).toEqual([]);
   });
 });

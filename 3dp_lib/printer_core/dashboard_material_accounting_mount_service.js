@@ -15,25 +15,25 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingSpoolMountService}：SpoolMount serviceを生成
  *
- * @version 1.390.1579 (PR #440)
+ * @version 1.390.1581 (PR #440)
  * @since   1.390.1576 (PR #440)
- * @lastModified 2026-09-01 13:34:00
+ * @lastModified 2026-09-01 14:58:00
  * -----------------------------------------------------------
  * @todo
- * - Gate 18.9H-1bでmonitorData/shared storage/IndexedDB CASへ接続する
+ * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
  */
 
 "use strict";
 
 import {
   MATERIAL_IDENTITY_STRENGTH,
-  SPOOL_MOUNT_STATUS,
   SPOOL_MOUNT_VERIFICATION,
   createSpoolMountRecord,
   validateMaterialSource,
 } from "./dashboard_material_accounting_contract.js";
 import {
   createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
 } from "./dashboard_data_schema_v3.js";
 import {
   createMaterialAccountingSpoolMountOperationPayloadDigest,
@@ -198,17 +198,15 @@ function buildOperationIndex(store) {
 }
 
 /**
- * managed spoolを取得する。
+ * managed spoolが削除済みか判定する。
  *
  * @private
- * @function findManagedSpool
- * @param {Array<Object>} managedSpools - managed spool配列。
- * @param {string} spoolId - spool ID。
- * @returns {Object|null} managed spool。
+ * @function isManagedSpoolDeleted
+ * @param {Object} spool - managed spool候補。
+ * @returns {boolean} 削除済みならtrue。
  */
-function findManagedSpool(managedSpools, spoolId) {
-  const target = toTrimmedString(spoolId);
-  return managedSpools.find((spool) => toTrimmedString(spool?.id || spool?.spoolId) === target) || null;
+function isManagedSpoolDeleted(spool) {
+  return spool?.deleted === true || spool?.isDeleted === true;
 }
 
 /**
@@ -235,35 +233,6 @@ function validateOperatorMaterialSource(materialSource, expectedDeviceId) {
 }
 
 /**
- * legacy hostSpoolMap側のspool占有を検査する。
- *
- * @private
- * @function findLegacySpoolOccupancy
- * @param {Object} legacyHostSpoolMap - legacy hostSpoolMap。
- * @param {string} spoolId - 検査対象spool ID。
- * @param {string} expectedDeviceId - 期待device ID。
- * @returns {{reason:string, host:string}|null} legacy占有情報。
- */
-function findLegacySpoolOccupancy(legacyHostSpoolMap, spoolId, expectedDeviceId) {
-  if (!legacyHostSpoolMap || typeof legacyHostSpoolMap !== "object") {
-    return null;
-  }
-  const target = toTrimmedString(spoolId);
-  for (const [host, mountedSpoolId] of Object.entries(legacyHostSpoolMap)) {
-    if (toTrimmedString(mountedSpoolId) !== target) {
-      continue;
-    }
-    return {
-      host,
-      reason: toTrimmedString(host) === toTrimmedString(expectedDeviceId)
-        ? "legacy-spool-occupancy-requires-migration"
-        : "legacy-spool-already-mounted",
-    };
-  }
-  return null;
-}
-
-/**
  * source binding evidenceを生成する。
  *
  * @private
@@ -279,6 +248,7 @@ function createSourceBindingAtOpen(source, resolvedAt) {
     unitId: source.unitId,
     kind: source.kind,
     identityStrength: source.identityStrength,
+    identity: cloneJsonValue(source.identity || null),
     locator: cloneJsonValue(source.locator || null),
     resolvedAt,
   };
@@ -290,8 +260,91 @@ function createSourceBindingAtOpen(source, resolvedAt) {
       binding.unitId,
       binding.kind,
       binding.identityStrength,
+      binding.identity,
       binding.locator,
     ]),
+  });
+}
+
+/**
+ * authority precondition用digestを生成する。
+ *
+ * @private
+ * @function createAuthorityPreconditionDigest
+ * @param {string} namespace - precondition namespace。
+ * @param {*} value - digest対象値。
+ * @returns {string} deterministic digest。
+ */
+function createAuthorityPreconditionDigest(namespace, value) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId(namespace, [
+    stableStringifyPrinterCoreV3Value(cloneJsonValue(value ?? null)),
+  ])}`;
+}
+
+/**
+ * managed spoolの送信時preconditionを生成する。
+ *
+ * @private
+ * @function createManagedSpoolPrecondition
+ * @param {Object} spool - resolverから得たmanaged spool。
+ * @returns {Object} managed spool precondition。
+ */
+function createManagedSpoolPrecondition(spool) {
+  const spoolId = toTrimmedString(spool?.id || spool?.spoolId);
+  const snapshot = cloneJsonValue(spool || null);
+  return deepFreezeJson({
+    spoolId,
+    digest: createAuthorityPreconditionDigest("material-accounting-managed-spool-precondition", snapshot),
+    deleted: isManagedSpoolDeleted(spool),
+  });
+}
+
+/**
+ * legacy占有の送信時preconditionを生成する。
+ *
+ * @private
+ * @function createLegacyOccupancyPrecondition
+ * @param {Object|null} occupancy - resolverから得たlegacy占有。
+ * @param {string} spoolId - 対象spool ID。
+ * @param {string} expectedDeviceId - 期待device ID。
+ * @returns {Object} legacy occupancy precondition。
+ */
+function createLegacyOccupancyPrecondition(occupancy, spoolId, expectedDeviceId) {
+  const snapshot = cloneJsonValue(occupancy || null);
+  return deepFreezeJson({
+    spoolId: toTrimmedString(spoolId),
+    expectedDeviceId: toTrimmedString(expectedDeviceId),
+    occupied: Boolean(occupancy),
+    digest: createAuthorityPreconditionDigest("material-accounting-legacy-occupancy-precondition", snapshot),
+  });
+}
+
+/**
+ * durable CASへ渡すauthority precondition群を生成する。
+ *
+ * @private
+ * @function createCommitPreconditions
+ * @param {Object} input - precondition入力。
+ * @param {Object} input.materialSource - MaterialSource record。
+ * @param {Object} input.sourceBindingAtOpen - source binding evidence。
+ * @param {Object} input.spool - managed spool。
+ * @param {Object|null} input.legacyOccupancy - legacy occupancy。
+ * @param {string} input.expectedDeviceId - 期待device ID。
+ * @returns {Object} precondition群。
+ */
+function createCommitPreconditions(input = {}) {
+  return deepFreezeJson({
+    materialSource: {
+      deviceId: toTrimmedString(input.materialSource?.deviceId),
+      materialSourceId: toTrimmedString(input.materialSource?.materialSourceId),
+      sourceIdentityDigest: toTrimmedString(input.sourceBindingAtOpen?.sourceIdentityDigest),
+    },
+    managedSpool: createManagedSpoolPrecondition(input.spool),
+    legacyOccupancy: createLegacyOccupancyPrecondition(
+      input.legacyOccupancy,
+      input.spool?.id || input.spool?.spoolId,
+      input.expectedDeviceId,
+    ),
   });
 }
 
@@ -347,21 +400,50 @@ function appendEventToStore(store, event, mounts) {
  * @param {Object} baseStore - base store。
  * @param {Object} nextStore - next store。
  * @param {Object} operation - operation event。
+ * @param {Object|null=} preconditions - durable CAS直前に再検査するauthority precondition群。
  * @returns {Promise<{ok:boolean, reason:string, durable:Object|null}>} durable結果。
  */
-async function persistNextStore(persist, baseStore, nextStore, operation) {
+async function persistNextStore(persist, baseStore, nextStore, operation, preconditions = null) {
   if (typeof persist !== "function") {
     return { ok: false, reason: "durable-writer-required", durable: null };
   }
-  const durable = await persist({
-    baseStoreDigest: createMaterialAccountingSpoolMountStoreDigest(baseStore),
-    nextStore,
-    operation,
-  });
+  let durable = null;
+  try {
+    durable = await persist({
+      baseStoreDigest: createMaterialAccountingSpoolMountStoreDigest(baseStore),
+      nextStore,
+      operation,
+      preconditions: preconditions ? cloneJsonValue(preconditions) : null,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "durable-writer-threw",
+      durable: {
+        ok: false,
+        casApplied: false,
+        reason: "durable-writer-threw",
+        error: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
   if (!durable || durable.ok !== true || durable.casApplied !== true) {
     return { ok: false, reason: "durable-cas-not-applied", durable: durable || null };
   }
   return { ok: true, reason: "", durable };
+}
+
+/**
+ * resolver呼び出しを安全に実行する。
+ *
+ * @private
+ * @function callResolver
+ * @param {Function} resolver - resolver callback。
+ * @param {Object} request - resolver入力。
+ * @returns {Promise<*>} resolver結果。
+ */
+async function callResolver(resolver, request) {
+  return resolver(cloneJsonValue(request));
 }
 
 /**
@@ -390,8 +472,9 @@ function getRepositoryConflictReason(result) {
  * @function createMaterialAccountingSpoolMountService
  * @param {Object} input - service入力。
  * @param {Object=} input.store - 初期SpoolMount store。
- * @param {Array<Object>=} input.managedSpools - 3DPmon管理スプール一覧。
- * @param {Object=} input.legacyHostSpoolMap - legacy hostSpoolMap。
+ * @param {Function=} input.resolveMaterialSource - 現在観測MaterialSource resolver。
+ * @param {Function=} input.resolveManagedSpool - 現在managed spool resolver。
+ * @param {Function=} input.resolveLegacyOccupancy - 現在legacy占有resolver。
  * @param {Function=} input.persist - durable writer callback。
  * @param {Function=} input.now - 現在時刻関数。
  * @returns {Object} service API。
@@ -400,10 +483,9 @@ function getRepositoryConflictReason(result) {
  */
 export function createMaterialAccountingSpoolMountService(input = {}) {
   let currentStore = normalizeStoredMaterialAccountingSpoolMountStore(input.store);
-  const managedSpools = Array.isArray(input.managedSpools) ? input.managedSpools.map((spool) => cloneJsonValue(spool)) : [];
-  const legacyHostSpoolMap = input.legacyHostSpoolMap && typeof input.legacyHostSpoolMap === "object"
-    ? cloneJsonValue(input.legacyHostSpoolMap)
-    : {};
+  const resolveMaterialSource = typeof input.resolveMaterialSource === "function" ? input.resolveMaterialSource : null;
+  const resolveManagedSpool = typeof input.resolveManagedSpool === "function" ? input.resolveManagedSpool : null;
+  const resolveLegacyOccupancy = typeof input.resolveLegacyOccupancy === "function" ? input.resolveLegacyOccupancy : null;
   const persist = input.persist;
   const now = typeof input.now === "function" ? input.now : () => new Date().toISOString();
 
@@ -424,15 +506,107 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
    * @function commitNextStore
    * @param {Object} nextStore - 次store。
    * @param {Object} operation - operation event。
+   * @param {Object|null=} preconditions - durable CAS直前に再検査するauthority precondition群。
    * @returns {Promise<{ok:boolean, reason:string}>} commit結果。
    */
-  async function commitNextStore(nextStore, operation) {
-    const durable = await persistNextStore(persist, currentStore, nextStore, operation);
+  async function commitNextStore(nextStore, operation, preconditions = null) {
+    const durable = await persistNextStore(persist, currentStore, nextStore, operation, preconditions);
     if (!durable.ok) {
       return durable;
     }
     currentStore = normalizeStoredMaterialAccountingSpoolMountStore(nextStore);
     return durable;
+  }
+
+  /**
+   * trusted resolverからMaterialSourceを解決し検証する。
+   *
+   * @private
+   * @function resolveOperatorMaterialSource
+   * @param {Object} request - operator request。
+   * @param {string} action - 操作種別。
+   * @returns {Promise<{ok:boolean, reason:string, source:Object|null, errors:Array<string>}>} 解決結果。
+   */
+  async function resolveOperatorMaterialSource(request, action) {
+    if (typeof resolveMaterialSource !== "function") {
+      return { ok: false, reason: "trusted-material-source-resolver-required", source: null, errors: [] };
+    }
+    const materialSourceId = toTrimmedString(request.materialSourceId || request.materialSource?.materialSourceId);
+    if (!materialSourceId) {
+      return { ok: false, reason: "material-source-id-required", source: null, errors: [] };
+    }
+    const expectedDeviceId = toTrimmedString(request.expectedDeviceId);
+    const source = await callResolver(resolveMaterialSource, {
+      action,
+      materialSourceId,
+      expectedDeviceId,
+      operatorActionId: request.operatorActionId,
+    });
+    if (!source) {
+      return { ok: false, reason: "material-source-not-found", source: null, errors: [] };
+    }
+    const sourceValidation = validateOperatorMaterialSource(source, expectedDeviceId);
+    if (!sourceValidation.ok) {
+      return { ok: false, reason: sourceValidation.reason, source: null, errors: sourceValidation.errors };
+    }
+    return { ok: true, reason: "", source, errors: [] };
+  }
+
+  /**
+   * trusted resolverからmanaged spoolを解決し検証する。
+   *
+   * @private
+   * @function resolveOperatorManagedSpool
+   * @param {Object} request - operator request。
+   * @param {string} spoolId - managed spool ID。
+   * @param {string} action - 操作種別。
+   * @returns {Promise<{ok:boolean, reason:string, spool:Object|null}>} 解決結果。
+   */
+  async function resolveOperatorManagedSpool(request, spoolId, action) {
+    if (typeof resolveManagedSpool !== "function") {
+      return { ok: false, reason: "trusted-managed-spool-resolver-required", spool: null };
+    }
+    const spool = await callResolver(resolveManagedSpool, {
+      action,
+      spoolId,
+      expectedDeviceId: request.expectedDeviceId,
+      materialSourceId: request.materialSourceId || request.materialSource?.materialSourceId,
+      operatorActionId: request.operatorActionId,
+    });
+    if (!spool) {
+      return { ok: false, reason: "managed-spool-not-found", spool: null };
+    }
+    if (isManagedSpoolDeleted(spool)) {
+      return { ok: false, reason: "managed-spool-deleted", spool: null };
+    }
+    return { ok: true, reason: "", spool };
+  }
+
+  /**
+   * trusted resolverからlegacy占有を解決する。
+   *
+   * @private
+   * @function resolveOperatorLegacyOccupancy
+   * @param {Object} request - operator request。
+   * @param {string} spoolId - managed spool ID。
+   * @param {string} expectedDeviceId - 期待device ID。
+   * @param {string} action - 操作種別。
+   * @returns {Promise<{ok:boolean, reason:string, occupancy:Object|null}>} 解決結果。
+   */
+  async function resolveOperatorLegacyOccupancy(request, spoolId, expectedDeviceId, action) {
+    if (typeof resolveLegacyOccupancy !== "function") {
+      return { ok: false, reason: "trusted-legacy-occupancy-resolver-required", occupancy: null };
+    }
+    const occupancy = await callResolver(resolveLegacyOccupancy, {
+      action,
+      spoolId,
+      expectedDeviceId,
+      materialSourceId: request.materialSourceId || request.materialSource?.materialSourceId,
+      operatorActionId: request.operatorActionId,
+    });
+    return occupancy
+      ? { ok: false, reason: occupancy.reason || "legacy-spool-already-mounted", occupancy }
+      : { ok: true, reason: "", occupancy: null };
   }
 
   /**
@@ -442,7 +616,7 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
    * @param {Object} request - mount request。
    * @param {string} request.operatorActionId - operator action ID。
    * @param {string} request.expectedDeviceId - 期待device ID。
-   * @param {Object} request.materialSource - MaterialSource record。
+   * @param {string} request.materialSourceId - trusted resolverで解決するMaterialSource ID。
    * @param {string} request.spoolId - managed spool ID。
    * @param {string=} request.actor - actor。
    * @returns {Promise<Object>} service result。
@@ -450,48 +624,60 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
   async function operatorMountSource(request = {}) {
     const operatorActionId = toTrimmedString(request.operatorActionId);
     const expectedDeviceId = toTrimmedString(request.expectedDeviceId);
+    const materialSourceId = toTrimmedString(request.materialSourceId || request.materialSource?.materialSourceId);
     const spoolId = toTrimmedString(request.spoolId);
     const createdAt = now();
     if (!operatorActionId) {
       return createServiceResult({ ok: false, action: "mount", reason: "operator-action-id-required", store: currentStore });
     }
-    const sourceValidation = validateOperatorMaterialSource(request.materialSource, expectedDeviceId);
-    if (!sourceValidation.ok) {
+    const sourceResult = await resolveOperatorMaterialSource({
+      ...request,
+      materialSourceId,
+      expectedDeviceId,
+    }, "mount");
+    if (!sourceResult.ok) {
       return createServiceResult({
         ok: false,
         action: "mount",
-        reason: sourceValidation.reason,
+        reason: sourceResult.reason,
         store: currentStore,
-        errors: sourceValidation.errors,
+        errors: sourceResult.errors,
       });
     }
-    const spool = findManagedSpool(managedSpools, spoolId);
-    if (!spool) {
-      return createServiceResult({ ok: false, action: "mount", reason: "managed-spool-not-found", store: currentStore });
+    const source = sourceResult.source;
+    const spoolResult = await resolveOperatorManagedSpool({
+      ...request,
+      materialSourceId,
+      expectedDeviceId,
+    }, spoolId, "mount");
+    if (!spoolResult.ok) {
+      return createServiceResult({ ok: false, action: "mount", reason: spoolResult.reason, store: currentStore });
     }
-    if (spool.deleted === true) {
-      return createServiceResult({ ok: false, action: "mount", reason: "managed-spool-deleted", store: currentStore });
-    }
-    const legacyOccupancy = findLegacySpoolOccupancy(legacyHostSpoolMap, spoolId, expectedDeviceId);
-    if (legacyOccupancy) {
-      return createServiceResult({ ok: false, action: "mount", reason: legacyOccupancy.reason, store: currentStore });
+    const legacyResult = await resolveOperatorLegacyOccupancy({
+      ...request,
+      materialSourceId,
+      expectedDeviceId,
+    }, spoolId, expectedDeviceId, "mount");
+    if (!legacyResult.ok) {
+      return createServiceResult({ ok: false, action: "mount", reason: legacyResult.reason, store: currentStore });
     }
 
-    const sourceBindingAtOpen = createSourceBindingAtOpen(request.materialSource, createdAt);
-    const payload = {
-      kind: "operator-mount",
-      operatorActionId,
-      expectedDeviceId,
-      materialSourceId: request.materialSource.materialSourceId,
-      spoolId,
-      sourceBindingAtOpen,
-    };
+    const sourceBindingAtOpen = createSourceBindingAtOpen(source, createdAt);
     const operationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
       "mount",
       operatorActionId,
-      request.materialSource.materialSourceId,
+      source.materialSourceId,
       spoolId,
     ]);
+    const payload = {
+      kind: "operator-mount",
+      operatorActionId,
+      operationId,
+      expectedDeviceId,
+      materialSourceId: source.materialSourceId,
+      spoolId,
+      sourceBindingAtOpen,
+    };
     const existingOperation = evaluateExistingOperation(buildOperationIndex(currentStore), "operator-mount", operatorActionId, payload);
     if (existingOperation.status === "idempotent") {
       return createServiceResult({ ok: true, action: "idempotent", store: currentStore, operation: existingOperation.event });
@@ -504,21 +690,21 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
       ...createSpoolMountRecord({
         mountId: createPrinterCoreV3DeterministicId("spool-mount", [
           operationId,
-          request.materialSource.materialSourceId,
+          source.materialSourceId,
           spoolId,
           createdAt,
         ]),
-        materialSourceId: request.materialSource.materialSourceId,
+        materialSourceId: source.materialSourceId,
         spoolId,
         mountOperationId: operationId,
         openedAt: createdAt,
         openedBy: toTrimmedString(request.actor) || "operator",
         verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-        sourceIdentityStrengthAtOpen: request.materialSource.identityStrength,
+        sourceIdentityStrengthAtOpen: source.identityStrength,
       }),
       mountSubjectId: createPrinterCoreV3DeterministicId("spool-mount-subject", [
-        request.materialSource.deviceId,
-        request.materialSource.materialSourceId,
+        source.deviceId,
+        source.materialSourceId,
       ]),
       sourceBindingAtOpen,
     });
@@ -542,7 +728,13 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
       actor: request.actor,
     });
     const nextStore = appendEventToStore(currentStore, event, repository.toJSON().mounts);
-    const commit = await commitNextStore(nextStore, event);
+    const commit = await commitNextStore(nextStore, event, createCommitPreconditions({
+      materialSource: source,
+      sourceBindingAtOpen,
+      spool: spoolResult.spool,
+      legacyOccupancy: legacyResult.occupancy,
+      expectedDeviceId,
+    }));
     if (!commit.ok) {
       return createServiceResult({ ok: false, action: "mount", reason: commit.reason, store: currentStore, operation: event });
     }
@@ -569,18 +761,19 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     if (!operatorActionId) {
       return createServiceResult({ ok: false, action: "unmount", reason: "operator-action-id-required", store: currentStore });
     }
-    const payload = {
-      kind: "operator-unmount",
-      operatorActionId,
-      materialSourceId,
-      expectedMountId,
-      reason: toTrimmedString(request.reason) || "operator-unmount",
-    };
     const operationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
       "unmount",
       operatorActionId,
       expectedMountId,
     ]);
+    const payload = {
+      kind: "operator-unmount",
+      operatorActionId,
+      operationId,
+      materialSourceId,
+      expectedMountId,
+      reason: toTrimmedString(request.reason) || "operator-unmount",
+    };
     const existingOperation = evaluateExistingOperation(buildOperationIndex(currentStore), "operator-unmount", operatorActionId, payload);
     if (existingOperation.status === "idempotent") {
       return createServiceResult({ ok: true, action: "idempotent", store: currentStore, operation: existingOperation.event });
@@ -635,7 +828,8 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
    * @function operatorReplaceSourceMount
    * @param {Object} request - replace request。
    * @param {string} request.operatorActionId - operator action ID。
-   * @param {Object} request.materialSource - MaterialSource record。
+   * @param {string} request.expectedDeviceId - 期待device ID。
+   * @param {string} request.materialSourceId - trusted resolverで解決するMaterialSource ID。
    * @param {string} request.expectedOldMountId - UIが束縛した旧mount ID。
    * @param {string} request.newSpoolId - 新managed spool ID。
    * @param {string=} request.actor - actor。
@@ -645,48 +839,61 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     const operatorActionId = toTrimmedString(request.operatorActionId);
     const expectedOldMountId = toTrimmedString(request.expectedOldMountId);
     const newSpoolId = toTrimmedString(request.newSpoolId);
-    const expectedDeviceId = toTrimmedString(request.materialSource?.deviceId);
+    const expectedDeviceId = toTrimmedString(request.expectedDeviceId);
+    const materialSourceId = toTrimmedString(request.materialSourceId || request.materialSource?.materialSourceId);
     const createdAt = now();
     if (!operatorActionId) {
       return createServiceResult({ ok: false, action: "replace", reason: "operator-action-id-required", store: currentStore });
     }
-    const sourceValidation = validateOperatorMaterialSource(request.materialSource, expectedDeviceId);
-    if (!sourceValidation.ok) {
+    const sourceResult = await resolveOperatorMaterialSource({
+      ...request,
+      materialSourceId,
+      expectedDeviceId,
+    }, "replace");
+    if (!sourceResult.ok) {
       return createServiceResult({
         ok: false,
         action: "replace",
-        reason: sourceValidation.reason,
+        reason: sourceResult.reason,
         store: currentStore,
-        errors: sourceValidation.errors,
+        errors: sourceResult.errors,
       });
     }
-    const spool = findManagedSpool(managedSpools, newSpoolId);
-    if (!spool) {
-      return createServiceResult({ ok: false, action: "replace", reason: "managed-spool-not-found", store: currentStore });
+    const source = sourceResult.source;
+    const spoolResult = await resolveOperatorManagedSpool({
+      ...request,
+      materialSourceId,
+      expectedDeviceId,
+    }, newSpoolId, "replace");
+    if (!spoolResult.ok) {
+      return createServiceResult({ ok: false, action: "replace", reason: spoolResult.reason, store: currentStore });
     }
-    if (spool.deleted === true) {
-      return createServiceResult({ ok: false, action: "replace", reason: "managed-spool-deleted", store: currentStore });
+    const legacyResult = await resolveOperatorLegacyOccupancy({
+      ...request,
+      materialSourceId,
+      expectedDeviceId,
+    }, newSpoolId, expectedDeviceId, "replace");
+    if (!legacyResult.ok) {
+      return createServiceResult({ ok: false, action: "replace", reason: legacyResult.reason, store: currentStore });
     }
-    const legacyOccupancy = findLegacySpoolOccupancy(legacyHostSpoolMap, newSpoolId, expectedDeviceId);
-    if (legacyOccupancy) {
-      return createServiceResult({ ok: false, action: "replace", reason: legacyOccupancy.reason, store: currentStore });
-    }
-    const sourceBindingAtOpen = createSourceBindingAtOpen(request.materialSource, createdAt);
+    const sourceBindingAtOpen = createSourceBindingAtOpen(source, createdAt);
+    const replaceOperationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
+      "replace",
+      operatorActionId,
+      source.materialSourceId,
+      expectedOldMountId,
+      newSpoolId,
+    ]);
     const payload = {
       kind: "operator-replace",
       operatorActionId,
-      materialSourceId: request.materialSource.materialSourceId,
+      operationId: replaceOperationId,
+      expectedDeviceId,
+      materialSourceId: source.materialSourceId,
       expectedOldMountId,
       newSpoolId,
       sourceBindingAtOpen,
     };
-    const replaceOperationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
-      "replace",
-      operatorActionId,
-      request.materialSource.materialSourceId,
-      expectedOldMountId,
-      newSpoolId,
-    ]);
     const existingOperation = evaluateExistingOperation(buildOperationIndex(currentStore), "operator-replace", operatorActionId, payload);
     if (existingOperation.status === "idempotent") {
       return createServiceResult({ ok: true, action: "idempotent", store: currentStore, operation: existingOperation.event });
@@ -695,7 +902,7 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
       return createServiceResult({ ok: false, action: "replace", reason: "operator-action-payload-conflict", store: currentStore });
     }
     const repository = createSpoolMountRepository(currentStore.spoolMounts);
-    const currentMount = repository.getOpenMountForSource(request.materialSource.materialSourceId);
+    const currentMount = repository.getOpenMountForSource(source.materialSourceId);
     if (!currentMount) {
       return createServiceResult({ ok: false, action: "replace", reason: "open-mount-not-found", store: currentStore });
     }
@@ -720,28 +927,28 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
     const newMountOperationId = createPrinterCoreV3DeterministicId("material-accounting-spool-mount-operation", [
       "replace-open",
       replaceOperationId,
-      request.materialSource.materialSourceId,
+      source.materialSourceId,
       newSpoolId,
     ]);
     const newMount = deepFreezeJson({
       ...createSpoolMountRecord({
         mountId: createPrinterCoreV3DeterministicId("spool-mount", [
           newMountOperationId,
-          request.materialSource.materialSourceId,
+          source.materialSourceId,
           newSpoolId,
           createdAt,
         ]),
-        materialSourceId: request.materialSource.materialSourceId,
+        materialSourceId: source.materialSourceId,
         spoolId: newSpoolId,
         mountOperationId: newMountOperationId,
         openedAt: createdAt,
         openedBy: toTrimmedString(request.actor) || "operator",
         verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
-        sourceIdentityStrengthAtOpen: request.materialSource.identityStrength,
+        sourceIdentityStrengthAtOpen: source.identityStrength,
       }),
       mountSubjectId: createPrinterCoreV3DeterministicId("spool-mount-subject", [
-        request.materialSource.deviceId,
-        request.materialSource.materialSourceId,
+        source.deviceId,
+        source.materialSourceId,
       ]),
       sourceBindingAtOpen,
     });
@@ -764,7 +971,13 @@ export function createMaterialAccountingSpoolMountService(input = {}) {
       actor: request.actor,
     });
     const nextStore = appendEventToStore(currentStore, event, repository.toJSON().mounts);
-    const commit = await commitNextStore(nextStore, event);
+    const commit = await commitNextStore(nextStore, event, createCommitPreconditions({
+      materialSource: source,
+      sourceBindingAtOpen,
+      spool: spoolResult.spool,
+      legacyOccupancy: legacyResult.occupancy,
+      expectedDeviceId,
+    }));
     if (!commit.ok) {
       return createServiceResult({ ok: false, action: "replace", reason: commit.reason, store: currentStore, operation: event });
     }

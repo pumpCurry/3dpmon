@@ -90,6 +90,7 @@ Contract:
 - [x] Only after CAS success, update `monitorData.materialAccountingSpoolMountStore` to the committed normalized store.
 - [x] Do not call `saveUnifiedStorageDurably()` as a substitute for CAS.
 - [x] Do not mutate `hostSpoolMap`, `usageHistory`, `filamentSpools`, `materialAccountingPrintBindingStore`, or `physicalCommandRecoveryLatch`.
+- [x] Reject stale managed spool / legacy occupancy preconditions before CAS so a service-side send-time check cannot race a storage-side state change.
 
 ## Task 4: Service Integration Factory
 
@@ -104,6 +105,9 @@ Contract:
 - [x] Resolve managed spools from `monitorData.filamentSpools`.
 - [x] Resolve legacy occupancy from `monitorData.hostSpoolMap`.
 - [x] Accept trusted MaterialSource records only from the existing read-only MaterialSource observation/registry path.
+- [x] Require the service to resolve `materialSourceId` through trusted resolver callbacks instead of accepting caller supplied `materialSource` records as authority.
+- [x] Bind `sourceIdentityDigestAtOpen` to `MaterialSource.identity` as well as locator/unit/kind evidence.
+- [x] Quarantine semantic mount/event authority conflicts without first-win restoration.
 - [x] Inject `commitMaterialAccountingSpoolMountStoreDurably()` as `persist`.
 - [x] Keep this runtime factory unused by UI until H-2.
 
@@ -114,7 +118,8 @@ Contract:
 - [x] Run full `npx vitest run`.
 - [x] Run `git diff --check`.
 - [x] Update Gate 18.9H spec status: H-1b implemented/tested, H-2 pending.
-- [ ] Request reviewer validation before H-2 UI work.
+- [x] Request reviewer validation before H-2 UI work.
+- [ ] Request reviewer validation for the H-1a/H-1b hardening follow-up before H-2 UI work.
 
 ## Expected Reviewer Questions
 

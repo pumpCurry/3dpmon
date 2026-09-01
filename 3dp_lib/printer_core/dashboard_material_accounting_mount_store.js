@@ -19,18 +19,17 @@
  * - {@link createMaterialAccountingSpoolMountOperationPayloadDigest}：operation payload digestを生成
  * - {@link createMaterialAccountingSpoolMountStoreSnapshot}：store snapshotを生成
  *
- * @version 1.390.1578 (PR #440)
+ * @version 1.390.1581 (PR #440)
  * @since   1.390.1575 (PR #440)
- * @lastModified 2026-09-01 13:16:00
+ * @lastModified 2026-09-01 14:58:00
  * -----------------------------------------------------------
  * @todo
- * - Gate 18.9H-1bでIndexedDB durable CASへ接続する
+ * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
  */
 
 "use strict";
 
 import {
-  SPOOL_MOUNT_STATUS,
   validateSpoolMount,
 } from "./dashboard_material_accounting_contract.js";
 import {
@@ -181,16 +180,24 @@ function collectConflictMountIds(conflict) {
 }
 
 /**
- * conflict種別がfirst-win禁止のopen conflictか判定する。
+ * conflict種別がfirst-win禁止のauthority ambiguityか判定する。
  *
  * @private
- * @function isOpenConflict
+ * @function isAuthorityAmbiguityConflict
  * @param {Object} conflict - conflict record。
- * @returns {boolean} open conflictならtrue。
+ * @returns {boolean} authority ambiguityならtrue。
  */
-function isOpenConflict(conflict) {
-  return conflict?.type === "source-open-mount-conflict" ||
-    conflict?.type === "spool-open-mount-conflict";
+function isAuthorityAmbiguityConflict(conflict) {
+  return [
+    "source-open-mount-conflict",
+    "spool-open-mount-conflict",
+    "operation-payload-conflict",
+    "mount-id-payload-conflict",
+    "close-operation-payload-conflict",
+    "close-payload-conflict",
+    "source-interval-overlap-conflict",
+    "spool-interval-overlap-conflict",
+  ].includes(conflict?.type);
 }
 
 /**
@@ -321,7 +328,7 @@ function normalizeSpoolMounts(candidates) {
       conflicts.push(cloneJsonValue(conflict));
       const ids = collectConflictMountIds(conflict);
       for (const id of ids) {
-        if (isOpenConflict(conflict)) {
+        if (isAuthorityAmbiguityConflict(conflict)) {
           quarantineIds.add(id);
         }
       }
@@ -345,7 +352,7 @@ function normalizeSpoolMounts(candidates) {
     if (accepted) {
       retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
         kind: "spoolMount",
-        reason: "first-win-open-conflict-quarantine",
+        reason: "authority-conflict-quarantine",
         record: accepted,
       }));
     }
@@ -387,6 +394,36 @@ function createRecordRefSet(mounts) {
 }
 
 /**
+ * operation eventがrecordRefs必須のoperator eventか判定する。
+ *
+ * @private
+ * @function isRecordRefRequiredEventKind
+ * @param {string} kind - event kind。
+ * @returns {boolean} recordRefs必須ならtrue。
+ */
+function isRecordRefRequiredEventKind(kind) {
+  return [
+    "operator-mount",
+    "operator-unmount",
+    "operator-replace",
+  ].includes(toTrimmedString(kind));
+}
+
+/**
+ * operation eventのsemantic keyを生成する。
+ *
+ * @private
+ * @function createOperationSemanticKey
+ * @param {Object} event - operation event。
+ * @returns {string} semantic key。生成できない場合は空文字。
+ */
+function createOperationSemanticKey(event) {
+  const kind = toTrimmedString(event?.kind);
+  const operatorActionId = toTrimmedString(event?.operatorActionId);
+  return kind && operatorActionId ? `${kind}:${operatorActionId}` : "";
+}
+
+/**
  * operation eventのvalidation errorを取得する。
  *
  * @private
@@ -409,14 +446,22 @@ function validateOperationEvent(event, recordRefs) {
   if (toTrimmedString(event.payloadDigest) && event.payloadDigest !== payloadDigest) {
     errors.push("payload-digest-mismatch");
   }
-  if (Array.isArray(event.recordRefs) && event.recordRefs.length > 0) {
-    const hasOrphanRef = event.recordRefs
-      .map((ref) => toTrimmedString(ref))
-      .filter(Boolean)
-      .some((ref) => !recordRefs.has(ref));
-    if (hasOrphanRef) {
-      errors.push("orphan-event-record-ref");
+  const payload = event.payload && typeof event.payload === "object" ? event.payload : {};
+  for (const key of ["kind", "operatorActionId", "operationId"]) {
+    const payloadValue = toTrimmedString(payload[key]);
+    if (!payloadValue || payloadValue !== toTrimmedString(event[key])) {
+      errors.push(`payload-${key}-mismatch`);
     }
+  }
+  const normalizedRecordRefs = Array.isArray(event.recordRefs)
+    ? event.recordRefs.map((ref) => toTrimmedString(ref)).filter(Boolean)
+    : [];
+  if (isRecordRefRequiredEventKind(event.kind) && normalizedRecordRefs.length === 0) {
+    errors.push("missing-event-record-refs");
+  }
+  const hasOrphanRef = normalizedRecordRefs.some((ref) => !recordRefs.has(ref));
+  if (hasOrphanRef) {
+    errors.push("orphan-event-record-ref");
   }
   return errors;
 }
@@ -456,6 +501,7 @@ function createEventConflict({ type, reason, existingEvent, candidateEvent }) {
 function normalizeOperationEvents(candidates, mounts) {
   const recordRefs = createRecordRefSet(mounts);
   const acceptedById = new Map();
+  const acceptedBySemanticKey = new Map();
   const acceptedOrder = [];
   const conflicts = [];
   const retainedUnsupportedEntries = [];
@@ -496,7 +542,32 @@ function normalizeOperationEvents(candidates, mounts) {
       continue;
     }
 
+    const semanticKey = createOperationSemanticKey(event);
+    const existingSemanticEvent = semanticKey ? acceptedBySemanticKey.get(semanticKey) : null;
+    if (existingSemanticEvent) {
+      if (existingSemanticEvent.payloadDigest === event.payloadDigest) {
+        continue;
+      }
+      conflicts.push(createEventConflict({
+        type: "operation-semantic-payload-conflict",
+        reason: "same-operation-semantic-key-different-payload",
+        existingEvent: existingSemanticEvent,
+        candidateEvent: event,
+      }));
+      quarantineIds.add(existingSemanticEvent.eventId);
+      quarantineIds.add(event.eventId);
+      retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
+        kind: "event",
+        reason: "same-operation-semantic-key-different-payload",
+        record: event,
+      }));
+      continue;
+    }
+
     acceptedById.set(event.eventId, event);
+    if (semanticKey) {
+      acceptedBySemanticKey.set(semanticKey, event);
+    }
     acceptedOrder.push(event.eventId);
   }
 
@@ -505,7 +576,7 @@ function normalizeOperationEvents(candidates, mounts) {
     if (accepted) {
       retainedUnsupportedEntries.push(createRetainedUnsupportedEntry({
         kind: "event",
-        reason: "same-event-id-different-payload",
+        reason: "operation-event-conflict-quarantine",
         record: accepted,
       }));
     }

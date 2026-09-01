@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1580 (PR #440)
+ * @version 1.390.1581 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 13:38:00
+ * @lastModified 2026-09-01 14:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -361,12 +361,14 @@ function createSpoolMountStorageFixture() {
   const firstPayload = {
     kind: "operator-mount",
     operatorActionId: "action:k2:1a:031",
+    operationId: firstMount.mountOperationId,
     materialSourceId: "source:k2:cfs:1a",
     spoolId: "spool-031",
   };
   const secondPayload = {
     kind: "operator-mount",
     operatorActionId: "action:k2:1b:002",
+    operationId: secondMount.mountOperationId,
     materialSourceId: "source:k2:cfs:1b",
     spoolId: "spool-002",
   };

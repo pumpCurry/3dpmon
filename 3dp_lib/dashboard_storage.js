@@ -28,9 +28,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1580 (PR #440)
+ * @version 1.390.1581 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 13:38:00
+ * @lastModified 2026-09-01 14:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -52,6 +52,10 @@ import {
   createMaterialAccountingSpoolMountStoreDigest,
   normalizeStoredMaterialAccountingSpoolMountStore,
 } from "./printer_core/dashboard_material_accounting_mount_store.js";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "./printer_core/dashboard_data_schema_v3.js";
 import { normalizeStoredPhysicalCommandRecoveryLatchStore } from "./printer_core/dashboard_physical_command_recovery_latch.js";
 import {
   initIdb,
@@ -1251,6 +1255,130 @@ export async function saveUnifiedStorageDurably() {
 }
 
 /**
+ * SpoolMount authority precondition用digestを生成する。
+ *
+ * @private
+ * @function _createSpoolMountAuthorityPreconditionDigest
+ * @param {string} namespace - digest namespace。
+ * @param {*} value - digest対象値。
+ * @returns {string} deterministic digest。
+ */
+function _createSpoolMountAuthorityPreconditionDigest(namespace, value) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId(namespace, [
+    stableStringifyPrinterCoreV3Value(value ?? null),
+  ])}`;
+}
+
+/**
+ * 現在の3DPmon管理spoolを取得する。
+ *
+ * @private
+ * @function _findCurrentManagedSpoolForPrecondition
+ * @param {string} spoolId - managed spool ID。
+ * @returns {?Object} managed spool。
+ */
+function _findCurrentManagedSpoolForPrecondition(spoolId) {
+  const target = String(spoolId || "").trim();
+  return (Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [])
+    .find((spool) => String(spool?.id || spool?.spoolId || "").trim() === target) || null;
+}
+
+/**
+ * 現在のlegacy hostSpoolMap占有を取得する。
+ *
+ * @private
+ * @function _findCurrentLegacyOccupancyForPrecondition
+ * @param {string} spoolId - managed spool ID。
+ * @param {string} expectedDeviceId - 期待device ID。
+ * @returns {?Object} legacy占有。未占有ならnull。
+ */
+function _findCurrentLegacyOccupancyForPrecondition(spoolId, expectedDeviceId) {
+  const target = String(spoolId || "").trim();
+  const expected = String(expectedDeviceId || "").trim();
+  const hostSpoolMap = monitorData.hostSpoolMap && typeof monitorData.hostSpoolMap === "object"
+    ? monitorData.hostSpoolMap
+    : {};
+  for (const [host, mountedSpoolId] of Object.entries(hostSpoolMap)) {
+    if (String(mountedSpoolId || "").trim() !== target) {
+      continue;
+    }
+    return {
+      host,
+      spoolId: target,
+      reason: String(host || "").trim() === expected
+        ? "legacy-spool-occupancy-requires-migration"
+        : "legacy-spool-already-mounted",
+    };
+  }
+  return null;
+}
+
+/**
+ * SpoolMount production commitの現在値preconditionを検証する。
+ *
+ * @private
+ * @function _validateSpoolMountCommitPreconditions
+ * @param {Object|null} preconditions - serviceが送信時に束縛したprecondition群。
+ * @returns {{ok:boolean, reason:string, currentDigest?:string, expectedDigest?:string}} 検証結果。
+ */
+function _validateSpoolMountCommitPreconditions(preconditions) {
+  if (!preconditions || typeof preconditions !== "object") {
+    return { ok: true, reason: "" };
+  }
+
+  const managedSpool = preconditions.managedSpool && typeof preconditions.managedSpool === "object"
+    ? preconditions.managedSpool
+    : null;
+  if (managedSpool) {
+    const currentSpool = _findCurrentManagedSpoolForPrecondition(managedSpool.spoolId);
+    const currentDigest = _createSpoolMountAuthorityPreconditionDigest(
+      "material-accounting-managed-spool-precondition",
+      currentSpool,
+    );
+    if (!currentSpool) {
+      return {
+        ok: false,
+        reason: "managed-spool-precondition-missing",
+        currentDigest,
+        expectedDigest: managedSpool.digest,
+      };
+    }
+    if (currentDigest !== managedSpool.digest) {
+      return {
+        ok: false,
+        reason: "managed-spool-precondition-changed",
+        currentDigest,
+        expectedDigest: managedSpool.digest,
+      };
+    }
+  }
+
+  const legacyOccupancy = preconditions.legacyOccupancy && typeof preconditions.legacyOccupancy === "object"
+    ? preconditions.legacyOccupancy
+    : null;
+  if (legacyOccupancy) {
+    const currentOccupancy = _findCurrentLegacyOccupancyForPrecondition(
+      legacyOccupancy.spoolId,
+      legacyOccupancy.expectedDeviceId,
+    );
+    const currentDigest = _createSpoolMountAuthorityPreconditionDigest(
+      "material-accounting-legacy-occupancy-precondition",
+      currentOccupancy,
+    );
+    if (currentDigest !== legacyOccupancy.digest) {
+      return {
+        ok: false,
+        reason: "legacy-occupancy-precondition-changed",
+        currentDigest,
+        expectedDigest: legacyOccupancy.digest,
+      };
+    }
+  }
+
+  return { ok: true, reason: "" };
+}
+
+/**
  * MaterialAccounting SpoolMount storeをproduction CAS境界で耐久保存する。
  *
  * 【詳細説明】
@@ -1265,6 +1393,7 @@ export async function saveUnifiedStorageDurably() {
  * @param {string} input.baseStoreDigest - serviceが準備時に見たbase store digest。
  * @param {Object} input.nextStore - CAS成功時に保存する次store。
  * @param {Object} input.operation - mount/unmount/replace operation event証跡。
+ * @param {Object|null=} input.preconditions - managed spool / legacy occupancy の送信時precondition群。
  * @returns {Promise<{ok:boolean, casApplied:boolean, backend:string, reason:string, key:string, currentDigest?:string, nextDigest?:string, error?:string}>} commit結果。
  * @example
  * const result = await commitMaterialAccountingSpoolMountStoreDurably({ baseStoreDigest, nextStore, operation });
@@ -1284,6 +1413,18 @@ export async function commitMaterialAccountingSpoolMountStoreDurably(input = {})
   }
 
   const normalizedNextStore = normalizeStoredMaterialAccountingSpoolMountStore(input.nextStore);
+  const preconditionValidation = _validateSpoolMountCommitPreconditions(input.preconditions);
+  if (!preconditionValidation.ok) {
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key,
+      reason: preconditionValidation.reason,
+      currentDigest: preconditionValidation.currentDigest,
+      expectedDigest: preconditionValidation.expectedDigest,
+    };
+  }
   const result = await compareAndSwapSharedValue({
     key,
     expectedDigest: baseStoreDigest,

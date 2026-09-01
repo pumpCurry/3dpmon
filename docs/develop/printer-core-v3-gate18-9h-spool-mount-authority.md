@@ -28,7 +28,8 @@ production authority を作ることである。
 H-1a では production storage へ接続せず、pure store / service contract と
 unit test だけを追加する。
 
-Status: implemented and tested in `719c69e` + `90ad774`.
+Status: implemented and tested in `719c69e` + `90ad774`, then hardened in PR #440
+after `b178ce8`.
 
 対象:
 
@@ -48,6 +49,13 @@ Status: implemented and tested in `719c69e` + `90ad774`.
 - durable writer callback は `casApplied:true` を返さない限り成功扱いにしない。
 - service は `hostSpoolMap` を read-only occupancy として参照し、
   同じ spool が legacy 側で装着中の場合は Universal mount を拒否する。
+- service は caller supplied `materialSource` object をtrusted authorityとして扱わず、
+  `materialSourceId` から送信時のtrusted resolverで現在観測sourceを解決する。
+- managed spool と legacy occupancy も送信時resolverで再解決し、service生成時snapshotへ閉じ込めない。
+- `sourceIdentityDigest` は `MaterialSource.identity` とlocatorの両方にbindする。
+- operation event は外側eventとpayload内の `kind` / `operatorActionId` / `operationId`
+  が一致し、operator eventでは空でない `recordRefs` を持つ場合だけactive authorityへ戻す。
+- mount/event conflict はfirst-winせず、関連するauthority ambiguity setをquarantineする。
 
 ### Gate 18.9H-1b: Durable Production Persistence
 
@@ -73,6 +81,8 @@ Status: implemented and tested in PR #440 after `335d287`.
   `materialAccountingPrintBindingStore` へ投影しない。
 - conflicting open mount は first-win で片方を採用せず、active authority から
   conflict set 全体を外して quarantine する。
+- production CAS writer は service が渡した managed spool / legacy occupancy precondition を
+  `monitorData` の現在値から再計算し、不一致ならIndexedDB CAS前に拒否する。
 
 実装境界:
 
@@ -135,7 +145,7 @@ materialAccountingSpoolMountStore = {
 operatorMountSource({
   operatorActionId,
   expectedDeviceId,
-  materialSource,
+  materialSourceId,
   spoolId,
   actor
 });
@@ -150,7 +160,8 @@ operatorUnmountSource({
 
 operatorReplaceSourceMount({
   operatorActionId,
-  materialSource,
+  expectedDeviceId,
+  materialSourceId,
   expectedOldMountId,
   newSpoolId,
   actor
@@ -158,6 +169,8 @@ operatorReplaceSourceMount({
 ```
 
 `expectedMountId` は stale UI から別 mount を誤って close しないため必須とする。
+`materialSourceId` はUIから渡せる識別子だが、MaterialSource record本体はservice内の
+trusted resolverが現在のread-only observation / registryから再解決する。
 
 ## Identity And Digests
 
@@ -179,6 +192,7 @@ sourceBindingAtOpen = {
   unitId,
   kind,
   identityStrength,
+  identity,
   sourceIdentityDigest,
   locator,
   resolvedAt

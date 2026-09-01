@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1580 (PR #440)
+ * @version 1.390.1581 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 13:38:00
+ * @lastModified 2026-09-01 14:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -237,7 +237,9 @@ describe("saveUnifiedStorageDurably", () => {
     globalThis.localStorage.clear();
     mocks.monitorData.machines.k1.storedData = { forceWrite: "quota-case" };
     globalThis.localStorage.setItem = () => {
-      throw new DOMException("quota", "QuotaExceededError");
+      const error = new Error("quota");
+      error.name = "QuotaExceededError";
+      throw error;
     };
 
     try {
@@ -278,6 +280,65 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.monitorData.hostSpoolMap).toEqual({});
     expect(mocks.monitorData.usageHistory).toEqual([]);
     expect(mocks.monitorData.filamentSpools).toEqual([]);
+  });
+
+  it("SpoolMount production commitはmanaged spool preconditionが変わったらCAS前に拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const operation = createMountOperationEvent();
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a", isDeleted: true }];
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: {
+        managedSpool: {
+          spoolId: "spool:a",
+          digest: "fnv1a128:stale-managed-spool",
+          deleted: false,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "managed-spool-precondition-changed" });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+  });
+
+  it("SpoolMount production commitはlegacy occupancy preconditionが変わったらCAS前に拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const operation = createMountOperationEvent();
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.hostSpoolMap = { "K1Max-4A1B": "spool:a" };
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: {
+        legacyOccupancy: {
+          spoolId: "spool:a",
+          expectedDeviceId: "device:k2",
+          occupied: false,
+          digest: "fnv1a128:no-legacy-occupancy",
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "legacy-occupancy-precondition-changed" });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
   });
 
   it("SpoolMount production commitはCAS不一致ならメモリを更新しない", async () => {
@@ -337,9 +398,11 @@ describe("saveUnifiedStorageDurably", () => {
  * @returns {Object} operation event。
  */
 function createMountOperationEvent(overrides = {}) {
+  const operationId = overrides.operationId || "operation:mount:test";
   const payload = overrides.payload || {
     kind: "operator-mount",
     operatorActionId: "action:mount:test",
+    operationId,
     materialSourceId: "source:k2:cfs:1a",
     spoolId: "spool:a",
   };
@@ -347,7 +410,7 @@ function createMountOperationEvent(overrides = {}) {
     eventId: overrides.eventId || "event:mount:test",
     kind: overrides.kind || "operator-mount",
     operatorActionId: overrides.operatorActionId || "action:mount:test",
-    operationId: overrides.operationId || "operation:mount:test",
+    operationId,
     payload,
     payloadDigest: overrides.payloadDigest || createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
     recordRefs: overrides.recordRefs || [],

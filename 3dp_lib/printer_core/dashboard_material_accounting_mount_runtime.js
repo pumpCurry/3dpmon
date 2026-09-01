@@ -16,9 +16,9 @@
  * - {@link createMaterialAccountingSpoolMountRuntime}：runtime service wrapperを生成
  * - {@link resolveObservedMaterialSourceRecord}：観測storeからMaterialSource recordを解決
  *
- * @version 1.390.1580 (PR #440)
+ * @version 1.390.1581 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 13:38:00
+ * @lastModified 2026-09-01 14:58:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
@@ -49,22 +49,6 @@ import { createMaterialAccountingSpoolMountService } from "./dashboard_material_
  */
 function toTrimmedString(value) {
   return String(value ?? "").trim();
-}
-
-/**
- * 有限数またはnullへ正規化する。
- *
- * @private
- * @function toFiniteNumberOrNull
- * @param {*} value - 数値候補。
- * @returns {?number} 有限数、またはnull。
- */
-function toFiniteNumberOrNull(value) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-  const numberValue = Number(value);
-  return Number.isFinite(numberValue) ? numberValue : null;
 }
 
 /**
@@ -239,8 +223,9 @@ export function createMaterialAccountingSpoolMountRuntime(input = {}) {
   const data = input.data || monitorData;
   const service = createMaterialAccountingSpoolMountService({
     store: data.materialAccountingSpoolMountStore,
-    managedSpools: Array.isArray(data.filamentSpools) ? data.filamentSpools : [],
-    legacyHostSpoolMap: data.hostSpoolMap || {},
+    resolveMaterialSource,
+    resolveManagedSpool,
+    resolveLegacyOccupancy,
     persist: typeof input.persist === "function"
       ? input.persist
       : commitMaterialAccountingSpoolMountStoreDurably,
@@ -248,7 +233,7 @@ export function createMaterialAccountingSpoolMountRuntime(input = {}) {
   });
 
   /**
-   * runtime dataからMaterialSourceを解決する。
+ * runtime dataからMaterialSourceを解決する。
    *
    * @function resolveMaterialSource
    * @param {Object} request - 解決入力。
@@ -259,9 +244,51 @@ export function createMaterialAccountingSpoolMountRuntime(input = {}) {
   function resolveMaterialSource(request = {}) {
     return resolveObservedMaterialSourceRecord({
       materialSourceObservations: data.materialSourceObservations,
-      deviceId: request.deviceId,
+      deviceId: request.deviceId || request.expectedDeviceId,
       materialSourceId: request.materialSourceId,
     });
+  }
+
+  /**
+   * runtime dataから3DPmon管理spoolを解決する。
+   *
+   * @function resolveManagedSpool
+   * @param {Object} request - 解決入力。
+   * @param {string} request.spoolId - managed spool ID。
+   * @returns {?Object} managed spool。見つからない場合はnull。
+   */
+  function resolveManagedSpool(request = {}) {
+    const spoolId = toTrimmedString(request.spoolId);
+    const spools = Array.isArray(data.filamentSpools) ? data.filamentSpools : [];
+    return spools.find((spool) => toTrimmedString(spool?.id || spool?.spoolId) === spoolId) || null;
+  }
+
+  /**
+   * runtime dataからlegacy hostSpoolMap占有を解決する。
+   *
+   * @function resolveLegacyOccupancy
+   * @param {Object} request - 解決入力。
+   * @param {string} request.spoolId - managed spool ID。
+   * @param {string} request.expectedDeviceId - 期待device ID。
+   * @returns {?Object} legacy占有。未占有ならnull。
+   */
+  function resolveLegacyOccupancy(request = {}) {
+    const spoolId = toTrimmedString(request.spoolId);
+    const expectedDeviceId = toTrimmedString(request.expectedDeviceId);
+    const hostSpoolMap = data.hostSpoolMap && typeof data.hostSpoolMap === "object" ? data.hostSpoolMap : {};
+    for (const [host, mountedSpoolId] of Object.entries(hostSpoolMap)) {
+      if (toTrimmedString(mountedSpoolId) !== spoolId) {
+        continue;
+      }
+      return {
+        host,
+        spoolId,
+        reason: toTrimmedString(host) === expectedDeviceId
+          ? "legacy-spool-occupancy-requires-migration"
+          : "legacy-spool-already-mounted",
+      };
+    }
+    return null;
   }
 
   /**
@@ -277,6 +304,8 @@ export function createMaterialAccountingSpoolMountRuntime(input = {}) {
   return Object.freeze({
     service,
     resolveMaterialSource,
+    resolveManagedSpool,
+    resolveLegacyOccupancy,
     snapshot,
   });
 }
