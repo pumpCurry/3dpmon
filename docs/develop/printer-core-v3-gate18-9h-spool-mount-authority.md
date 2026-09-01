@@ -1,6 +1,6 @@
 # Printer Core v3 Gate 18.9H SpoolMount Authority
 
-Last updated: 2026-09-01
+Last updated: 2026-09-02
 
 この文書は、K2/CFS と将来の K1C+CFS-C を含む multi-source printer で、
 3DPmon 管理スプールを MaterialSource 単位へ割り当てるための
@@ -483,6 +483,19 @@ Gate 18.9I-4:
   top-level `mountOpenedAt` に固定し、snapshot signatureへ含める。embedded
   `spoolMount.openedAt` はreview/debug用の診断証跡であり、import/restore後の改変で
   mount-open後print-start前のsource変更eventを検査範囲外へ追い出せない。
+- trusted print-start snapshotは `bindingAuthority` として `toolId` /
+  `protocolToolAlias` / `order`、canonical MaterialSource semantic、SpoolMount debit
+  semanticを保存し、`bindingAuthorityDigest` をsnapshot signatureへ含める。K2の
+  `materialUsed` CSVはdiagnostic payloadではなく、このauthority orderへ対応付ける。
+- nested `spoolMount` / `materialSource` はdiagnostic-only payloadである。
+  debit evaluatorへ渡すmount/sourceは `bindingAuthority` から再構成し、diagnostic
+  `spoolMount.verification` や `materialSource.displayLabel` の後付け変更では
+  debit結果を変えない。逆に `bindingAuthority` 側のorder/openedAt/source/mountが
+  signatureと矛盾した場合は `untrusted-print-start-snapshot` としてdebit候補へ昇格しない。
+- trusted print binding repository factoryはpublic barrel
+  `dashboard_material_accounting_print_binding.js` から再exportしない。production runtimeは
+  caller supplied `data` / `persist` DIを拒否し、test fixtureだけ
+  `createMaterialAccountingPrintBindingRuntimeForTest()` で注入できる。
 - `MaterialBindingPlan`本体と`commandBinding`は、pending登録時にdevice/session/generation/file/source/spool/toolの
   semantic projectionで再照合する。module-attested planであっても、request Aのbindingを
   別source/fileのplanへ混ぜた場合は拒否する。

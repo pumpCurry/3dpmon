@@ -26,7 +26,7 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
 | Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service implemented, H-1b durable persistence implemented, trusted resolver + CAS precondition hardening added, H-2 filament manager source mount UI added, destructive spool lifecycle guarded | H-1a/H-1b/H-2 tested | n/a | CAS-backed 3DPmon management only / physical command and debit disabled |
-| Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests create a separate module-attested MaterialBindingPlan, hold it as prepared pending state, mark it submitted only after transport send success, and connect it to runtime only after a new machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence; command binding semantic cross-check, first local receipt freeze, and read-only export analyzer are in place | runtime + durable CAS + live bridge + MaterialBindingPlan composition + export analyzer tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
+| Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests create a separate module-attested MaterialBindingPlan, hold it as prepared pending state, mark it submitted only after transport send success, and connect it to runtime only after a new machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence and signed canonical `bindingAuthority`; command binding semantic cross-check, first local receipt freeze, and read-only export analyzer are in place | runtime + durable CAS + live bridge + MaterialBindingPlan composition + export analyzer tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -184,8 +184,14 @@ source-aware mountとして扱わない。
   saved trusted print-start snapshotには `issuanceEvidence` としてdevice/session/generation/job/timeを残す。
   mount continuityの下限に使うSpoolMount開始時刻は、nested `spoolMount.openedAt` ではなく
   top-levelの `mountOpenedAt` として保存し、trusted snapshot signatureへ含める。
+  さらに `toolId` / `protocolToolAlias` / `order` と、source/mountのdebit用最小semanticを
+  `bindingAuthority` として保存し、そのdigestをtrusted snapshot signatureへ含める。
   nested `spoolMount` / `materialSource` はdiagnostic evidenceであり、後付け改変でdebit continuity
-  windowを後ろへずらすauthorityにはしない。
+  windowやCSV順序を動かすauthorityにはしない。debit evaluatorへ渡すmount/sourceも
+  `bindingAuthority` から再構成し、diagnostic payloadを改変してもauthority判定は変化しない。
+  trusted print binding repository factoryはpublic barrelから再exportせず、production runtimeは
+  caller supplied `data` / `persist` DIを拒否する。テスト用DIは
+  `createMaterialAccountingPrintBindingRuntimeForTest()` に分離し、test環境以外では使用できない。
   print-start local receiptと同一msのsource/provider breaking eventは、print interval内の
   physical discontinuityとして扱い、debit候補へ昇格しない。
   この接続もshadow attributionまでで、managed spool残量debitやlegacy usage writeは行わない。

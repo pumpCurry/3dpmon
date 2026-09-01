@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1522 (PR #438)
+ * @version 1.390.1629 (PR #440)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 16:58:00
+ * @lastModified 2026-09-02 08:35:23
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -26,6 +26,7 @@
 import { describe, expect, it } from "vitest";
 
 import * as materialAccountingContract from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
+import * as materialAccountingPrintBindingPublic from "../../3dp_lib/printer_core/dashboard_material_accounting_print_binding.js";
 import {
   DEBIT_ELIGIBILITY_STATUS,
   FILAMENT_UNIT_KIND,
@@ -76,6 +77,7 @@ describe("Universal MaterialSource accounting contract", () => {
     expect(materialAccountingContract.createTrustedPrintStartMaterialSnapshot).toBeUndefined();
     expect(materialAccountingContract.createTrustedResultSetCompletenessEvidence).toBeUndefined();
     expect(materialAccountingContract.validateTrustedResultSetCompletenessEvidence).toBeUndefined();
+    expect(materialAccountingPrintBindingPublic.createTrustedPrintStartMaterialAccountingPrintBindingRepository).toBeUndefined();
     expect(typeof createMaterialAccountingPrintBindingRepository).toBe("function");
   });
 

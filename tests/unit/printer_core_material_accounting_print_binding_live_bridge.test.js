@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1615 (PR #440)
+ * @version 1.390.1629 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 23:40:00
+ * @lastModified 2026-09-02 08:35:23
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -49,7 +49,10 @@ import { createEmptyMaterialAccountingSpoolMountStore } from "../../3dp_lib/prin
 import {
   normalizeStoredMaterialAccountingPrintBindingStore,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_print_binding.js";
-import { createMaterialAccountingPrintBindingRuntime } from "../../3dp_lib/printer_core/dashboard_material_accounting_print_binding_runtime.js";
+import {
+  createMaterialAccountingPrintBindingRuntime,
+  createMaterialAccountingPrintBindingRuntimeForTest,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_print_binding_runtime.js";
 import {
   createMaterialBindingCommandBinding,
   createMaterialBindingPlan,
@@ -546,7 +549,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     rememberMaterialAccountingPrintStartRequest({
       hostname: "K2Pro-69E7",
       commandRequest,
@@ -613,7 +616,7 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
   it("正式MaterialBindingPlanをpendingへ保持し実runtime/repositoryで2 source snapshotを保存する", async () => {
     const data = createRuntimeData();
     attachOpenMounts(data);
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: async ({ nextStore }) => ({ ok: true, casApplied: true, nextStore }),
     });

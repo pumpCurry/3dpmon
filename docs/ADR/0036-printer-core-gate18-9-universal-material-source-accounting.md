@@ -626,7 +626,20 @@ Gate 18.9 must cover:
   open time used as the source-continuity lower bound is saved as signed
   top-level `mountOpenedAt`; embedded `spoolMount.openedAt` remains diagnostic
   evidence and cannot move the debit continuity window after the snapshot is
-  issued.
+  issued. Trusted snapshots also carry a signed canonical `bindingAuthority`
+  containing tool ID, protocol tool alias, order, canonical MaterialSource
+  semantics, and SpoolMount debit semantics. K2 `materialUsed` CSV values are
+  mapped by this authority order, not by mutable diagnostic payload. Debit
+  eligibility reconstructs its mount/source input from `bindingAuthority`;
+  nested `spoolMount` and `materialSource` are diagnostic-only. Tampering with
+  `bindingAuthority` invalidates the trusted snapshot, while changing
+  diagnostic fields such as `spoolMount.verification` or
+  `materialSource.displayLabel` does not change debit authority.
+- The trusted print binding repository factory is not re-exported from the
+  public print binding barrel. Production print binding runtime does not accept
+  caller-supplied `data` or `persist` dependency injection. Tests must use the
+  dedicated `createMaterialAccountingPrintBindingRuntimeForTest()` helper,
+  which is unavailable outside the test environment.
 - trusted print-start snapshots restored from same-process CAS store may regain
   debit eligibility only through module-owned attestation validation. Restart
   or import loses that process-local trust and must revalidate before debit.

@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1628 (PR #440)
+ * @version 1.390.1629 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-02 08:18:40
+ * @lastModified 2026-09-02 08:35:23
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -60,6 +60,7 @@ const {
 } = await import("../../3dp_lib/printer_core/dashboard_material_accounting_mount_runtime.js");
 const {
   createMaterialAccountingPrintBindingRuntime,
+  createMaterialAccountingPrintBindingRuntimeForTest,
 } = await import("../../3dp_lib/printer_core/dashboard_material_accounting_print_binding_runtime.js");
 
 /**
@@ -408,7 +409,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, persisted: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
 
     const result = await runtime.recordObservedPrintStart({
       printPlan: plan,
@@ -466,7 +467,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, persisted: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
 
     const first = await runtime.recordObservedPrintStart({
       printPlan: plan,
@@ -492,7 +493,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
   it("実機で観測したprintJobIdが無い場合はsnapshotを保存しない", async () => {
     const data = createRuntimeData();
     attachOpenMounts(data);
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(),
     });
@@ -512,7 +513,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     const data = createRuntimeData();
     attachOpenMounts(data, { omitSecond: true });
     const hostname = attachObservedPrintJob(data, { printJobId: "job:missing-mount" });
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(),
     });
@@ -551,7 +552,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
         }),
       ],
     };
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(),
     });
@@ -574,7 +575,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     attachOpenMounts(data);
     const hostname = attachObservedPrintJob(data, { printJobId: "job:persist-failed" });
     const before = data.materialAccountingPrintBindingStore;
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(async () => ({ ok: false, reason: "durable-write-failed" })),
     });
@@ -597,7 +598,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     attachOpenMounts(data);
     const hostname = attachObservedPrintJob(data, { printJobId: "job:loose-persist" });
     const before = data.materialAccountingPrintBindingStore;
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(async () => ({ ok: true, persisted: true, backend: "test" })),
     });
@@ -621,7 +622,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       deviceId: "serial:k2-other",
       sessionId: "session:k2-other",
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(),
     });
@@ -642,7 +643,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     attachOpenMounts(data);
     const hostname = attachObservedPrintJob(data, { printJobId: "job:missing-session" });
     delete data.machines[hostname].runtimeData.printerCoreV3Shadow.sessionId;
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(),
     });
@@ -665,7 +666,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       printJobId: "job:missing-generation",
       connectionGeneration: null,
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(),
     });
@@ -686,7 +687,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     const data = createRuntimeData();
     attachOpenMounts(data);
     const hostname = attachObservedPrintJob(data, { printJobId: "job:actual-1001" });
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(),
     });
@@ -711,7 +712,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       printJobId: "job:missing-observed-time",
       firstObservedAt: null,
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({
       data,
       persist: vi.fn(),
     });
@@ -798,7 +799,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({
       printPlan: plan,
       hostname,
@@ -838,6 +839,125 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     expect(data.filamentSpools.map((spool) => spool.remainingLengthMm)).toEqual([330000, 330000]);
   });
 
+  it("production runtimeはcaller supplied data/persist DIを拒否する", () => {
+    const data = createRuntimeData();
+    const persist = vi.fn();
+
+    expect(() => createMaterialAccountingPrintBindingRuntime({ data, persist })).toThrow(
+      "production-runtime-does-not-accept-dependency-injection"
+    );
+  });
+
+  it("ForTest runtimeはtest環境以外ではcaller supplied DIを拒否する", () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      expect(() => createMaterialAccountingPrintBindingRuntimeForTest({
+        data: createRuntimeData(),
+        persist: vi.fn(),
+      })).toThrow("material-accounting-print-binding-runtime-for-test-only");
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  it("bindingAuthorityのorder改ざん後はsource-specific usageをdebit候補へ昇格しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:tampered-authority-order",
+      firstObservedAt: "2026-09-01T08:01:00.000Z",
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
+    await runtime.recordObservedPrintStart({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:tampered-authority-order",
+    });
+    const snapshot = data.materialAccountingPrintBindingStore.printStartSnapshots.find(
+      (entry) => entry.protocolToolAlias === "T1A"
+    );
+    snapshot.bindingAuthority = {
+      ...(snapshot.bindingAuthority || {}),
+      tool: {
+        ...(snapshot.bindingAuthority?.tool || {}),
+        order: 99,
+      },
+    };
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:tampered-authority-order",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:tampered-authority-order",
+      resultSetCompleteness: "complete",
+    });
+
+    const tamperedSegment = result.segments.find((segment) => segment.protocolToolAlias === "T1A");
+    expect(result.ok).toBe(true);
+    expect(tamperedSegment.debit.canDebit).toBe(false);
+    expect(tamperedSegment.debit.reasons).toContain("untrusted-print-start-snapshot");
+  });
+
+  it("diagnostic spoolMount改ざんではbindingAuthority由来のdebit判定を変えない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:diagnostic-spoolmount-tamper",
+      firstObservedAt: "2026-09-01T08:01:00.000Z",
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
+    await runtime.recordObservedPrintStart({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:diagnostic-spoolmount-tamper",
+    });
+    const snapshot = data.materialAccountingPrintBindingStore.printStartSnapshots.find(
+      (entry) => entry.protocolToolAlias === "T1A"
+    );
+    snapshot.spoolMount = {
+      ...(snapshot.spoolMount || {}),
+      verification: SPOOL_MOUNT_VERIFICATION.UNVERIFIED,
+      openedAt: "2026-09-01T08:10:00.000Z",
+    };
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:diagnostic-spoolmount-tamper",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:diagnostic-spoolmount-tamper",
+      resultSetCompleteness: "complete",
+    });
+
+    const segment = result.segments.find((entry) => entry.protocolToolAlias === "T1A");
+    expect(result.ok).toBe(true);
+    expect(segment.debit.canDebit).toBe(true);
+    expect(segment.debit.reasons).not.toContain("mount-verification-required");
+    expect(segment.debit.reasons).not.toContain("mount-not-open-at-print-start");
+  });
+
   it("K2履歴のmaterialUsed文字列をPrintPlan順のsource-specific usageへ展開する", async () => {
     const data = createRuntimeData();
     attachOpenMounts(data);
@@ -847,7 +967,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-history-material-used" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -888,7 +1008,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-history-source-csv" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -927,7 +1047,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-stale-continuity" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -959,7 +1079,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-source-changed-during-print" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1006,7 +1126,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     const deviceRecord = data.materialSourceObservations.byDeviceId["serial:k2"];
     deviceRecord.eventCoverageStartedAt = "2026-09-01T07:30:00.000Z";
     deviceRecord.latestBySourceId["source:k2:cfs:1a"].eventCoverageStartedAt = "2026-09-01T07:30:00.000Z";
@@ -1056,7 +1176,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     const deviceRecord = data.materialSourceObservations.byDeviceId["serial:k2"];
     deviceRecord.eventCoverageStartedAt = "2026-09-01T07:30:00.000Z";
     deviceRecord.latestBySourceId["source:k2:cfs:1a"].eventCoverageStartedAt = "2026-09-01T07:30:00.000Z";
@@ -1110,7 +1230,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     const deviceRecord = data.materialSourceObservations.byDeviceId["serial:k2"];
     deviceRecord.eventCoverageStartedAt = "2026-09-01T07:30:00.000Z";
     deviceRecord.latestBySourceId["source:k2:cfs:1a"].eventCoverageStartedAt = "2026-09-01T07:30:00.000Z";
@@ -1164,7 +1284,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     const deviceRecord = data.materialSourceObservations.byDeviceId["serial:k2"];
     deviceRecord.eventCoverageStartedAt = "2026-09-01T07:30:00.000Z";
     deviceRecord.latestBySourceId["source:k2:cfs:1a"].eventCoverageStartedAt = "2026-09-01T08:00:00.000Z";
@@ -1206,7 +1326,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ plan, printPlan: plan, hostname, printJobId: "job:k2-source-changed-at-start" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1253,7 +1373,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-provider-gap-during-print" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1297,7 +1417,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-source-specific-ttl" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1340,7 +1460,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-local-clock-continuity" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1371,7 +1491,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-event-coverage-missing" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1404,7 +1524,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-source-event-coverage-gap" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1448,7 +1568,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({
       printPlan: plan,
       hostname,
@@ -1484,7 +1604,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-history-snapshot-order" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1524,7 +1644,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:k2-history-extra-usage" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1554,7 +1674,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:caller-usage-untrusted" });
     attachObservedCompletedPrintJob(data, {
       hostname,
@@ -1594,7 +1714,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       }
       return { ok: false, casApplied: false, reason: "cas-mismatch" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:completion-cas-fail" });
     attachObservedCompletedPrintJob(data, { hostname, printJobId: "job:completion-cas-fail" });
     data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
@@ -1620,7 +1740,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, casApplied: true, backend: "test" };
     });
-    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
     await runtime.recordObservedPrintStart({ printPlan: plan, hostname, printJobId: "job:missing-completion" });
 
     const result = await runtime.recordObservedPrintCompletion({

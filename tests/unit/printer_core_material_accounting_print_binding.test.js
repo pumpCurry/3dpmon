@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1628 (PR #440)
+ * @version 1.390.1629 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-09-02 08:18:40
+ * @lastModified 2026-09-02 08:35:23
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -259,6 +259,47 @@ describe("MaterialSource print binding repository", () => {
       "2026-08-31T04:30:00.000Z",
       "2026-08-31T04:30:00.000Z",
     ]);
+  });
+
+  it("print-start snapshotはdebit用canonical bindingAuthorityを保存する", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:snapshot-binding-authority",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:snapshot-binding-authority",
+    });
+
+    expect(start.ok).toBe(true);
+    expect(start.snapshots[0].bindingAuthority).toMatchObject({
+      schemaVersion: 1,
+      tool: {
+        toolId: 0,
+        protocolToolAlias: "T1A",
+        order: 0,
+      },
+      source: {
+        materialSourceId: materialSources[0].materialSourceId,
+        deviceId,
+        kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+      },
+      mount: {
+        mountId: spoolMounts[0].mountId,
+        materialSourceId: materialSources[0].materialSourceId,
+        spoolId: "spool:1a",
+        openedAt: "2026-08-31T04:30:00.000Z",
+        verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      },
+    });
+    expect(start.snapshots[0].bindingAuthorityDigest).toMatch(/^material-print-start-binding-authority:/u);
+    expect(repository.toJSON().printStartSnapshots[0].bindingAuthorityDigest).toBe(
+      start.snapshots[0].bindingAuthorityDigest
+    );
   });
 
   it("print-start時にMaterialSourceがPrintPlanと別deviceならbindingを拒否する", () => {

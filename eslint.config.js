@@ -90,6 +90,34 @@ export default [
     },
   },
   {
+    files: ['3dp_lib/printer_core/**/*.js'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [
+          {
+            name: './dashboard_material_accounting_contract.js',
+            importNames: ['createTrustedPrintStartMaterialAccountingPrintBindingRepository'],
+            message: 'Trusted print binding repository factory is runtime-internal; import it only from dashboard_material_accounting_print_binding_runtime.js.',
+          },
+          {
+            name: './dashboard_material_accounting_print_binding_repository.js',
+            importNames: ['createMaterialAccountingPrintBindingRepositoryWithIssuer'],
+            message: 'Issuer-injected print binding repository is contract-internal; import it only from dashboard_material_accounting_contract.js.',
+          },
+        ],
+      }],
+    },
+  },
+  {
+    files: [
+      '3dp_lib/printer_core/dashboard_material_accounting_contract.js',
+      '3dp_lib/printer_core/dashboard_material_accounting_print_binding_runtime.js',
+    ],
+    rules: {
+      'no-restricted-imports': 'off',
+    },
+  },
+  {
     // テストファイル用の設定
     files: ['tests/**/*.js'],
     languageOptions: {

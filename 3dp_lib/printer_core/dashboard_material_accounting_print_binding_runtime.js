@@ -15,10 +15,11 @@
  *
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
+ * - {@link createMaterialAccountingPrintBindingRuntimeForTest}：test-only DI runtimeを生成
  *
- * @version 1.390.1628 (PR #440)
+ * @version 1.390.1629 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-02 08:07:11
+ * @lastModified 2026-09-02 08:35:23
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -35,9 +36,11 @@ import {
 import {
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
   createMaterialAccountingPrintBindingStoreDigest,
-  createTrustedPrintStartMaterialAccountingPrintBindingRepository,
   normalizeStoredMaterialAccountingPrintBindingStore,
 } from "./dashboard_material_accounting_print_binding.js";
+import {
+  createTrustedPrintStartMaterialAccountingPrintBindingRepository,
+} from "./dashboard_material_accounting_contract.js";
 import {
   resolveObservedMaterialSourceRecord,
 } from "./dashboard_material_accounting_mount_runtime.js";
@@ -416,11 +419,63 @@ function getOrderedPrintStartSnapshots(store, printPlan, printJobId) {
       toTrimmedString(snapshot?.printPlanId) === planId
     )
     .sort((a, b) => {
-      const orderA = Number.isFinite(Number(a?.order)) ? Number(a.order) : 0;
-      const orderB = Number.isFinite(Number(b?.order)) ? Number(b.order) : 0;
+      const orderA = getSnapshotAuthorityOrder(a, 0);
+      const orderB = getSnapshotAuthorityOrder(b, 0);
       if (orderA !== orderB) return orderA - orderB;
       return toTrimmedString(a?.snapshotId).localeCompare(toTrimmedString(b?.snapshotId));
     });
+}
+
+/**
+ * snapshotのcanonical authority orderを取得する。
+ *
+ * @private
+ * @function getSnapshotAuthorityOrder
+ * @param {Object|null|undefined} snapshot - print-start snapshot。
+ * @param {number} fallbackOrder - fallback order。
+ * @returns {number} order値。
+ */
+function getSnapshotAuthorityOrder(snapshot, fallbackOrder) {
+  const authorityOrder = Number(snapshot?.bindingAuthority?.tool?.order);
+  if (Number.isFinite(authorityOrder)) {
+    return authorityOrder;
+  }
+  const snapshotOrder = Number(snapshot?.order);
+  return Number.isFinite(snapshotOrder) ? snapshotOrder : fallbackOrder;
+}
+
+/**
+ * snapshotのcanonical tool semanticを取得する。
+ *
+ * @private
+ * @function getSnapshotAuthorityTool
+ * @param {Object|null|undefined} snapshot - print-start snapshot。
+ * @param {number} fallbackOrder - fallback order。
+ * @returns {{toolId:number|null,protocolToolAlias:string,order:number}} tool semantic。
+ */
+function getSnapshotAuthorityTool(snapshot, fallbackOrder) {
+  const authority = snapshot?.bindingAuthority?.tool || {};
+  const toolId = Number(authority.toolId ?? snapshot?.toolId);
+  return {
+    toolId: Number.isFinite(toolId) ? toolId : null,
+    protocolToolAlias: toTrimmedString(authority.protocolToolAlias || snapshot?.protocolToolAlias || snapshot?.toolAlias),
+    order: getSnapshotAuthorityOrder(snapshot, fallbackOrder),
+  };
+}
+
+/**
+ * snapshotのcanonical source semanticを取得する。
+ *
+ * @private
+ * @function getSnapshotAuthoritySource
+ * @param {Object|null|undefined} snapshot - print-start snapshot。
+ * @returns {Object} source semantic。
+ */
+function getSnapshotAuthoritySource(snapshot) {
+  const authoritySource = snapshot?.bindingAuthority?.source;
+  return authoritySource && typeof authoritySource === "object" && !Array.isArray(authoritySource)
+    ? authoritySource
+    : {};
 }
 
 /**
@@ -468,13 +523,17 @@ function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
   const materialUsages = parts
     .map((part, index) => ({ part, snapshot: snapshots[index] }))
     .filter(({ snapshot }) => snapshot)
-    .map(({ part, snapshot }) => ({
-      toolId: snapshot.toolId,
-      protocolToolAlias: snapshot.protocolToolAlias || snapshot.toolAlias,
-      materialSourceId: snapshot.materialSourceId,
-      usedLengthMm: Number(part),
-      source: "firmware-source-specific",
-    }))
+    .map(({ part, snapshot }, index) => {
+      const tool = getSnapshotAuthorityTool(snapshot, index);
+      const source = getSnapshotAuthoritySource(snapshot);
+      return {
+        toolId: tool.toolId,
+        protocolToolAlias: tool.protocolToolAlias,
+        materialSourceId: toTrimmedString(source.materialSourceId || snapshot.materialSourceId),
+        usedLengthMm: Number(part),
+        source: "firmware-source-specific",
+      };
+    })
     .filter((entry) => {
       const valid = Number.isFinite(entry.usedLengthMm) && entry.usedLengthMm >= 0;
       if (!valid) {
@@ -506,11 +565,15 @@ function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
  * @returns {Set<string>} source continuity照合用ID集合。
  */
 function createMaterialSourceContinuityLookupIds(snapshot, observedSource) {
+  const authoritySource = getSnapshotAuthoritySource(snapshot);
   return new Set([
     snapshot?.materialSourceId,
     snapshot?.sourceId,
+    authoritySource.materialSourceId,
+    authoritySource.sourceId,
     snapshot?.materialSource?.materialSourceId,
     snapshot?.materialSource?.sourceId,
+    ...(Array.isArray(authoritySource.aliases) ? authoritySource.aliases : []),
     ...(Array.isArray(snapshot?.materialSource?.aliases) ? snapshot.materialSource.aliases : []),
     observedSource?.materialSourceId,
     observedSource?.sourceId,
@@ -1262,24 +1325,24 @@ function isPersistOk(result) {
 }
 
 /**
- * MaterialAccounting PrintBinding runtimeを生成する。
+ * MaterialAccounting PrintBinding runtime内部実装を生成する。
  *
  * 【詳細説明】
- * - repository自体はpureなshadow storeとして維持し、runtimeだけがmonitorDataと保存処理を知る。
+ * - production公開factoryとtest-only factoryの双方から呼ばれる内部関数。
+ * - productionではcaller supplied `data` / `persist` を受け取らず、trusted evidence mint権限を任意DIへ渡さない。
  * - 実機から観測したPrintJob IDが無い、またはcaller指定IDと実機観測IDが一致しない段階ではbindingを記録しない。
  * - 記録対象はprint-start時点のsnapshotだけであり、spool残量debitやlegacy hostSpoolMap更新は行わない。
  *
- * @function createMaterialAccountingPrintBindingRuntime
- * @param {Object=} input - runtime入力。
- * @param {Object=} input.data - monitorData互換データ。未指定なら実monitorData。
- * @param {Function=} input.persist - 永続化関数。未指定ならunified storageへ保存。
+ * @private
+ * @function createMaterialAccountingPrintBindingRuntimeInternal
+ * @param {Object} input - runtime入力。
+ * @param {Object} input.data - monitorData互換データ。
+ * @param {Function=} input.persist - 永続化関数。
  * @returns {{recordObservedPrintStart:Function,snapshot:Function}} runtime API。
- * @example
- * const runtime = createMaterialAccountingPrintBindingRuntime();
  * await runtime.recordObservedPrintStart({ printPlan, printJobId });
  */
-export function createMaterialAccountingPrintBindingRuntime(input = {}) {
-  const data = input.data || monitorData;
+function createMaterialAccountingPrintBindingRuntimeInternal(input = {}) {
+  const data = input.data;
   const persist = typeof input.persist === "function"
     ? input.persist
     : (request) => persistPrintBindingStoreWithUnifiedStorage({ ...request, data });
@@ -1512,4 +1575,48 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
     recordObservedPrintStart,
     snapshot,
   });
+}
+
+/**
+ * production用MaterialAccounting PrintBinding runtimeを生成する。
+ *
+ * 【詳細説明】
+ * - 実アプリの`monitorData`とdurable CAS保存経路だけを使う。
+ * - caller supplied `data` / `persist`を受け取ると、trusted print-start evidenceを任意storeへmintできるため拒否する。
+ *
+ * @function createMaterialAccountingPrintBindingRuntime
+ * @param {Object=} input - productionでは空objectのみ許可する。
+ * @returns {{recordObservedPrintStart:Function,recordObservedPrintCompletion:Function,snapshot:Function}} runtime API。
+ * @throws {TypeError} caller supplied DIが指定された場合。
+ * @example
+ * const runtime = createMaterialAccountingPrintBindingRuntime();
+ */
+export function createMaterialAccountingPrintBindingRuntime(input = {}) {
+  if (input && typeof input === "object" && !Array.isArray(input) && Object.keys(input).length > 0) {
+    throw new TypeError("production-runtime-does-not-accept-dependency-injection");
+  }
+  return createMaterialAccountingPrintBindingRuntimeInternal({ data: monitorData });
+}
+
+/**
+ * test-only MaterialAccounting PrintBinding runtimeを生成する。
+ *
+ * 【詳細説明】
+ * - 単体テストでのみmonitorData互換objectとpersist fakeを注入できる。
+ * - production bundleから誤用された場合は即時例外にし、trusted issuerの間接公開を防ぐ。
+ *
+ * @function createMaterialAccountingPrintBindingRuntimeForTest
+ * @param {Object} input - test runtime入力。
+ * @param {Object} input.data - monitorData互換データ。
+ * @param {Function=} input.persist - 永続化関数。
+ * @returns {{recordObservedPrintStart:Function,recordObservedPrintCompletion:Function,snapshot:Function}} runtime API。
+ * @throws {TypeError} test environment以外で呼ばれた場合。
+ * @example
+ * const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
+ */
+export function createMaterialAccountingPrintBindingRuntimeForTest(input = {}) {
+  if (typeof process === "undefined" || process?.env?.NODE_ENV !== "test") {
+    throw new TypeError("material-accounting-print-binding-runtime-for-test-only");
+  }
+  return createMaterialAccountingPrintBindingRuntimeInternal(input);
 }
