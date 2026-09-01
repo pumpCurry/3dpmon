@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1584 (PR #440)
+ * @version 1.390.1585 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 16:39:00
+ * @lastModified 2026-09-01 16:49:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -33,6 +33,9 @@ import {
   createMaterialAccountingSpoolMountOperationPayloadDigest,
   normalizeStoredMaterialAccountingSpoolMountStore,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
+import {
+  reserveUniversalSpoolAssignment,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_spool_assignment_guard.js";
 import {
   createPrinterCoreV3DeterministicId,
   stableStringifyPrinterCoreV3Value,
@@ -490,18 +493,17 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
   });
 
-  it("import後のcross-backend reconcile結果はCAS保護storeへ専用書き戻しする", async () => {
+  it("restore済みlegacy hostSpoolMapとのcross-backend reconcile結果はCAS保護storeへ専用書き戻しする", async () => {
     const openMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
       spoolMounts: [createDurableMountFixture()],
       events: [],
     });
     mocks.monitorData.materialAccountingSpoolMountStore = openMountStore;
     mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
-    mocks.monitorData.hostSpoolMap = {};
+    mocks.monitorData.hostSpoolMap = { "K1Max-4A1B": "spool:a" };
 
     await importAllData({
       filamentSpools: [{ id: "spool:a" }],
-      hostSpoolMap: { "K1Max-4A1B": "spool:a" },
     });
 
     expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
@@ -520,6 +522,52 @@ describe("saveUnifiedStorageDurably", () => {
       "materialAccountingSpoolMountStore",
       expect.anything()
     );
+  });
+
+  it("Universal OPEN mount中のspoolはhostSpoolMap importでlegacy側へ二重装着しない", async () => {
+    const openMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [createDurableMountFixture()],
+      events: [],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = openMountStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.hostSpoolMap = {};
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+      hostSpoolMap: { "K1Max-4A1B": "spool:a" },
+    });
+
+    expect(mocks.monitorData.hostSpoolMap).toEqual({});
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toHaveLength(1);
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+      nextValue: expect.objectContaining({ spoolMounts: [] }),
+    }));
+  });
+
+  it("Universal reservation中のspoolはhostSpoolMap importでlegacy側へ二重装着しない", async () => {
+    mocks.monitorData.materialAccountingSpoolMountStore = createEmptyMaterialAccountingSpoolMountStore();
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.hostSpoolMap = {};
+    const reservation = reserveUniversalSpoolAssignment({
+      spoolId: "spool:a",
+      ownerId: "operation:k2:1a",
+      materialSourceId: "material-source:serial-k2:cfs-1:slot-0",
+    });
+    expect(reservation.ok).toBe(true);
+
+    try {
+      await importAllData({
+        filamentSpools: [{ id: "spool:a" }],
+        hostSpoolMap: { "K1Max-4A1B": "spool:a" },
+      });
+    } finally {
+      reservation.release();
+    }
+
+    expect(mocks.monitorData.hostSpoolMap).toEqual({});
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
   });
 });
 

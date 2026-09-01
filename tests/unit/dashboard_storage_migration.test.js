@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1583 (PR #440)
+ * @version 1.390.1585 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 16:12:00
+ * @lastModified 2026-09-01 16:51:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1118,7 +1118,7 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     ]));
   });
 
-  it('Gate18.9H: importAllData はhostSpoolMap取込後に既存current Universal OPEN mountも再照合する', async () => {
+  it('Gate18.9H: importAllData は既存current Universal OPEN mountと衝突するhostSpoolMapを取り込まない', async () => {
     monitorData.filamentSpools = [{ id: "spool-031", remainingLengthMm: 235800 }];
     monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
       ...createSpoolMountStorageFixture(),
@@ -1130,9 +1130,13 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
       hostSpoolMap: { "K1Max-4A1B": "spool-031" },
     });
 
-    expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool-031" });
-    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
-    expect(monitorData.materialAccountingSpoolMountStore.conflicts).toEqual(expect.arrayContaining([
+    expect(monitorData.hostSpoolMap).toEqual({});
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([
+      expect.objectContaining({
+        spoolId: "spool-031",
+      }),
+    ]);
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: "spool-mount-cross-backend-conflict",
         reason: "legacy-spool-backend-conflict",

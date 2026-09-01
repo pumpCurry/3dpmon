@@ -28,9 +28,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1584 (PR #440)
+ * @version 1.390.1585 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 16:39:00
+ * @lastModified 2026-09-01 16:49:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -53,6 +53,7 @@ import {
   normalizeStoredMaterialAccountingSpoolMountStore,
 } from "./printer_core/dashboard_material_accounting_mount_store.js";
 import {
+  findUniversalSpoolAssignmentConflict,
   reconcileCurrentOpenUniversalSpoolMountsAgainstBackends,
 } from "./printer_core/dashboard_material_accounting_spool_assignment_guard.js";
 import {
@@ -336,6 +337,56 @@ function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends(o
     }
   });
   return null;
+}
+
+/**
+ * legacy hostSpoolMapのimport/restore割当をUniversal SpoolMount authorityに対して検査する。
+ *
+ * 【詳細説明】
+ * - import/restoreはlegacy `hostSpoolMap`を直接増やし得るため、通常UIの
+ *   `setCurrentSpoolId()` と同じくUniversal `OPEN` mount / in-flight reservationを尊重する。
+ * - incoming SpoolMount storeも候補として検査し、同じimport payload内のUniversal mountを
+ *   legacy host割当で即座に奪わないようにする。
+ *
+ * @private
+ * @function _canImportLegacyHostSpoolAssignment
+ * @param {Object} input - 検査入力。
+ * @param {string} input.host - legacy host名。
+ * @param {string|null|undefined} input.spoolId - import/restoreされるspool ID。
+ * @param {Set<string>} input.validSpoolIds - 現在有効なmanaged spool ID集合。
+ * @param {Object|null|undefined=} input.incomingSpoolMountStore - 同一payload内のUniversal SpoolMount store候補。
+ * @param {string} input.contextLabel - ログ用context名。
+ * @returns {boolean} hostSpoolMapへ取り込んでよい場合はtrue。
+ */
+function _canImportLegacyHostSpoolAssignment(input = {}) {
+  const host = String(input.host || "").trim();
+  const spoolId = String(input.spoolId || "").trim();
+  const validSpoolIds = input.validSpoolIds instanceof Set ? input.validSpoolIds : new Set();
+  const contextLabel = String(input.contextLabel || "storage").trim();
+  if (!spoolId) {
+    return true;
+  }
+  if (!validSpoolIds.has(spoolId)) {
+    console.warn(`[${contextLabel}] hostSpoolMap["${host}"]: スプール "${spoolId}" が存在しないためスキップ`);
+    return false;
+  }
+  const currentConflict = findUniversalSpoolAssignmentConflict({
+    spoolId,
+    store: monitorData.materialAccountingSpoolMountStore,
+  });
+  const incomingConflict = findUniversalSpoolAssignmentConflict({
+    spoolId,
+    store: input.incomingSpoolMountStore,
+  });
+  const conflict = currentConflict || incomingConflict;
+  if (conflict) {
+    console.warn(
+      `[${contextLabel}] hostSpoolMap["${host}"]: スプール "${spoolId}" はUniversal MaterialSourceで` +
+      `装着中または予約中のためlegacy割当をスキップします (${conflict.reason || conflict.type || "conflict"})`
+    );
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -769,10 +820,14 @@ export async function importAllData(data) {
     const validIds = new Set(monitorData.filamentSpools.filter(s => !s.deleted && !s.isDeleted).map(s => s.id));
     for (const [host, spoolId] of Object.entries(data.hostSpoolMap)) {
       if (!(host in monitorData.hostSpoolMap)) {
-        if (!spoolId || validIds.has(spoolId)) {
+        if (_canImportLegacyHostSpoolAssignment({
+          host,
+          spoolId,
+          validSpoolIds: validIds,
+          incomingSpoolMountStore: data.materialAccountingSpoolMountStore,
+          contextLabel: "importAllData",
+        })) {
           monitorData.hostSpoolMap[host] = spoolId;
-        } else {
-          console.warn(`[importAllData] hostSpoolMap["${host}"]: スプール "${spoolId}" が存在しないためスキップ`);
         }
       }
     }
@@ -2383,10 +2438,14 @@ function _restoreFromData(shared, machines) {
     );
     for (const [host, spoolId] of Object.entries(shared.hostSpoolMap)) {
       if (spoolId && !monitorData.hostSpoolMap[host]) {
-        if (validSpoolIds.has(spoolId)) {
+        if (_canImportLegacyHostSpoolAssignment({
+          host,
+          spoolId,
+          validSpoolIds,
+          incomingSpoolMountStore: shared.materialAccountingSpoolMountStore,
+          contextLabel: "_restoreFromData",
+        })) {
           monitorData.hostSpoolMap[host] = spoolId;
-        } else {
-          console.warn(`[_restoreFromData] hostSpoolMap["${host}"]: スプール "${spoolId}" が存在しないためスキップ`);
         }
       }
     }

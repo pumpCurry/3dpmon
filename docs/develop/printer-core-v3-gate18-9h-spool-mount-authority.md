@@ -310,6 +310,8 @@ H-1a/H-1b では最低限以下を固定する。
 - import経路ではreconcile後のactive storeをIndexedDB shared keyへCAS保護で書き戻す。
   restore経路では起動を止めずに非同期CASを試み、完了前にoperator操作が入った場合は
   storage digest preconditionでfail-closedする。
+- legacy `hostSpoolMap` のimport/restoreもUniversal `OPEN` mount /
+  in-flight reservationを検査し、同じmanaged spoolをlegacy側へ二重装着しない。
 - `identityStrength: "unknown"` の source は mount できない。
 - provisional source は manual mount できるが、future debit は revalidation まで
   pending になる。
