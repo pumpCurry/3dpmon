@@ -22,9 +22,9 @@
  * - {@link forgetMaterialAccountingPrintStartRequest}：hostname単位のpending登録を破棄
  * - {@link clearMaterialAccountingPrintBindingLiveBridge}：テスト用にpending状態を初期化
  *
- * @version 1.390.1601 (PR #440)
+ * @version 1.390.1604 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 21:03:29
+ * @lastModified 2026-09-01 21:41:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 20 restart recoveryでpending print-startの再認証/再構築を永続session registryへ移す
@@ -270,6 +270,31 @@ function resolveObservedReceivedAt(input) {
 }
 
 /**
+ * print-completion観測を3DPmonが初めて受け取った時刻をpendingへ固定する。
+ *
+ * 【詳細説明】
+ * - runtime/CAS保存に失敗してpendingが残る場合、後続retryで新しい受信時刻を採用すると、
+ *   初回completion後に観測したMaterialSource snapshotが印刷interval内へ混入し得る。
+ * - そのためcompletionは最初に観測したlocal receipt timeをpendingへ一度だけ保存し、
+ *   retry時も同じ時刻をruntimeへ渡す。
+ *
+ * @private
+ * @function resolveCompletionFirstObservedReceivedAt
+ * @param {Object} pending - pending record。
+ * @param {Object} input - completion観測入力。
+ * @returns {string} 固定済みcompletion local receipt time。
+ */
+function resolveCompletionFirstObservedReceivedAt(pending, input) {
+  const existing = normalizeIsoTime(pending?.completionFirstObservedReceivedAt);
+  if (existing) {
+    return existing;
+  }
+  const observedReceivedAt = normalizeIsoTime(input.observedReceivedAt || input.receivedAt || input.observedAt) || new Date().toISOString();
+  pending.completionFirstObservedReceivedAt = observedReceivedAt;
+  return observedReceivedAt;
+}
+
+/**
  * pendingと観測jobの因果関係を検証する。
  *
  * 【詳細説明】
@@ -394,6 +419,7 @@ export function rememberMaterialAccountingPrintStartRequest(input = {}) {
     printPlan: materialBindingPlan,
     observedPrintJobId: null,
     startRecordedAt: null,
+    completionFirstObservedReceivedAt: null,
     completionRecordedAt: null,
     queuedStartObservation: null,
   };
@@ -533,10 +559,11 @@ export async function recordObservedMaterialAccountingPrintCompletion(input = {}
   if (!runtime || typeof runtime.recordObservedPrintCompletion !== "function") {
     return { ok: false, status: "blocked", reasons: ["print-binding-runtime-required"] };
   }
+  const completionObservedReceivedAt = resolveCompletionFirstObservedReceivedAt(pending, input);
   const result = await runtime.recordObservedPrintCompletion({
     ...createRuntimeRequest(pending, {
       printJobId,
-      observedReceivedAt: input.observedReceivedAt || input.receivedAt || input.observedAt || new Date().toISOString(),
+      observedReceivedAt: completionObservedReceivedAt,
     }),
     resultSetCompleteness: "complete",
   });

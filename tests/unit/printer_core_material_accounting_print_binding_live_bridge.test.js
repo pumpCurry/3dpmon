@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1599 (PR #440)
+ * @version 1.390.1604 (PR #440)
  * @since   1.390.1595 (PR #440)
- * @lastModified 2026-09-01 21:16:00
+ * @lastModified 2026-09-01 21:41:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -136,6 +136,7 @@ function createMaterialSourceObservationStore(deviceId = "serial:k2") {
       [deviceId]: {
         deviceId,
         identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+        eventCoverageStartedAt: "2026-09-01T08:00:00.000Z",
         lastObservedAt: "2026-09-01T08:01:04.000Z",
         providerDisconnectedAt: null,
         restoredFromStorage: false,
@@ -150,6 +151,7 @@ function createMaterialSourceObservationStore(deviceId = "serial:k2") {
             protocolSlotId: "1A",
             displayLabel: "1A",
             materialSourceIdentityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+            eventCoverageStartedAt: "2026-09-01T08:00:00.000Z",
           },
           "source:k2:cfs:1b": {
             sourceId: "source:k2:cfs:1b",
@@ -161,6 +163,7 @@ function createMaterialSourceObservationStore(deviceId = "serial:k2") {
             protocolSlotId: "1B",
             displayLabel: "1B",
             materialSourceIdentityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+            eventCoverageStartedAt: "2026-09-01T08:00:00.000Z",
           },
         },
       },
@@ -238,6 +241,49 @@ function attachOpenMounts(data) {
       }),
     ],
   };
+}
+
+/**
+ * 実runtime fixture内のMaterialSource最終観測時刻を更新する。
+ *
+ * 【詳細説明】
+ * - completion retry drift検証では、初回completion後に届いたsource観測を作り、
+ *   retry時のcompletion受信時刻が後ろへ動くと誤ってinterval内へ入る状況を再現する。
+ *
+ * @function markMaterialSourcesObservedAt
+ * @param {Object} data - monitorData互換fixture。
+ * @param {string} observedAt - source観測受信時刻。
+ * @returns {void}
+ */
+function markMaterialSourcesObservedAt(data, observedAt) {
+  const record = data.materialSourceObservations.byDeviceId["serial:k2"];
+  record.lastObservedAt = observedAt;
+  for (const source of Object.values(record.latestBySourceId)) {
+    source.lastObservedAt = observedAt;
+  }
+}
+
+/**
+ * 実runtime fixtureへK2完了履歴を追加する。
+ *
+ * @function attachCompletedHistory
+ * @param {Object} data - monitorData互換fixture。
+ * @param {Object=} options - 完了履歴オプション。
+ * @param {string=} options.printJobId - 完了job ID。
+ * @param {string=} options.observedReceivedAt - 3DPmonが完了履歴を受信した時刻。
+ * @returns {void}
+ */
+function attachCompletedHistory(data, options = {}) {
+  const hostname = "K2Pro-69E7";
+  const printJobId = options.printJobId || "job:new-1001";
+  data.machines[hostname].printStore.history.push({
+    id: printJobId,
+    finishTime: "2026-09-01T08:30:00.000Z",
+    observedReceivedAt: options.observedReceivedAt || "2026-09-01T08:30:00.000Z",
+    printfinish: 1,
+    materialUsed: "3210,6543",
+    materialUsedMm: 9753,
+  });
 }
 
 /**
@@ -389,6 +435,119 @@ describe("MaterialAccountingPrintBindingLiveBridge", () => {
         materialSourceIds: ["source:k2:cfs:1a", "source:k2:cfs:1b"],
       }),
     }));
+  });
+
+  it("完了runtimeが失敗してpendingが残った場合も初回completion受信時刻をretryへ固定する", async () => {
+    const runtime = {
+      recordObservedPrintStart: vi.fn(async () => ({ ok: true, status: "recorded" })),
+      recordObservedPrintCompletion: vi.fn()
+        .mockResolvedValueOnce({ ok: false, status: "blocked", reasons: ["cas-write-failed"] })
+        .mockResolvedValueOnce({ ok: true, status: "recorded" }),
+    };
+    rememberMaterialAccountingPrintStartRequest({
+      hostname: "K2Pro-69E7",
+      commandRequest: createCommandRequest(),
+      materialBindingPlan: createBindingPlan(),
+      preparedAt: "2026-09-01T10:00:00.000Z",
+    });
+    markMaterialAccountingPrintStartRequestSubmitted({
+      hostname: "K2Pro-69E7",
+      commandId: "cmd:k2:print-start:001",
+      submittedAt: "2026-09-01T10:00:00.000Z",
+    });
+    await recordObservedMaterialAccountingPrintStart({
+      hostname: "K2Pro-69E7",
+      printJobId: "1785991119",
+      firstObservedAt: "2026-09-01T10:00:05.000Z",
+      observedReceivedAt: "2026-09-01T10:00:05.000Z",
+      runtime,
+    });
+
+    const first = await recordObservedMaterialAccountingPrintCompletion({
+      hostname: "K2Pro-69E7",
+      printJobId: "1785991119",
+      observedReceivedAt: "2026-09-01T10:30:00.000Z",
+      runtime,
+    });
+    const pendingAfterFirst = getMaterialAccountingPrintBindingLiveBridgeSnapshot()
+      .pendingByHost["K2Pro-69E7"];
+    const second = await recordObservedMaterialAccountingPrintCompletion({
+      hostname: "K2Pro-69E7",
+      printJobId: "1785991119",
+      observedReceivedAt: "2026-09-01T10:31:00.000Z",
+      runtime,
+    });
+
+    expect(first.ok).toBe(false);
+    expect(first.reasons).toContain("cas-write-failed");
+    expect(pendingAfterFirst.completionFirstObservedReceivedAt).toBe("2026-09-01T10:30:00.000Z");
+    expect(second.ok).toBe(true);
+    expect(runtime.recordObservedPrintCompletion).toHaveBeenCalledTimes(2);
+    expect(runtime.recordObservedPrintCompletion.mock.calls[0][0].observedReceivedAt).toBe("2026-09-01T10:30:00.000Z");
+    expect(runtime.recordObservedPrintCompletion.mock.calls[1][0].observedReceivedAt).toBe("2026-09-01T10:30:00.000Z");
+  });
+
+  it("実runtime retryでも初回completion後のsource観測を完了intervalへ遡及採用しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const commandRequest = createCommandRequest();
+    const plan = createBindingPlan(commandRequest);
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    persist.mockResolvedValueOnce({ ok: true, casApplied: true, backend: "test" });
+    persist.mockResolvedValueOnce({ ok: false, casApplied: false, reason: "cas-conflict" });
+    persist.mockImplementation(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    rememberMaterialAccountingPrintStartRequest({
+      hostname: "K2Pro-69E7",
+      commandRequest,
+      materialBindingPlan: plan,
+      preparedAt: "2026-09-01T08:00:59.000Z",
+    });
+    markMaterialAccountingPrintStartRequestSubmitted({
+      hostname: "K2Pro-69E7",
+      commandId: commandRequest.commandId,
+      submittedAt: "2026-09-01T08:01:00.000Z",
+    });
+    await recordObservedMaterialAccountingPrintStart({
+      hostname: "K2Pro-69E7",
+      printJobId: "job:new-1001",
+      firstObservedAt: "2026-09-01T08:01:05.000Z",
+      observedReceivedAt: "2026-09-01T08:01:05.000Z",
+      runtime,
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:29:50.000Z");
+    attachCompletedHistory(data, {
+      printJobId: "job:new-1001",
+      observedReceivedAt: "2026-09-01T08:30:00.000Z",
+    });
+
+    const first = await recordObservedMaterialAccountingPrintCompletion({
+      hostname: "K2Pro-69E7",
+      printJobId: "job:new-1001",
+      observedReceivedAt: "2026-09-01T08:30:00.000Z",
+      runtime,
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:10.000Z");
+    const second = await recordObservedMaterialAccountingPrintCompletion({
+      hostname: "K2Pro-69E7",
+      printJobId: "job:new-1001",
+      observedReceivedAt: "2026-09-01T08:30:20.000Z",
+      runtime,
+    });
+
+    expect(first.ok).toBe(false);
+    expect(first.reasons).toContain("print-binding-persist-failed");
+    expect(second.ok).toBe(true);
+    expect(persist.mock.calls[2][0].request.completionObservedReceivedAt).toBe("2026-09-01T08:30:00.000Z");
+    expect(second.segments.every((segment) => segment.debit.canDebit === false)).toBe(true);
+    expect(second.segments.every((segment) => segment.debit.reasons.includes("source-continuity-required"))).toBe(true);
+    expect(second.segments.every((segment) => segment.debit.reasons.includes("fresh-topology-required"))).toBe(true);
   });
 
   it("送信失敗時はhostname単位でpending MaterialBindingPlanを破棄できる", () => {
