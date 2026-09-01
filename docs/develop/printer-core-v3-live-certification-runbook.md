@@ -122,6 +122,12 @@ read-only: it reports observed MaterialSources, legacy `hostSpoolMap`
 compatibility, Universal `SpoolMount` coverage, print-start snapshots, and
 `JobMaterialSegment` counts, but it must not migrate mounts, debit spools, or
 enable physical CFS commands.
+For review, `sourceSpecificUsageCount` only proves that a segment references the
+source; ItemKeeper projection and Gate evidence require the stricter
+`itemKeeperEligibleUsageCount` / `itemKeeperEligibleSegmentCount` values. Those
+eligible counts are scoped to the target multi-source device and require a
+matching print-start snapshot, same `printJobId`, same `deviceId`, a resolved
+`spoolId`, and finite non-negative usage.
 
 Required sequence:
 
@@ -145,6 +151,10 @@ Required sequence:
   evidence that has a trusted print-start snapshot and matching completion
   usage. Unused sources require explicit result-set completeness evidence before
   they can be marked confirmed-unused.
+- Confirm `gate18_9I.status:"evidence-present"` is based on the target
+  multi-source device's own print-start snapshot plus eligible source-specific
+  segment evidence. A segment from another device, or a source-specific segment
+  without ItemKeeper eligibility, is not enough.
 
 Pass criteria:
 

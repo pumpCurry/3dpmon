@@ -45,7 +45,12 @@ printer idle観測を更新しない。
 Gate 18.9Iの実機export確認には `scripts/analyze_material_accounting_export.mjs` を使う。
 このanalyzerはread-onlyで、K2/CFSのMaterialSource観測、legacy `hostSpoolMap` 1本割当、
 Universal `SpoolMount`、print-start snapshot、`JobMaterialSegment`、ItemKeeper source usage
-projection可能性を分けてreportする。K2/CFSでloaded sourceがあるのにsource別mountが無い場合は
+projection可能性を分けてreportする。`sourceSpecificUsageCount` はsource参照があるsegment数、
+`itemKeeperEligibleSegmentCount` は同一device + printJobIdのprint-start snapshot、resolved
+`spoolId`、`observed-used` / `confirmed-unused`、有限かつ0以上のused lengthを満たすsegment数として
+別々に読む。Gate 18.9Iの `evidence-present` は対象multi-source deviceにscopeした
+print-start snapshotとeligible segmentが揃った場合だけで、別deviceのsegmentやglobalな
+source alias一致では成立しない。K2/CFSでloaded sourceがあるのにsource別mountが無い場合は
 `loaded-source-managed-mount-missing`、multi-source機にlegacy 1本割当だけが残る場合は
 `legacy-single-spool-map-present-for-multi-source-device` として警告し、legacy 1本割当を
 source-aware mountとして扱わない。
