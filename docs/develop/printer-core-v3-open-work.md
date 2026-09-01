@@ -109,11 +109,13 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   `order` 順に展開し、CSV数とsnapshot数が違う場合はBLOCKする。caller supplied
   `completedAt`、usage payload、continuity objectだけでは完了usage authorityにせず、
   device/session/generation境界、runtime MaterialSource observation resolver、正式freshness
-  TTL、専用CAS `casApplied:true` を要求する。TTL切れ、provider disconnected、
-  restored last-knownの場合、source-specific segmentは保存してもmanaged remaining debit候補へ
-  昇格しない。さらに、print-start後からcompletionまでに同じsourceの変更/消失/merge conflict
-  eventが観測された場合は、完了時点のtopologyがfreshでもsource continuityなしとして
-  managed debit候補へ昇格しない。
+   TTL、専用CAS `casApplied:true` を要求する。TTL切れ、provider disconnected、
+   restored last-knownの場合、source-specific segmentは保存してもmanaged remaining debit候補へ
+   昇格しない。さらに、print-start後からcompletionまでに同じsourceの変更/消失/merge conflict
+   eventが観測された場合は、完了時点のtopologyがfreshでもsource continuityなしとして
+   managed debit候補へ昇格しない。provisional sourceのcontinuityは区間証拠として扱い、
+   source/device観測時刻がtrusted print-start snapshot以後かつcompletion観測以前に入らない場合も、
+   完了後fresh観測の遡及利用を避けるためmanaged debit候補へ昇格しない。
   Gate 18.9I-3では、このshadow storeに保存された同一device + printJobIdの
   `observed-used` / `confirmed-unused` `JobMaterialSegment` をItemKeeper送信用
   `jobs[].filaments[]` へread-only投影する。

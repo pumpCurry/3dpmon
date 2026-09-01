@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1598 (PR #440)
+ * @version 1.390.1600 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 20:22:36
+ * @lastModified 2026-09-01 21:58:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -577,6 +577,73 @@ function deriveCompletionSourceFreshness(deviceRecord, observedSource, completed
 }
 
 /**
+ * source record候補から観測時刻を新しい順に解決する。
+ *
+ * 【詳細説明】
+ * - canonical MaterialSource recordはraw observation snapshotから再構成されるため、
+ *   `lastObservedAt`がrecord表層に残らない場合がある。
+ * - raw `latestBySourceId`とcanonical aliasesを照合し、source単位の実観測時刻を拾い直す。
+ *
+ * @private
+ * @function resolveMaterialSourceObservedAtForContinuity
+ * @param {Object} deviceRecord - MaterialSource observation device record。
+ * @param {Object} snapshot - print-start snapshot。
+ * @param {Object|null} observedSource - completion時に解決したMaterialSource record。
+ * @returns {string|null} source単位の最新観測時刻。
+ */
+function resolveMaterialSourceObservedAtForContinuity(deviceRecord, snapshot, observedSource) {
+  const sourceIds = createMaterialSourceContinuityLookupIds(snapshot, observedSource);
+  const latestBySourceId = deviceRecord?.latestBySourceId && typeof deviceRecord.latestBySourceId === "object"
+    ? deviceRecord.latestBySourceId
+    : {};
+  const observedTimes = [
+    observedSource?.lastObservedAt,
+    observedSource?.observedAt,
+  ];
+  for (const [lookupId, candidate] of Object.entries(latestBySourceId)) {
+    const candidateIds = [
+      lookupId,
+      candidate?.sourceId,
+      candidate?.materialSourceId,
+      candidate?.id,
+    ].map(toTrimmedString).filter(Boolean);
+    if (!candidateIds.some((candidateId) => sourceIds.has(candidateId))) {
+      continue;
+    }
+    observedTimes.push(candidate?.lastObservedAt, candidate?.observedAt);
+  }
+  const normalizedTimes = observedTimes
+    .map(normalizeObservedTime)
+    .filter(Boolean)
+    .sort((a, b) => Date.parse(b) - Date.parse(a));
+  return normalizedTimes[0] || null;
+}
+
+/**
+ * 観測時刻がprint-startからcompletionまでの範囲内にあるか判定する。
+ *
+ * 【詳細説明】
+ * - 完了後に届いたMaterialSource観測をcompletion時点のfresh証拠として遡及利用しない。
+ * - print-start以前の古い観測だけで、印刷区間中のsource continuityがあったとは見なさない。
+ *
+ * @private
+ * @function isObservationWithinPrintInterval
+ * @param {string|null} observedAt - MaterialSource観測時刻。
+ * @param {Object} snapshot - print-start snapshot。
+ * @param {string|null} completedAt - 完了観測時刻。
+ * @returns {boolean} print-start以後かつcompletion以前の観測ならtrue。
+ */
+function isObservationWithinPrintInterval(observedAt, snapshot, completedAt) {
+  const observedMs = Date.parse(observedAt || "");
+  const startMs = Date.parse(snapshot?.capturedAt || "");
+  const completedMs = Date.parse(completedAt || "");
+  if (!Number.isFinite(observedMs) || !Number.isFinite(startMs) || !Number.isFinite(completedMs)) {
+    return false;
+  }
+  return observedMs >= startMs && observedMs <= completedMs;
+}
+
+/**
  * completion時点でruntime所有のsource continuity evidenceを作る。
  *
  * 【詳細説明】
@@ -605,19 +672,25 @@ function buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt = 
       deviceId,
       materialSourceId: sourceId,
     });
+    const deviceObservedAt = normalizeObservedTime(deviceRecord.lastObservedAt) || null;
+    const sourceObservedAt = resolveMaterialSourceObservedAtForContinuity(deviceRecord, snapshot, observedSource);
     const freshness = deriveMaterialSourceObservationFreshness(deviceRecord, {
       now: completedAt || new Date().toISOString(),
     });
     const sourceFreshness = deriveCompletionSourceFreshness(deviceRecord, observedSource, completedAt);
     const continuityBreakEvents = findMaterialSourceContinuityBreakEvents(deviceRecord, snapshot, observedSource, completedAt);
-    const freshTopology = !!observedSource && freshness.state === "fresh" && sourceFreshness.state === "fresh";
+    const intervalObserved =
+      isObservationWithinPrintInterval(deviceObservedAt, snapshot, completedAt) &&
+      isObservationWithinPrintInterval(sourceObservedAt, snapshot, completedAt);
+    const freshTopology = !!observedSource && intervalObserved && freshness.state === "fresh" && sourceFreshness.state === "fresh";
     const hasContinuityBreak = continuityBreakEvents.length > 0;
     continuityBySourceId[sourceId] = {
       sourceContinuity: freshTopology && !hasContinuityBreak,
       freshTopology,
       physicalDiscontinuity: hasContinuityBreak,
-      observedAt: normalizeObservedTime(deviceRecord.lastObservedAt) || null,
-      sourceObservedAt: normalizeObservedTime(observedSource?.lastObservedAt || observedSource?.observedAt) || null,
+      intervalObserved,
+      observedAt: deviceObservedAt,
+      sourceObservedAt,
       freshness,
       sourceFreshness,
       continuityBreakEvents: continuityBreakEvents.map((event) => ({

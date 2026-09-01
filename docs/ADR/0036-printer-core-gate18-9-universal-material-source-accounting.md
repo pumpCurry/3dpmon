@@ -180,6 +180,13 @@ and a trusted issuer has created source-specific usage and print-start binding
 evidence. Restart or reconnect does not close the mount, but fresh source
 observation is required before a new automatic debit.
 
+Source continuity for provisional sources is an interval fact, not just a final
+freshness fact. The observation used for debit eligibility must be tied to the
+same print interval: it must be observed no earlier than the trusted
+print-start snapshot and no later than the trusted completion observation. A
+MaterialSource observation received after completion must not be retroactively
+used to prove that the source was fresh at completion time.
+
 K2/CFS print-start binding must distinguish printer-reported job start time
 from 3dpmon receipt time. `devicePrintStartTime` may be used as the immutable
 print-start snapshot time, but causality against a just-submitted transport

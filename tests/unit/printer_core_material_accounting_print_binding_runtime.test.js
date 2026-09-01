@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1598 (PR #440)
+ * @version 1.390.1600 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 20:22:36
+ * @lastModified 2026-09-01 21:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -979,6 +979,45 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     expect(changedSegment.debit.reasons).toContain("physical-discontinuity");
     expect(changedSegment.debit.reasons).toContain("source-continuity-required");
     expect(unchangedSegment.debit.canDebit).toBe(true);
+  });
+
+  it("完了後に観測されたfreshなMaterialSourceを完了時点のcontinuity証拠へ遡及利用しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:k2-post-completion-source-observation",
+      firstObservedAt: "2026-09-01T08:01:00.000Z",
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime({ data, persist });
+    await runtime.recordObservedPrintStart({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-post-completion-source-observation",
+    });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:k2-post-completion-source-observation",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:31:30.000Z");
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:k2-post-completion-source-observation",
+      resultSetCompleteness: "complete",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.canDebit === false)).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.reasons.includes("source-continuity-required"))).toBe(true);
+    expect(result.segments.every((segment) => segment.debit.reasons.includes("fresh-topology-required"))).toBe(true);
   });
 
   it("完了時のcaller PrintPlan assignment変更ではなく保存済みprint-start snapshot順へusageを帰属する", async () => {
