@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1622 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 01:58:00
+ * @lastModified 2026-09-02 02:36:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -120,6 +120,170 @@ function valuesOfCollection(collection) {
 }
 
 /**
+ * collection値を文字列候補も含む配列へ正規化する。
+ *
+ * 【詳細説明】
+ * - MaterialSource aliasは`string[]`として保存されるため、object専用の`valuesOfCollection()`では落ちる。
+ * - analyzerはread-only診断なので、ここでは文字列/数値/objectを保持し、呼び出し側で`toText()`へ寄せる。
+ *
+ * @private
+ * @function valuesOfAnyCollection
+ * @param {*} collection - 配列またはobject辞書。
+ * @returns {Array<*>} collection内の値配列。
+ */
+function valuesOfAnyCollection(collection) {
+  if (Array.isArray(collection)) {
+    return collection.filter((entry) => entry !== null && entry !== undefined);
+  }
+  if (collection && typeof collection === "object") {
+    return Object.values(collection).filter((entry) => entry !== null && entry !== undefined);
+  }
+  return [];
+}
+
+/**
+ * candidate値をsource ID lookupへ追加する。
+ *
+ * 【詳細説明】
+ * - candidateがobjectの場合は、sourceId/materialSourceId/id/value/key/nameもID候補として読む。
+ * - candidateが文字列の場合は、そのままaliasとして追加する。
+ *
+ * @private
+ * @function addSourceLookupCandidate
+ * @param {Set<string>} ids - 追加先ID集合。
+ * @param {*} candidate - ID候補。
+ * @returns {void}
+ */
+function addSourceLookupCandidate(ids, candidate) {
+  if (candidate && typeof candidate === "object") {
+    [
+      candidate.materialSourceId,
+      candidate.sourceId,
+      candidate.id,
+      candidate.value,
+      candidate.key,
+      candidate.name,
+    ].forEach((value) => {
+      const text = toText(value);
+      if (text) {
+        ids.add(text);
+      }
+    });
+    return;
+  }
+  const text = toText(candidate);
+  if (text) {
+    ids.add(text);
+  }
+}
+
+/**
+ * source/mount/segmentのID候補をcanonical IDとalias込みで収集する。
+ *
+ * 【詳細説明】
+ * - exportにはraw protocol sourceId、Universal MaterialSource ID、open時binding aliasが混在する。
+ * - reviewer向けdiagnosticでは同じ物理sourceを誤ってmissing扱いしないよう、保存済みaliasを全てlookup対象にする。
+ *
+ * @private
+ * @function collectSourceLookupIds
+ * @param {Object|null|undefined} record - MaterialSource / SpoolMount / JobMaterialSegment 候補。
+ * @returns {Set<string>} lookup ID集合。
+ */
+function collectSourceLookupIds(record) {
+  const ids = new Set();
+  [
+    record?.materialSourceId,
+    record?.sourceId,
+    record?.id,
+    record?.sourceBindingAtOpen?.materialSourceId,
+    record?.sourceBindingAtOpen?.sourceId,
+    record?.sourceBindingAtOpen?.id,
+    record?.materialSource?.materialSourceId,
+    record?.materialSource?.sourceId,
+    record?.materialSource?.id,
+    record?.materialSourceSnapshot?.materialSourceId,
+    record?.materialSourceSnapshot?.sourceId,
+    record?.materialSourceSnapshot?.id,
+  ].forEach((candidate) => addSourceLookupCandidate(ids, candidate));
+  [
+    record?.aliases,
+    record?.sourceAliases,
+    record?.sourceIdentity?.aliases,
+    record?.sourceBindingAtOpen?.aliases,
+    record?.materialSource?.aliases,
+    record?.materialSourceSnapshot?.aliases,
+  ].forEach((collection) => {
+    valuesOfAnyCollection(collection).forEach((candidate) => addSourceLookupCandidate(ids, candidate));
+  });
+  return ids;
+}
+
+/**
+ * canonical MaterialSource ID候補を収集する。
+ *
+ * 【詳細説明】
+ * - raw source aliasだけで別deviceのsourceへ誤joinしないよう、canonical ID一致を別扱いする。
+ *
+ * @private
+ * @function collectCanonicalMaterialSourceIds
+ * @param {Object|null|undefined} record - MaterialSource / SpoolMount / JobMaterialSegment 候補。
+ * @returns {Set<string>} canonical MaterialSource ID候補集合。
+ */
+function collectCanonicalMaterialSourceIds(record) {
+  const ids = new Set();
+  [
+    record?.materialSourceId,
+    record?.sourceBindingAtOpen?.materialSourceId,
+    record?.materialSource?.materialSourceId,
+    record?.materialSourceSnapshot?.materialSourceId,
+  ].forEach((candidate) => {
+    const text = toText(candidate);
+    if (text) {
+      ids.add(text);
+    }
+  });
+  return ids;
+}
+
+/**
+ * recordに保存されたdevice scopeを取得する。
+ *
+ * 【詳細説明】
+ * - SpoolMountはopen時bindingにdeviceIdを持つため、alias joinではこのscopeを優先して見る。
+ *
+ * @private
+ * @function resolveRecordDeviceId
+ * @param {Object|null|undefined} record - source/mount/segment候補。
+ * @returns {string} deviceId候補。
+ */
+function resolveRecordDeviceId(record) {
+  return toText(
+    record?.deviceId ||
+    record?.sourceBindingAtOpen?.deviceId ||
+    record?.materialSource?.deviceId ||
+    record?.materialSourceSnapshot?.deviceId
+  );
+}
+
+/**
+ * 2つのID集合に共通要素があるか判定する。
+ *
+ * @private
+ * @function hasSharedId
+ * @param {Set<string>} left - 左辺ID集合。
+ * @param {Set<string>} right - 右辺ID集合。
+ * @returns {boolean} 共通IDがある場合true。
+ */
+function hasSharedId(left, right) {
+  for (const id of left) {
+    if (right.has(id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * connection targetからPrinter Core v3 device IDを取得する。
  *
  * 【詳細説明】
@@ -195,27 +359,25 @@ function resolveSourcePresence(source) {
  * @function findOpenMountsForSource
  * @param {Object} source - MaterialSource観測record。
  * @param {Array<Object>} openMounts - OPEN SpoolMount配列。
+ * @param {string=} deviceId - Printer Core v3 device ID。
  * @returns {Array<Object>} sourceに対応するOPEN mount配列。
  */
-function findOpenMountsForSource(source, openMounts) {
-  const ids = new Set([
-    toText(source.materialSourceId),
-    toText(source.sourceId),
-  ].filter(Boolean));
+function findOpenMountsForSource(source, openMounts, deviceId = "") {
+  const ids = collectSourceLookupIds(source);
+  const canonicalIds = collectCanonicalMaterialSourceIds(source);
   return openMounts.filter((mount) => {
-    const mountSourceIds = new Set([
-      toText(mount.materialSourceId),
-      toText(mount.sourceId),
-      toText(mount.sourceBindingAtOpen?.materialSourceId),
-      toText(mount.sourceBindingAtOpen?.sourceId),
-      ...valuesOfCollection(mount.sourceBindingAtOpen?.aliases).map((alias) => toText(alias)).filter(Boolean),
-    ].filter(Boolean));
-    for (const id of ids) {
-      if (mountSourceIds.has(id)) {
-        return true;
-      }
+    const mountDeviceId = resolveRecordDeviceId(mount);
+    if (deviceId && mountDeviceId && mountDeviceId !== deviceId) {
+      return false;
     }
-    return false;
+    const mountSourceIds = collectSourceLookupIds(mount);
+    if (!hasSharedId(ids, mountSourceIds)) {
+      return false;
+    }
+    if (hasSharedId(canonicalIds, collectCanonicalMaterialSourceIds(mount))) {
+      return true;
+    }
+    return Boolean(deviceId && mountDeviceId === deviceId);
   });
 }
 
@@ -233,17 +395,103 @@ function findOpenMountsForSource(source, openMounts) {
  * @returns {Array<Object>} sourceに対応するsegment配列。
  */
 function findSegmentsForSource(source, segments, deviceId) {
-  const ids = new Set([
-    toText(source.materialSourceId),
-    toText(source.sourceId),
-  ].filter(Boolean));
+  const ids = collectSourceLookupIds(source);
+  const canonicalIds = collectCanonicalMaterialSourceIds(source);
   return segments.filter((segment) => {
     const segmentDeviceId = toText(segment.deviceId);
     if (segmentDeviceId && deviceId && segmentDeviceId !== deviceId) {
       return false;
     }
-    return ids.has(toText(segment.materialSourceId)) || ids.has(toText(segment.sourceId));
+    const segmentSourceIds = collectSourceLookupIds(segment);
+    if (!hasSharedId(ids, segmentSourceIds)) {
+      return false;
+    }
+    if (hasSharedId(canonicalIds, collectCanonicalMaterialSourceIds(segment))) {
+      return true;
+    }
+    return Boolean(deviceId && segmentDeviceId === deviceId);
   });
+}
+
+/**
+ * print-start snapshot / segmentからPrintJob IDを取得する。
+ *
+ * 【詳細説明】
+ * - exportには`printJobId`/`jobId`/`printId`の揺れがあるため、ItemKeeper projection診断では
+ *   これらを同じジョブID候補として扱う。
+ *
+ * @private
+ * @function resolvePrintJobId
+ * @param {Object|null|undefined} record - print-start snapshot または JobMaterialSegment。
+ * @returns {string} PrintJob ID候補。
+ */
+function resolvePrintJobId(record) {
+  return toText(record?.printJobId || record?.jobId || record?.printId || record?.id);
+}
+
+/**
+ * segmentがItemKeeper projectionへ渡せる条件を満たすか判定する。
+ *
+ * 【詳細説明】
+ * - 実際のItemKeeper連携はspoolId、deviceId、usageState、非負usedLengthMmを要求する。
+ * - analyzerも同じ条件へ寄せ、pending/unknown/invalid segmentをready証跡として数えない。
+ *
+ * @private
+ * @function isItemKeeperEligibleSegment
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @param {string} deviceId - Printer Core v3 device ID。
+ * @returns {boolean} ItemKeeper projectionへ使えるsegmentならtrue。
+ */
+function isItemKeeperEligibleSegment(segment, deviceId) {
+  const segmentDeviceId = toText(segment?.deviceId);
+  const usageState = toText(segment?.usageState);
+  const usedLengthMm = toFiniteNumberOrNull(segment?.usedLengthMm);
+  if (!segment || typeof segment !== "object") {
+    return false;
+  }
+  if (deviceId && segmentDeviceId !== deviceId) {
+    return false;
+  }
+  return Boolean(
+    resolvePrintJobId(segment) &&
+    toText(segment.spoolId) &&
+    ["observed-used", "confirmed-unused"].includes(usageState) &&
+    usedLengthMm !== null &&
+    usedLengthMm >= 0
+  );
+}
+
+/**
+ * source-specific segmentをItemKeeper eligible条件で抽出する。
+ *
+ * 【詳細説明】
+ * - print-start snapshotと同じPrintJob IDを持つsegmentだけをready証跡にする。
+ * - snapshotが存在しないsegmentは、後から履歴だけで偶然混ざった可能性があるためGate18.9I readyには使わない。
+ *
+ * @private
+ * @function findItemKeeperEligibleSegmentsForSource
+ * @param {Object} source - MaterialSource観測record。
+ * @param {Array<Object>} segments - JobMaterialSegment配列。
+ * @param {string} deviceId - Printer Core v3 device ID。
+ * @param {Array<Object>} snapshots - print-start snapshot配列。
+ * @returns {Array<Object>} ItemKeeper projectionへ使えるsource-specific segment配列。
+ */
+function findItemKeeperEligibleSegmentsForSource(source, segments, deviceId, snapshots) {
+  const snapshotJobIds = new Set(
+    snapshots
+      .filter((snapshot) => {
+        const snapshotDeviceId = toText(snapshot.deviceId);
+        return !snapshotDeviceId || !deviceId || snapshotDeviceId === deviceId;
+      })
+      .map(resolvePrintJobId)
+      .filter(Boolean)
+  );
+  if (snapshotJobIds.size === 0) {
+    return [];
+  }
+  return findSegmentsForSource(source, segments, deviceId)
+    .filter((segment) => isItemKeeperEligibleSegment(segment, deviceId))
+    .filter((segment) => snapshotJobIds.has(resolvePrintJobId(segment)));
 }
 
 /**
@@ -286,11 +534,13 @@ function isMultiSourceTarget(target) {
  * @param {Array<Object>} openMounts - OPEN SpoolMount配列。
  * @param {Array<Object>} segments - JobMaterialSegment配列。
  * @param {string} deviceId - Printer Core v3 device ID。
+ * @param {Array<Object>} snapshots - print-start snapshot配列。
  * @returns {Object} source診断summary。
  */
-function summarizeSource(source, openMounts, segments, deviceId) {
-  const matchingMounts = findOpenMountsForSource(source, openMounts);
+function summarizeSource(source, openMounts, segments, deviceId, snapshots) {
+  const matchingMounts = findOpenMountsForSource(source, openMounts, deviceId);
   const matchingSegments = findSegmentsForSource(source, segments, deviceId);
+  const itemKeeperEligibleSegments = findItemKeeperEligibleSegmentsForSource(source, segments, deviceId, snapshots);
   const reportedRemainingPercent = toFiniteNumberOrNull(
     source.remaining?.percent ??
     source.remaining?.normalizedPercent ??
@@ -326,6 +576,11 @@ function summarizeSource(source, openMounts, segments, deviceId) {
     })),
     sourceSpecificUsageCount: matchingSegments.length,
     sourceSpecificUsedLengthMm: matchingSegments.reduce((sum, segment) => {
+      const used = toFiniteNumberOrNull(segment.usedLengthMm);
+      return sum + (used ?? 0);
+    }, 0),
+    itemKeeperEligibleUsageCount: itemKeeperEligibleSegments.length,
+    itemKeeperEligibleUsedLengthMm: itemKeeperEligibleSegments.reduce((sum, segment) => {
       const used = toFiniteNumberOrNull(segment.usedLengthMm);
       return sum + (used ?? 0);
     }, 0),
@@ -405,7 +660,7 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
     ? data.materialSourceObservations?.byDeviceId?.[deviceId]
     : null;
   const sources = valuesOfCollection(observationRecord?.latestBySourceId)
-    .map((source) => summarizeSource(source, openMounts, segments, deviceId))
+    .map((source) => summarizeSource(source, openMounts, segments, deviceId, snapshots))
     .sort((a, b) => a.displayLabel.localeCompare(b.displayLabel, "en", { numeric: true }));
   const loadedSources = sources.filter((source) => source.presence === "loaded");
   const legacySpoolId = toText(data.hostSpoolMap?.[hostname]);
@@ -462,10 +717,12 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
       jobMaterialSegmentCount: scopedSegments.length,
       sourceSpecificUsageCount: sources.reduce((sum, source) => sum + source.sourceSpecificUsageCount, 0),
       sourceSpecificUsedLengthMm: sources.reduce((sum, source) => sum + source.sourceSpecificUsedLengthMm, 0),
+      itemKeeperEligibleSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperEligibleUsageCount, 0),
+      itemKeeperEligibleUsedLengthMm: sources.reduce((sum, source) => sum + source.itemKeeperEligibleUsedLengthMm, 0),
     },
     certificationReadiness: {
       canRunGate18_9IShadowAccounting: multiSourceExpected && sources.length > 0 && loadedWithoutManagedMountCount === 0 && sourceAwareMountedCount > 0,
-      canProjectItemKeeperSourceUsage: sources.some((source) => source.sourceSpecificUsageCount > 0),
+      canProjectItemKeeperSourceUsage: sources.some((source) => source.itemKeeperEligibleUsageCount > 0),
       managedRemainingDebitAllowed: false,
       reasons,
     },
@@ -519,6 +776,11 @@ export function analyzeMaterialAccountingExport(exportPayload, options = {}) {
   const hasMultiSourceAccountingTarget = deviceSummaries.some((device) => (
     device.multiSourceExpected || device.sourceCounts.total > 1
   ));
+  const hasGate18_9IEvidence = deviceSummaries.some((device) => (
+    device.multiSourceExpected &&
+    device.printBinding.printStartSnapshotCount > 0 &&
+    device.printBinding.itemKeeperEligibleSegmentCount > 0
+  ));
   if (hasMultiSourceAccountingTarget && !data.materialAccountingSpoolMountStore) {
     warnings.push({
       device: "*",
@@ -547,7 +809,7 @@ export function analyzeMaterialAccountingExport(exportPayload, options = {}) {
     devices: deviceSummaries,
     certification: summarizeCertification(options.certificationPayload),
     gate18_9I: {
-      status: jobMaterialSegments.length > 0 ? "evidence-present" : "waiting-live-shadow-accounting",
+      status: hasGate18_9IEvidence ? "evidence-present" : "waiting-live-shadow-accounting",
       canDebitManagedRemaining: false,
       canUsePhysicalCfsSend: false,
       notes: [

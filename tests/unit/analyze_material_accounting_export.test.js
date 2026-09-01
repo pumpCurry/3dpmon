@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1622 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 01:58:00
+ * @lastModified 2026-09-02 02:36:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -55,6 +55,12 @@ function createExportPayload(options = {}) {
             status: "open",
             openedAt: "2026-09-01T07:30:00.000Z",
             verification: "operator-confirmed",
+            sourceBindingAtOpen: {
+              deviceId: "serial:k2",
+              materialSourceId: "source:k2:cfs:1a",
+              sourceId: "source:k2:cfs:1a",
+              aliases: ["cfs:1:slot:0", "T1A"],
+            },
           },
           {
             mountId: "mount:1b",
@@ -63,12 +69,25 @@ function createExportPayload(options = {}) {
             status: "open",
             openedAt: "2026-09-01T07:31:00.000Z",
             verification: "operator-confirmed",
+            sourceBindingAtOpen: {
+              deviceId: "serial:k2",
+              materialSourceId: "source:k2:cfs:1b",
+              sourceId: "source:k2:cfs:1b",
+              aliases: ["cfs:1:slot:1", "T1B"],
+            },
           },
         ],
       }
     : undefined;
   const printBindingStore = {
-    printStartSnapshots: options.includeSegments ? [{ snapshotId: "snap:1" }] : [],
+    printStartSnapshots: options.includeSegments
+      ? [{
+          snapshotId: "snap:1",
+          deviceId: "serial:k2",
+          printJobId: "job:1",
+          materialSourceSnapshots: [],
+        }]
+      : [],
     jobMaterialSegments: options.includeSegments
       ? [
           {
@@ -144,6 +163,8 @@ function createExportPayload(options = {}) {
             },
             "source:k2:cfs:1a": {
               sourceId: "source:k2:cfs:1a",
+              materialSourceId: "source:k2:cfs:1a",
+              deviceId: "serial:k2",
               kind: "cfs-slot",
               displayLabel: "1A",
               presence: "loaded",
@@ -154,6 +175,8 @@ function createExportPayload(options = {}) {
             },
             "source:k2:cfs:1b": {
               sourceId: "source:k2:cfs:1b",
+              materialSourceId: "source:k2:cfs:1b",
+              deviceId: "serial:k2",
               kind: "cfs-slot",
               displayLabel: "1B",
               presence: "loaded",
@@ -232,18 +255,211 @@ describe("analyze_material_accounting_export", () => {
     expect(device.printBinding).toMatchObject({
       printStartSnapshotCount: 1,
       jobMaterialSegmentCount: 2,
+      itemKeeperEligibleSegmentCount: 2,
+      itemKeeperEligibleUsedLengthMm: 9753,
     });
     expect(device.sources.map((source) => [
       source.displayLabel,
       source.managedMountCount,
       source.sourceSpecificUsageCount,
       source.sourceSpecificUsedLengthMm,
+      source.itemKeeperEligibleUsageCount,
+      source.itemKeeperEligibleUsedLengthMm,
       source.deviceReportedRemainingPercent,
     ])).toEqual([
-      ["1A", 1, 1, 3210, 70],
-      ["1B", 1, 1, 6543, 88],
-      ["external", 0, 0, 0, null],
+      ["1A", 1, 1, 3210, 1, 3210, 70],
+      ["1B", 1, 1, 6543, 1, 6543, 88],
+      ["external", 0, 0, 0, 0, 0, null],
     ]);
+  });
+
+  it("raw source aliasとcanonical MaterialSource IDが分かれていてもmountとsegmentをsourceへ紐付ける", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: true,
+    });
+    const source = payload.materialSourceObservations.byDeviceId["serial:k2"].latestBySourceId["source:k2:cfs:1a"];
+    source.sourceId = "cfs:1:slot:0";
+    source.materialSourceId = "material-source:k2:f012:cfs:1:0";
+    source.aliases = ["source:k2:cfs:1a", "T1A"];
+    payload.materialAccountingSpoolMountStore.spoolMounts[0] = {
+      ...payload.materialAccountingSpoolMountStore.spoolMounts[0],
+      materialSourceId: "material-source:k2:f012:cfs:1:0",
+      sourceBindingAtOpen: {
+        deviceId: "serial:k2",
+        materialSourceId: "material-source:k2:f012:cfs:1:0",
+        sourceId: "cfs:1:slot:0",
+        aliases: ["source:k2:cfs:1a", "T1A"],
+      },
+    };
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = {
+      ...payload.materialAccountingPrintBindingStore.jobMaterialSegments[0],
+      materialSourceId: "material-source:k2:f012:cfs:1:0",
+      sourceId: "cfs:1:slot:0",
+      materialSourceSnapshot: {
+        deviceId: "serial:k2",
+        materialSourceId: "material-source:k2:f012:cfs:1:0",
+        sourceId: "cfs:1:slot:0",
+        aliases: ["source:k2:cfs:1a", "T1A"],
+      },
+    };
+    payload.appSettings.connectionTargets.push({
+      dest: "192.168.54.154:9999",
+      hostname: "K2Pro-Other",
+      printerType: "creality-k2",
+      printerCoreV3Identity: {
+        deviceIdSeed: "serial:k2-other",
+        reportedModel: "F012",
+      },
+    });
+    payload.machines["K2Pro-Other"] = {
+      storedData: { model: { rawValue: "F012" } },
+      printStore: { history: [] },
+    };
+    payload.materialSourceObservations.byDeviceId["serial:k2-other"] = {
+      lastObservedAt: "2026-09-01T08:02:00.000Z",
+      latestBySourceId: {
+        "cfs:1:slot:0": {
+          sourceId: "cfs:1:slot:0",
+          materialSourceId: "material-source:k2-other:f012:cfs:1:0",
+          kind: "cfs-slot",
+          displayLabel: "1A",
+          presence: "loaded",
+          aliases: ["T1A"],
+          lastObservedAt: "2026-09-01T08:02:00.000Z",
+        },
+      },
+    };
+    payload.materialAccountingSpoolMountStore.spoolMounts.push({
+      mountId: "mount:other",
+      materialSourceId: "material-source:k2-other:f012:cfs:1:0",
+      spoolId: "spool:other",
+      status: "open",
+      openedAt: "2026-09-01T07:35:00.000Z",
+      verification: "operator-confirmed",
+      sourceBindingAtOpen: {
+        deviceId: "serial:k2-other",
+        materialSourceId: "material-source:k2-other:f012:cfs:1:0",
+        sourceId: "cfs:1:slot:0",
+        aliases: ["source:k2:cfs:1a", "T1A"],
+      },
+    });
+
+    const report = analyzeMaterialAccountingExport(payload);
+    const device = report.devices.find((entry) => entry.hostname === "K2Pro-69E7");
+    const sourceSummary = device.sources.find((entry) => entry.displayLabel === "1A");
+
+    expect(sourceSummary).toMatchObject({
+      sourceId: "cfs:1:slot:0",
+      materialSourceId: "material-source:k2:f012:cfs:1:0",
+      managedMountCount: 1,
+      sourceSpecificUsageCount: 1,
+      sourceSpecificUsedLengthMm: 3210,
+      itemKeeperEligibleUsageCount: 1,
+      itemKeeperEligibleUsedLengthMm: 3210,
+    });
+    expect(sourceSummary.managedMounts.map((mount) => mount.spoolId)).toEqual(["spool:a"]);
+    expect(device.certificationReadiness.reasons).toEqual([]);
+  });
+
+  it("pendingやinvalidなJobMaterialSegmentはItemKeeper projection readyとして扱わない", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: true,
+    });
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments = [
+      {
+        segmentId: "seg:pending",
+        deviceId: "serial:k2",
+        printJobId: "job:1",
+        spoolId: "spool:a",
+        materialSourceId: "source:k2:cfs:1a",
+        usageState: "pending",
+        usedLengthMm: 3210,
+      },
+      {
+        segmentId: "seg:no-spool",
+        deviceId: "serial:k2",
+        printJobId: "job:1",
+        materialSourceId: "source:k2:cfs:1b",
+        usageState: "observed-used",
+        usedLengthMm: 6543,
+      },
+      {
+        segmentId: "seg:invalid-length",
+        deviceId: "serial:k2",
+        printJobId: "job:1",
+        spoolId: "spool:b",
+        materialSourceId: "source:k2:cfs:1b",
+        usageState: "observed-used",
+        usedLengthMm: -1,
+      },
+    ];
+
+    const report = analyzeMaterialAccountingExport(payload);
+    const device = report.devices[0];
+
+    expect(device.printBinding).toMatchObject({
+      jobMaterialSegmentCount: 3,
+      sourceSpecificUsageCount: 3,
+      itemKeeperEligibleSegmentCount: 0,
+      itemKeeperEligibleUsedLengthMm: 0,
+    });
+    expect(device.certificationReadiness.canProjectItemKeeperSourceUsage).toBe(false);
+    expect(report.gate18_9I.status).toBe("waiting-live-shadow-accounting");
+  });
+
+  it("confirmed-unusedかつ0mmのJobMaterialSegmentはItemKeeper projection readyとして扱う", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: true,
+    });
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = {
+      ...payload.materialAccountingPrintBindingStore.jobMaterialSegments[0],
+      usageState: "confirmed-unused",
+      usedLengthMm: 0,
+    };
+
+    const report = analyzeMaterialAccountingExport(payload);
+    const sourceSummary = report.devices[0].sources.find((entry) => entry.displayLabel === "1A");
+
+    expect(sourceSummary).toMatchObject({
+      sourceSpecificUsageCount: 1,
+      sourceSpecificUsedLengthMm: 0,
+      itemKeeperEligibleUsageCount: 1,
+      itemKeeperEligibleUsedLengthMm: 0,
+    });
+    expect(report.gate18_9I.status).toBe("evidence-present");
+  });
+
+  it("別deviceのeligible segmentだけではGate18.9I evidence-presentにしない", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: false,
+    });
+    payload.materialAccountingPrintBindingStore.printStartSnapshots = [{
+      snapshotId: "snap:k2",
+      deviceId: "serial:k2",
+      printJobId: "job:k2",
+    }];
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments = [{
+      segmentId: "seg:k1",
+      deviceId: "serial:k1",
+      printJobId: "job:k1",
+      spoolId: "spool:k1",
+      materialSourceId: "source:k1:external",
+      usageState: "observed-used",
+      usedLengthMm: 100,
+    }];
+
+    const report = analyzeMaterialAccountingExport(payload);
+
+    expect(report.devices[0].printBinding).toMatchObject({
+      printStartSnapshotCount: 1,
+      jobMaterialSegmentCount: 0,
+      itemKeeperEligibleSegmentCount: 0,
+    });
+    expect(report.gate18_9I.status).toBe("waiting-live-shadow-accounting");
   });
 
   it("certification panel exportを添付してread-only preflight状態を同じreportへ入れる", () => {
