@@ -168,6 +168,14 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   `snapshotCompleteness:"partial"`、`statusProbeStatus:"partial"`、`activityState:"unknown-core-state"`、
   または `coreStateComplete:false` を明示する場合は `cfs-control-printer-idle-observation-incomplete` として拒否する。
   これはdelta-only/timeout後に古いidle表示だけでphysical CFS commandを送らないためのGate19 idle predicateである。
+- `scripts/capture_k2_cfs_readonly_calibration.mjs` は、複数のprinter status probeから
+  `assembledPrinterStatus` を生成する。これはread-only certification用のprojectionであり、
+  最初に `state` と `deviceState` を含むcomplete baselineを観測できた場合だけ、同一WS session内の
+  後続delta scalarを順序通り累積する。complete baselineなしのdelta-only応答は
+  `status:"unknown" / reason:"complete-baseline-missing"` として保存し、idle authorityへ昇格しない。
+  projectionには `baselineProbeMode`、`lastAppliedProbeMode`、`appliedDeltaProbeCount`、`ttlMs`、
+  `fresh`、累積後の `snapshot` を含め、F012で観測されるfull baseline後のdelta-only通信を
+  physical send前にレビューできる形へ残す。TTL切れや観測時刻の逆行はfail-closedに扱う。
 - `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
   `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。

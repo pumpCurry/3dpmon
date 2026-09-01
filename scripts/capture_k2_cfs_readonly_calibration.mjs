@@ -14,11 +14,12 @@
  *
  * 【公開関数一覧】
  * - {@link parseArgs}：CLI引数を解析
+ * - {@link createAssembledPrinterStatusProjection}：printer status probe列を同一session projectionへ累積
  * - {@link runK2CfsReadOnlyCalibration}：read-only calibrationを実行
  *
- * @version 1.390.1611 (PR #440)
+ * @version 1.390.1618 (PR #440)
  * @since   1.390.1545 (PR #439)
- * @lastModified 2026-09-01 22:35:00
+ * @lastModified 2026-09-02 00:18:00
  * -----------------------------------------------------------
  * @todo
  * - Gate19実機calibration結果からK2 idle predicateのfixture化可否を判断する
@@ -39,6 +40,20 @@ const DEFAULT_STATUS_PROBE_COUNT = 5;
 const DEFAULT_STATUS_PROBE_INTERVAL_MS = 1000;
 const DEFAULT_BOXSINFO_PROBE_COUNT = 2;
 const DEFAULT_BOXSINFO_PROBE_INTERVAL_MS = 1000;
+const DEFAULT_ASSEMBLED_STATUS_TTL_MS = 15000;
+const PRINTER_STATUS_SCALAR_KEYS = Object.freeze([
+  "state",
+  "deviceState",
+  "printProgress",
+  "printJobTime",
+  "printLeftTime",
+  "nozzleTemp",
+  "bedTemp0",
+  "targetNozzleTemp",
+  "targetBedTemp0",
+  "printFileName",
+  "printId",
+]);
 
 const USAGE = `Usage:
   node scripts/capture_k2_cfs_readonly_calibration.mjs --host 192.168.54.153 --require-info-model F012 --pretty
@@ -53,6 +68,7 @@ Options:
   --boxsinfo-probe-count <number> Number of boxsInfo GET probes. Default: 2.
   --boxsinfo-probe-interval-ms <n>
                                   Delay between boxsInfo probes. Default: 1000.
+  --assembled-status-ttl-ms <n>   TTL for assembled printer status evidence. Default: 15000.
   --require-info-model <model>    Mark result failed unless /info model matches.
   --output-dir <dir>              Save readonly-calibration-result.json under timestamped directory.
   --pretty                        Pretty-print stdout JSON.
@@ -69,6 +85,266 @@ Options:
  */
 function toNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+/**
+ * 任意値を有限数へ正規化する。
+ *
+ * @private
+ * @function toFiniteNumberOrNull
+ * @param {*} value - 数値候補
+ * @returns {number|null} 有限数、またはnull
+ */
+function toFiniteNumberOrNull(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const numberValue = Number(trimmed);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+/**
+ * ISO時刻をepoch msへ変換する。
+ *
+ * @private
+ * @function parseIsoTimeMs
+ * @param {*} value - ISO時刻候補
+ * @returns {number|null} epoch ms、またはnull
+ */
+function parseIsoTimeMs(value) {
+  const text = toNonEmptyString(value);
+  if (!text) {
+    return null;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * printer status summaryの観測済みscalarだけをpayload snapshotへ反映する。
+ *
+ * 【詳細説明】
+ * - delta-only応答では未観測fieldがsummary上nullになるため、observedScalarKeysに含まれるkeyだけを採用する。
+ * - `summary.complete` がfalseのprobeでも、温度など実際に届いたfieldは同一session projectionの補助情報として累積する。
+ *
+ * @private
+ * @function mergePrinterStatusSummaryIntoSnapshot
+ * @param {object} snapshot - 変更先snapshot
+ * @param {object|null|undefined} summary - printer status summary
+ * @returns {object} 変更後snapshot
+ */
+function mergePrinterStatusSummaryIntoSnapshot(snapshot, summary) {
+  const observedKeys = Array.isArray(summary?.observedScalarKeys)
+    ? new Set(summary.observedScalarKeys)
+    : new Set();
+  for (const key of PRINTER_STATUS_SCALAR_KEYS) {
+    if (!observedKeys.has(key)) {
+      continue;
+    }
+    const value = summary?.[key];
+    if (value !== null && value !== undefined) {
+      snapshot[key] = value;
+    }
+  }
+  return snapshot;
+}
+
+/**
+ * 累積済みprinter status snapshotから保守的なidle summaryを再計算する。
+ *
+ * 【詳細説明】
+ * - `state/deviceState` の両方が揃ったbaselineがある場合だけcompleteとする。
+ * - job time、remaining time、target温度のいずれかが活動を示す場合はidleにしない。
+ * - `printProgress` はstale値になりやすいため、単独ではactive根拠にしない。
+ *
+ * @private
+ * @function summarizeAssembledPrinterStatusSnapshot
+ * @param {object} snapshot - 累積済みprinter status scalar
+ * @returns {object} assembled status summary
+ */
+function summarizeAssembledPrinterStatusSnapshot(snapshot) {
+  const state = toFiniteNumberOrNull(snapshot?.state);
+  const deviceState = toFiniteNumberOrNull(snapshot?.deviceState);
+  const printProgress = toFiniteNumberOrNull(snapshot?.printProgress);
+  const printJobTime = toFiniteNumberOrNull(snapshot?.printJobTime);
+  const printLeftTime = toFiniteNumberOrNull(snapshot?.printLeftTime);
+  const nozzleTemp = toFiniteNumberOrNull(snapshot?.nozzleTemp);
+  const bedTemp0 = toFiniteNumberOrNull(snapshot?.bedTemp0);
+  const targetNozzleTemp = toFiniteNumberOrNull(snapshot?.targetNozzleTemp);
+  const targetBedTemp0 = toFiniteNumberOrNull(snapshot?.targetBedTemp0);
+  const printFileName = toNonEmptyString(snapshot?.printFileName);
+  const printId = toNonEmptyString(snapshot?.printId);
+  const complete = state !== null && deviceState !== null;
+  const active = (state !== null && state !== 0) ||
+    (deviceState !== null && deviceState !== 0) ||
+    (printJobTime !== null && printJobTime > 0) ||
+    (printLeftTime !== null && printLeftTime > 0) ||
+    (targetNozzleTemp !== null && targetNozzleTemp > 0) ||
+    (targetBedTemp0 !== null && targetBedTemp0 > 0);
+  const activityState = complete
+    ? (active ? "active" : "idle")
+    : (active ? "active-without-core-state" : "unknown-core-state");
+  return {
+    complete,
+    idle: complete && !active,
+    active,
+    activityState,
+    state,
+    deviceState,
+    printProgress,
+    printJobTime,
+    printLeftTime,
+    nozzleTemp,
+    bedTemp0,
+    targetNozzleTemp,
+    targetBedTemp0,
+    printFileName,
+    printId,
+  };
+}
+
+/**
+ * read-only printer status probe列から同一sessionの現在projectionを生成する。
+ *
+ * 【詳細説明】
+ * - 最初のcomplete probeをbaselineとし、以後のobserved/partial probeで観測されたscalarだけを順序通り累積する。
+ * - complete baselineが無い場合、delta-only frameをidle authorityへ昇格せずunknownとして返す。
+ * - 観測時刻が逆行した場合やTTL切れの場合は、fail-closedのunknown/stale証跡として返す。
+ *
+ * @function createAssembledPrinterStatusProjection
+ * @param {Array<object>} printerStatusSeries - printer status probe結果列
+ * @param {object=} options - projection option
+ * @param {number=} options.ttlMs - freshness TTL。負数の場合はTTL検査しない。
+ * @param {number=} options.asOfMs - 判定時刻epoch ms。省略時は現在時刻。
+ * @returns {object} assembled printer status projection
+ * @example
+ * const projection = createAssembledPrinterStatusProjection(result.printerStatusSeries);
+ */
+export function createAssembledPrinterStatusProjection(printerStatusSeries = [], options = {}) {
+  const series = Array.isArray(printerStatusSeries) ? printerStatusSeries : [];
+  const ttlMs = Number.isFinite(options.ttlMs) ? options.ttlMs : DEFAULT_ASSEMBLED_STATUS_TTL_MS;
+  const asOfMs = Number.isFinite(options.asOfMs) ? options.asOfMs : Date.now();
+  const snapshot = {};
+  let baselineProbe = null;
+  let baselineObservedAtMs = null;
+  let lastAppliedProbe = null;
+  let lastAppliedObservedAtMs = null;
+  let appliedDeltaProbeCount = 0;
+  let ignoredProbeCount = 0;
+  for (const probe of series) {
+    const summary = probe?.summary;
+    if (!summary || typeof summary !== "object") {
+      ignoredProbeCount += 1;
+      continue;
+    }
+    const observedAtMs = parseIsoTimeMs(probe?.observedAt);
+    if (lastAppliedObservedAtMs !== null &&
+        observedAtMs !== null &&
+        observedAtMs < lastAppliedObservedAtMs) {
+      return {
+        authority: "k2-assembled-printer-status-v1",
+        status: "unknown",
+        reason: "out-of-order-printer-status-observation",
+        idle: false,
+        active: false,
+        complete: false,
+        baselineProbeMode: baselineProbe?.probeMode || null,
+        lastAppliedProbeMode: lastAppliedProbe?.probeMode || null,
+        appliedDeltaProbeCount,
+        ignoredProbeCount,
+        snapshot: { ...snapshot },
+      };
+    }
+    if (!baselineProbe) {
+      if (probe?.status === "observed" && summary.complete === true) {
+        mergePrinterStatusSummaryIntoSnapshot(snapshot, summary);
+        baselineProbe = probe;
+        baselineObservedAtMs = observedAtMs;
+        lastAppliedProbe = probe;
+        lastAppliedObservedAtMs = observedAtMs;
+      } else {
+        ignoredProbeCount += 1;
+      }
+      continue;
+    }
+    if (probe?.status === "observed" || probe?.status === "partial") {
+      mergePrinterStatusSummaryIntoSnapshot(snapshot, summary);
+      lastAppliedProbe = probe;
+      lastAppliedObservedAtMs = observedAtMs ?? lastAppliedObservedAtMs;
+      if (probe !== baselineProbe) {
+        appliedDeltaProbeCount += 1;
+      }
+    } else {
+      ignoredProbeCount += 1;
+    }
+  }
+  if (!baselineProbe) {
+    return {
+      authority: "k2-assembled-printer-status-v1",
+      status: "unknown",
+      reason: "complete-baseline-missing",
+      idle: false,
+      active: false,
+      complete: false,
+      baselineProbeMode: null,
+      baselineObservedAt: null,
+      lastAppliedProbeMode: null,
+      lastAppliedObservedAt: null,
+      ageMs: null,
+      ttlMs,
+      fresh: false,
+      appliedDeltaProbeCount: 0,
+      ignoredProbeCount,
+      snapshot: {},
+    };
+  }
+  const summary = summarizeAssembledPrinterStatusSnapshot(snapshot);
+  const ageMs = lastAppliedObservedAtMs !== null ? Math.max(0, asOfMs - lastAppliedObservedAtMs) : null;
+  const fresh = ttlMs < 0 || (ageMs !== null && ageMs <= ttlMs);
+  if (!fresh) {
+    return {
+      authority: "k2-assembled-printer-status-v1",
+      status: "stale",
+      reason: "assembled-status-ttl-expired",
+      ...summary,
+      idle: false,
+      baselineProbeMode: baselineProbe.probeMode || null,
+      baselineObservedAt: baselineProbe.observedAt || null,
+      lastAppliedProbeMode: lastAppliedProbe?.probeMode || null,
+      lastAppliedObservedAt: lastAppliedProbe?.observedAt || null,
+      ageMs,
+      ttlMs,
+      fresh: false,
+      appliedDeltaProbeCount,
+      ignoredProbeCount,
+      snapshot: { ...snapshot },
+    };
+  }
+  return {
+    authority: "k2-assembled-printer-status-v1",
+    status: "observed",
+    reason: "assembled-current-status",
+    ...summary,
+    baselineProbeMode: baselineProbe.probeMode || null,
+    baselineObservedAt: baselineProbe.observedAt || null,
+    baselineObservedAtMs,
+    lastAppliedProbeMode: lastAppliedProbe?.probeMode || null,
+    lastAppliedObservedAt: lastAppliedProbe?.observedAt || null,
+    lastAppliedObservedAtMs,
+    ageMs,
+    ttlMs,
+    fresh: true,
+    appliedDeltaProbeCount,
+    ignoredProbeCount,
+    snapshot: { ...snapshot },
+  };
 }
 
 /**
@@ -114,6 +390,7 @@ export function parseArgs(argv = []) {
     statusProbeIntervalMs: DEFAULT_STATUS_PROBE_INTERVAL_MS,
     boxsInfoProbeCount: DEFAULT_BOXSINFO_PROBE_COUNT,
     boxsInfoProbeIntervalMs: DEFAULT_BOXSINFO_PROBE_INTERVAL_MS,
+    assembledStatusTtlMs: DEFAULT_ASSEMBLED_STATUS_TTL_MS,
     requireInfoModel: "",
     outputDir: "",
     pretty: false,
@@ -137,6 +414,7 @@ export function parseArgs(argv = []) {
     else if (arg === "--status-probe-interval-ms") options.statusProbeIntervalMs = Number(next());
     else if (arg === "--boxsinfo-probe-count") options.boxsInfoProbeCount = Number(next());
     else if (arg === "--boxsinfo-probe-interval-ms") options.boxsInfoProbeIntervalMs = Number(next());
+    else if (arg === "--assembled-status-ttl-ms") options.assembledStatusTtlMs = Number(next());
     else if (arg === "--require-info-model") options.requireInfoModel = next();
     else if (arg === "--output-dir") options.outputDir = next();
     else if (arg === "--pretty") options.pretty = true;
@@ -155,6 +433,7 @@ export function parseArgs(argv = []) {
   assertIntegerBetween(options, "statusProbeIntervalMs", "--status-probe-interval-ms", 0, 60000);
   assertIntegerBetween(options, "boxsInfoProbeCount", "--boxsinfo-probe-count", 0, 60);
   assertIntegerBetween(options, "boxsInfoProbeIntervalMs", "--boxsinfo-probe-interval-ms", 0, 60000);
+  assertIntegerBetween(options, "assembledStatusTtlMs", "--assembled-status-ttl-ms", 0, 600000);
   if (toNonEmptyString(options.outputDir)) {
     options.outputDir = path.resolve(options.outputDir);
   }
@@ -580,6 +859,10 @@ export async function runK2CfsReadOnlyCalibration(options) {
   const timeoutStatusProbeCount = printerStatusSeries.filter((probe) => probe.status === "timeout").length;
   const errorStatusProbeCount = printerStatusSeries.filter((probe) => probe.status === "error").length;
   const observedBoxsInfoProbeCount = boxsInfoSeries.filter((probe) => probe.status === "observed").length;
+  const assembledPrinterStatus = createAssembledPrinterStatusProjection(printerStatusSeries, {
+    ttlMs: options.assembledStatusTtlMs,
+    asOfMs: Date.now(),
+  });
   const failedStatusProbeCount = printerStatusSeries.length - observedStatusProbeCount;
   const failedBoxsInfoProbeCount = boxsInfoSeries.length - observedBoxsInfoProbeCount;
   const allRequestedProbesObserved = observedStatusProbeCount === options.statusProbeCount
@@ -600,6 +883,7 @@ export async function runK2CfsReadOnlyCalibration(options) {
     wsOpen,
     wsTimeline: timelineRecorder.timeline,
     printerStatusSeries,
+    assembledPrinterStatus,
     boxsInfoSeries,
     statusProbeCount: printerStatusSeries.length,
     observedStatusProbeCount,
