@@ -1,0 +1,257 @@
+# Printer Core v3 Gate 18.9H SpoolMount Authority
+
+Last updated: 2026-09-01
+
+この文書は、K2/CFS と将来の K1C+CFS-C を含む multi-source printer で、
+3DPmon 管理スプールを MaterialSource 単位へ割り当てるための
+Gate 18.9H 実装仕様を固定する。
+
+## Goal
+
+Gate 18.9H の目的は、CFS / CFS-C / external spool / direct feed を問わず、
+operator が 3DPmon 管理スプールを各 MaterialSource へ明示的に mount できる
+production authority を作ることである。
+
+この Gate では、次のことは行わない。
+
+- CFS physical command の production enable。
+- filament remaining の debit。
+- legacy `usageHistory` への書き込み。
+- `hostSpoolMap` の自動書き換え。
+- device observation / RFID / selected / empty / stale による自動 mount 更新。
+- ItemKeeper payload への source-aware projection 本番接続。
+
+## Gate Split
+
+### Gate 18.9H-1a: Pure Store And Service Contract
+
+H-1a では production storage へ接続せず、pure store / service contract と
+unit test だけを追加する。
+
+対象:
+
+- `3dp_lib/printer_core/dashboard_material_accounting_mount_store.js`
+- `3dp_lib/printer_core/dashboard_material_accounting_mount_service.js`
+- 必要な場合のみ `dashboard_material_accounting_contract.js`
+- 原則として `dashboard_spool_mount_repository.js` は既存 API を使い、変更を避ける
+
+完了条件:
+
+- 1つの MaterialSource に open mount は最大1件。
+- 1つの managed spool は全 device/source 横断で open mount 最大1件。
+- `operatorActionId` の同一 payload 再送は idempotent。
+- `operatorActionId` の異なる payload 再送は conflict。
+- `operatorReplaceSourceMount()` は close old + open new を1つの staged transaction
+  として扱い、new mount が失敗した場合 old mount は open のまま残る。
+- durable writer callback は `casApplied:true` を返さない限り成功扱いにしない。
+- service は `hostSpoolMap` を read-only occupancy として参照し、
+  同じ spool が legacy 側で装着中の場合は Universal mount を拒否する。
+
+### Gate 18.9H-1b: Durable Production Persistence
+
+H-1b では H-1a の contract を `monitorData` / shared storage / IndexedDB へ接続する。
+
+対象:
+
+- `3dp_lib/dashboard_data.js`
+- `3dp_lib/dashboard_storage.js`
+- `3dp_lib/dashboard_storage_idb.js`
+- storage migration / import / export tests
+
+完了条件:
+
+- `monitorData.materialAccountingSpoolMountStore` を追加する。
+- store は shared durable storage として保存、復元、export、import できる。
+- IndexedDB backend では read current -> verify revision/digest -> put next を
+  同一 readwrite transaction 内で行う。
+- CAS を証明できない backend では production mount write を成功扱いにしない。
+- import 時に `hostSpoolMap`、`usageHistory`、`filamentSpools.remainingLengthMm`、
+  `materialAccountingPrintBindingStore` へ投影しない。
+- conflicting open mount は first-win で片方を採用せず、active authority から
+  conflict set 全体を外して quarantine する。
+
+## Store Shape
+
+```js
+materialAccountingSpoolMountStore = {
+  schemaVersion: 1,
+  authority: "material-accounting-spool-mount-store",
+  storeRevision: 0,
+  storeDigest: "",
+  spoolMounts: [],
+  events: [],
+  conflicts: [],
+  retainedUnsupportedEntries: [],
+  invariants: {
+    operatorManaged: true,
+    deviceObservationWrites: false,
+    physicalCommandWrites: false,
+    legacyHostSpoolMapWrites: false,
+    legacyUsageHistoryWrites: false,
+    legacySpoolRemainingWrites: false,
+    filamentLedgerWrites: false,
+    printBindingWrites: false
+  }
+};
+```
+
+`operationsById` を durable authority として保存しない。再起動後の冪等性は、
+`spoolMounts[]` と durable `events[]` から operation index を再構築して回復する。
+
+## Service API
+
+```js
+operatorMountSource({
+  operatorActionId,
+  expectedDeviceId,
+  materialSource,
+  spoolId,
+  actor
+});
+
+operatorUnmountSource({
+  operatorActionId,
+  materialSourceId,
+  expectedMountId,
+  actor,
+  reason
+});
+
+operatorReplaceSourceMount({
+  operatorActionId,
+  materialSource,
+  expectedOldMountId,
+  newSpoolId,
+  actor
+});
+```
+
+`expectedMountId` は stale UI から別 mount を誤って close しないため必須とする。
+
+## Identity And Digests
+
+`materialSourceId` は canonical accounting identity として扱う。
+`1A`、`1B`、`T1A` などの表示ラベルや print assignment は durable ID にしない。
+
+`mountSubjectId` は `deviceId + materialSourceId` から作る。
+
+`operatorActionId` は UI 操作ごとに一度だけ発行される unique ID である。
+同じ操作の retry では同じ ID を使う。同じ source/spool の再 mount でも、
+別の日や別操作であれば別 operation として扱う。
+
+mount record には、少なくとも以下の source identity binding evidence を残す。
+
+```js
+sourceBindingAtOpen = {
+  deviceId,
+  materialSourceId,
+  unitId,
+  kind,
+  identityStrength,
+  sourceIdentityDigest,
+  locator,
+  resolvedAt
+};
+```
+
+`sourceIdentityDigest` には source identity と locator を含める。
+material name、color、remaining、selected、`T1A` は観測値または print assignment
+であり、mount authority digest には含めない。
+
+## Legacy Boundary
+
+`hostSpoolMap` は Gate 18.9H では read-only compatibility projection である。
+
+H-1 は K2/CFS の既存 `hostSpoolMap` 1本割当を自動で 1A などへ移行しない。
+その spool が同じ K2 に設定されていても、Universal mount へ自動投入しない。
+H-2 の UI で operator-confirmed migration candidate として扱う。
+
+ただし H-1 service は `hostSpoolMap` を read-only occupancy として検査し、
+同じ managed spool が legacy 側で装着中なら Universal mount を拒否する。
+
+- 別 device の legacy mount: `legacy-spool-already-mounted`
+- 同じ multi-source device の legacy mount: `legacy-spool-occupancy-requires-migration`
+
+## Observation Boundary
+
+次の観測や物理操作は SpoolMount を自動 close / rewrite しない。
+
+- app restart
+- WebSocket / HTTP / Moonraker disconnect
+- provider stale
+- CFS / CFS-C detach
+- selected source change
+- tool assignment change
+- RFID missing or unreadable
+- remaining value missing
+- source temporarily unobserved
+- explicit empty / unloaded observation
+- CFS load / unload / select / feed / retract command result
+
+これらは将来の debit eligibility を pending / blocked にする材料にはなり得るが、
+operator-managed mount interval 自体は変更しない。
+
+## ItemKeeper Boundary
+
+ItemKeeper の `jobs[].filaments[]` は複数 spool の `usedMm` を表現できる。
+しかし Gate 18.9H では ItemKeeper payload へ本番接続しない。
+
+将来の projection は、現在の mount store を再参照して履歴を書き換えるのではなく、
+print-start snapshot と JobMaterialSegment から historical `filamentInfo[]` 相当を
+作って送信する。
+
+これにより、今日 CFS-1A が spool A でも、翌日 spool B へ交換されたときに、
+昨日の印刷履歴が spool B へ再解釈される事故を防ぐ。
+
+multi-source job で total-only usage しかない場合は、source 数、色、material 名、
+表示順、経過時間から推測配分しない。`unattributedUsage` として隔離し、
+ItemKeeper へ per-spool true usage として送らない。
+
+## P0/P1 Tests
+
+H-1a/H-1b では最低限以下を固定する。
+
+- 1A -> spool A、1B -> spool B を同一 device で同時 open できる。
+- 同一 MaterialSource へ2本 open できない。
+- 同一 spool を別 source/device へ同時 open できない。
+- legacy `hostSpoolMap` で装着中の spool を Universal source へ open できない。
+- 同じ `operatorActionId` と同じ payload は restart 後も idempotent。
+- 同じ `operatorActionId` と異なる payload は restart 後も conflict。
+- replace の new mount conflict / CAS mismatch / durable failure では old mount が
+  open のまま残る。
+- `casApplied:false` または durable failure では `monitorData` を変更しない。
+- concurrent stale-base write は CAS mismatch で止める。
+- corrupt / unsupported / conflicting imported records は quarantine される。
+- conflicting open mount は first-win で採用されない。
+- `identityStrength: "unknown"` の source は mount できない。
+- provisional source は manual mount できるが、future debit は revalidation まで
+  pending になる。
+- wrong-device source、missing spool、deleted spool は mount できない。
+- mount / unmount / replace は `hostSpoolMap`、`usageHistory`、
+  `filamentSpools.remainingLengthMm`、`materialAccountingPrintBindingStore`、
+  `physicalCommandRecoveryLatch` を変更しない。
+
+## Follow-up Gates
+
+Gate 18.9H-2:
+
+- filament manager の source card に 3DPmon管理スプール設定 / 交換 / 割当解除 UI を追加する。
+- K2/CFS の legacy `hostSpoolMap` 1本割当を migration candidate として表示する。
+- source-aware read model で spool 一覧に `装着中: K2Pro-69E7 / CFS 1A` のような
+  表示を出す。
+
+Gate 18.9I-1:
+
+- runtime print-start から PrintPlan + production SpoolMount snapshot を保存する。
+- completion observation を JobMaterialSegment / shadow ledger event へ接続する。
+- managed remaining はまだ減らさない。
+
+Gate 18.9I-2:
+
+- trusted source-specific usage issuer と legacy cutover guard を追加する。
+- K2/CFS first universal-authoritative debit を実機証跡に基づいて有効化する。
+
+Gate 19 / 19.5:
+
+- CFS physical command は command kind ごとに実機 certification する。
+- module-owned registry に登録された command だけ production UI で有効化する。

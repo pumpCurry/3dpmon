@@ -1,6 +1,6 @@
 # Printer Core v3 Open Work
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 このメモは、Gate 1-18 の contract / fail-closed 判定とは別に、現場でユーザーが設定、監視、判断、操作するときに未実装または未接続として残っている項目を整理する。
 
@@ -12,6 +12,8 @@ K2/CFSを3DPmon UIから操作するための仕様調査とGate 19設計境界�
 Gate 18.9 の Universal MaterialSource accounting 仕様は
 `docs/ADR/0036-printer-core-gate18-9-universal-material-source-accounting.md` と
 `docs/develop/printer-core-v3-gate18-9-universal-material-source-accounting.md` を参照する。
+Gate 18.9H の Operator SpoolMount production authority 仕様は
+`docs/develop/printer-core-v3-gate18-9h-spool-mount-authority.md` を参照する。
 
 ## Gate status matrix
 
@@ -23,6 +25,7 @@ Gate 18.9 の Universal MaterialSource accounting 仕様は
 | Gate 19.5 UI Control Lifecycle | scaffold CLOSED / selection evidence + recovery blocker UI added | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
+| Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service and H-1b durable persistence split documented | pending | n/a | pending |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -65,6 +68,7 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   transactionを返し、conflict時はpartial transactionを返さない。これはまだproduction storage/ledger authorityではない。Gate 18.9D-2では、trusted prepared transaction、persistent shadow commit store、transactionに固定したbase snapshot digest CAS、durable write callback境界、restart/recovery round-tripを追加した。durable writerは同じ永続transaction内でCASを適用したことを`casApplied:true`で返す必要があり、durable write成功後だけsubject lifecycleを`shadow`へ進め、失敗時は旧storeを返す。同じ`shadowOperationId`と同じpayloadは冪等、同じoperation IDで異なるpayloadはblockedにする。Gate 18.9Eでは、print-start時点のMaterialSource/SpoolMount/tool binding snapshotをsource単位で保存し、completion時のsource-specific usageを各source/mount/spoolへ帰属するread-only shadow repositoryを追加した。callerのcomplete宣言やtrusted風booleanだけでは未観測sourceを0mm確定せず、明示0mm usageがある場合だけconfirmed-unusedにする。multi-source total-only usageやsource-specific/total residualはpending/unattributedへ隔離し、single-source total-only usageだけはread-only source segmentとして扱う。public repositoryはtrusted usage evidence、trusted result-set completeness evidence、debit authorityをmintしない。復元時は同一semantic IDのpayload conflictがあれば勝者を残さず全件隔離し、`operationsById`はprocess lifetime cacheとして扱ってrestart後には復元しない。Gate 18.9Fでは、保存済みprint binding storeをフィラメント管理のCFS source行へread-only投影し、機器reported remainingと3DPmon管理スプール残量、source-specific直近使用量を別行として表示する。print binding storeも再起動後に復元されるが、ledger debitとlegacy cutover sealはまだ行わない。
 - Gate 18.9E/F hardeningでは、public print binding repositoryがtrusted print-start snapshotもmintしない境界へ戻し、module-owned result-set completeness evidenceが無い限りcomplete扱いにしない。復元時はsnapshot/usageEvidence/segment/ledgerのcross-record整合を検査し、孤立recordを`retainedUnsupportedEntries`へ隔離する。UIのsource-aware accounting joinはraw `sourceId`一致だけでなく、Universal MaterialSource ID、alias、locatorで合流する。
 - Gate 18.9Gでは、result-set completeness registryをpublic callerからのtrusted発行経路としてはfail-closedにした。registryはmodule-owned evidenceの検証境界だけを残し、provider/session/generation/result digestにbindされたissuerが未接続のあいだは、未出現sourceをtrusted `confirmed-unused`へ昇格しない。production spool debit、legacy `usageHistory`、spool残量更新はまだ行わない。
+- Gate 18.9Hでは、K2/CFSや将来のK1C+CFS-Cで、operatorが3DPmon管理スプールをMaterialSource単位へ明示mountできるproduction authorityを追加する。最初はH-1aとしてpure `materialAccountingSpoolMountStore` / service contractを作り、続いてH-1bでIndexedDB durable CASとstorage round-tripへ接続する。H-1ではUI、physical command、spool残量debit、legacy `usageHistory` write、`hostSpoolMap`自動移行、ItemKeeper projectionを行わない。`hostSpoolMap`はread-only occupancyとしてだけ参照し、同一spoolがlegacy側で装着中の場合はUniversal mountを拒否する。
 - Gate 10 / Gate 12 の実機 certification は未完。K2 CFS topology、K1C + CFS-C の attach / detach / runout / stale / reconnect は、表示土台はあるが実機意味の最終確定は残っている。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
 - CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意したが、LAN command keyが未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。

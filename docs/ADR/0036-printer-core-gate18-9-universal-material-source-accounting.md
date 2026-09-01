@@ -422,6 +422,25 @@ Gate 18.9G:
   device/job/plan/source set
 - no production spool debit, legacy usage write, or remaining mutation
 
+Gate 18.9H:
+
+- production Operator SpoolMount authority split into H-1a pure store/service
+  contract and H-1b durable persistence
+- dedicated `materialAccountingSpoolMountStore`, separate from migration shadow
+  and print-binding shadow stores
+- durable operation indexes are rebuilt from mount records and events after
+  restart; generic `operationsById` is not stored as authority
+- production writes require durable CAS evidence with `casApplied:true`
+- legacy `hostSpoolMap` is read-only compatibility evidence and same-spool
+  cross-backend occupancy blocks Universal mount until explicit migration
+- device observations, RFID, selected state, empty/unloaded state, stale
+  providers, and physical CFS commands do not close or rewrite SpoolMounts
+- no production spool debit, legacy usage write, physical command enable, or
+  ItemKeeper projection
+
+Detailed H-1 implementation boundaries are defined in
+`docs/develop/printer-core-v3-gate18-9h-spool-mount-authority.md`.
+
 Gate 20 extension:
 
 - restart recovery
