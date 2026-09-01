@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1420 (PR #434)
+* @version 1.390.1595 (PR #440)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-27 12:22:38
+* @lastModified 2026-09-01 19:17:01
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -92,6 +92,10 @@ import {
   mergeCapabilitySets,
   PRINTER_CAPABILITIES
 } from "./printer_core/dashboard_capabilities.js";
+import {
+  forgetMaterialAccountingPrintStartRequest,
+  rememberMaterialAccountingPrintStartRequest,
+} from "./printer_core/dashboard_material_accounting_print_binding_live_bridge.js";
 
 /**
  * 現在の使用量表示単位を返す。
@@ -1376,6 +1380,7 @@ function createK2CfsPrintStartRequestFromUi(options) {
       },
       startContext: {
         sessionId: shadowRecord.sessionId,
+        connectionGeneration: shadowRecord.connectionGeneration ?? shadowRecord.printerCoreV3ConnectionGeneration ?? null,
         uploadGeneration: fileIdentity.uploadGeneration,
         receiptId: null,
       },
@@ -3244,9 +3249,15 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
         dialogModel: k2CfsAssignmentModel,
         assignments,
       });
+      rememberMaterialAccountingPrintStartRequest({
+        hostname,
+        commandRequest: request,
+        submittedAt: new Date().toISOString(),
+      });
       await sendK2CfsPrintStartRequest(hostname, request);
       pushLog("K2/CFS印刷開始: colorMatch → multiColorPrint を送信しました", "send", false, hostname);
     } catch (error) {
+      forgetMaterialAccountingPrintStartRequest({ hostname });
       pushLog(`K2/CFS印刷開始を中止しました: ${error.message}`, "error", false, hostname);
       await showConfirmDialog({
         level: "error",

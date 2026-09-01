@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.1487 (PR #437)
+* @version 1.390.1595 (PR #440)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-08-30 03:06:29
+* @lastModified 2026-09-01 19:17:01
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -75,6 +75,104 @@ import * as printManager from "./dashboard_printmanager.js";
 import { getConnectionTarget, getDeviceIp, getHttpPort } from "./dashboard_connection.js";
 import { getCurrentSpool, formatFilamentAmount, formatSpoolDisplayId } from "./dashboard_spool.js";
 import { recordPrintLifecycle, getPrintLifecycleMetrics, resetPrintLifecycle } from "./dashboard_print_lifecycle.js";
+import { createMaterialAccountingPrintBindingRuntime } from "./printer_core/dashboard_material_accounting_print_binding_runtime.js";
+import {
+  recordObservedMaterialAccountingPrintCompletion,
+  recordObservedMaterialAccountingPrintStart,
+} from "./printer_core/dashboard_material_accounting_print_binding_live_bridge.js";
+
+/**
+ * MaterialAccounting PrintBinding runtime の遅延生成済みinstance。
+ *
+ * @type {Object|null}
+ */
+let materialAccountingPrintBindingRuntime = null;
+
+/**
+ * MaterialAccounting PrintBinding runtime を取得する。
+ *
+ * 【詳細説明】
+ * - processDataは高頻度に呼ばれるため、runtimeは遅延生成して使い回す。
+ * - runtime側のCAS/persist境界が保存可否を判断するため、ここでは生成だけを担当する。
+ *
+ * @private
+ * @function getMaterialAccountingPrintBindingRuntime
+ * @returns {Object} MaterialAccounting PrintBinding runtime。
+ */
+function getMaterialAccountingPrintBindingRuntime() {
+  if (!materialAccountingPrintBindingRuntime) {
+    materialAccountingPrintBindingRuntime = createMaterialAccountingPrintBindingRuntime();
+  }
+  return materialAccountingPrintBindingRuntime;
+}
+
+/**
+ * K2 Printer Core v3 shadowを持つ機器か判定する。
+ *
+ * @private
+ * @function hasK2PrinterCoreShadow
+ * @param {Object|null|undefined} machine - MachineData候補。
+ * @returns {boolean} K2 shadowならtrue。
+ */
+function hasK2PrinterCoreShadow(machine) {
+  const shadow = machine?.runtimeData?.printerCoreV3Shadow || null;
+  return String(shadow?.family || "").toLowerCase() === "k2" ||
+    String(shadow?.adapterFamily || "").toLowerCase() === "k2";
+}
+
+/**
+ * K2/CFS print-start観測をMaterialAccounting bridgeへ通知する。
+ *
+ * 【詳細説明】
+ * - ここでは成功/失敗をUI状態のauthorityにしない。
+ * - pending PrintPlanが無い場合やruntimeがまだ保存できない場合は、bridge/runtimeがfail-closedで返す。
+ *
+ * @private
+ * @function notifyMaterialAccountingPrintStartObserved
+ * @param {string} host - 対象ホスト名。
+ * @param {number|string|null} printJobId - 実機観測済みPrintJob ID。
+ * @returns {void}
+ */
+function notifyMaterialAccountingPrintStartObserved(host, printJobId) {
+  const normalizedPrintJobId = String(printJobId ?? "").trim();
+  if (!normalizedPrintJobId) {
+    return;
+  }
+  void recordObservedMaterialAccountingPrintStart({
+    hostname: host,
+    printJobId: normalizedPrintJobId,
+    runtime: getMaterialAccountingPrintBindingRuntime(),
+  }).catch((error) => {
+    pushLog(`PrintBinding開始観測の記録をスキップしました: ${error?.message || error}`, "warn", false, host);
+  });
+}
+
+/**
+ * K2/CFS print completion観測をMaterialAccounting bridgeへ通知する。
+ *
+ * 【詳細説明】
+ * - 完了履歴の保存後に呼び出し、source-specific usageの採否はruntimeの履歴観測検査へ委ねる。
+ * - 失敗しても既存の履歴/UI/通知処理は止めない。
+ *
+ * @private
+ * @function notifyMaterialAccountingPrintCompletionObserved
+ * @param {string} host - 対象ホスト名。
+ * @param {number|string|null} printJobId - 完了したPrintJob ID。
+ * @returns {void}
+ */
+function notifyMaterialAccountingPrintCompletionObserved(host, printJobId) {
+  const normalizedPrintJobId = String(printJobId ?? "").trim();
+  if (!normalizedPrintJobId) {
+    return;
+  }
+  void recordObservedMaterialAccountingPrintCompletion({
+    hostname: host,
+    printJobId: normalizedPrintJobId,
+    runtime: getMaterialAccountingPrintBindingRuntime(),
+  }).catch((error) => {
+    pushLog(`PrintBinding完了観測の記録をスキップしました: ${error?.message || error}`, "warn", false, host);
+  });
+}
 
 /**
  * Creality error resolver へ渡す文脈を構築する。
@@ -1013,6 +1111,9 @@ export function processData(data, hostname) {
       printManager.renderPrintCurrent(
         scopedById("print-current-container", host), host
       );
+      if (hasK2PrinterCoreShadow(machine) && data.printStartTime) {
+        notifyMaterialAccountingPrintStartObserved(host, curJob.id);
+      }
     }
   }
 
@@ -1115,6 +1216,9 @@ export function processData(data, hostname) {
       const baseUrl = `http://${getDeviceIp(host)}:${getHttpPort(host)}`;
       printManager.updateHistoryList([entry], baseUrl, "print-current-container", host);
       persistPrintResume(host);
+    }
+    if (hasK2PrinterCoreShadow(machine)) {
+      notifyMaterialAccountingPrintCompletionObserved(host, entry.id);
     }
   }
 

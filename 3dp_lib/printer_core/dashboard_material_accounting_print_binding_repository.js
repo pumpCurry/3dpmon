@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1593 (PR #440)
+ * @version 1.390.1595 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-09-01 19:34:24
+ * @lastModified 2026-09-01 19:17:01
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -1157,6 +1157,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
    * @param {Object[]} input.spoolMounts - SpoolMount配列。
    * @param {string} input.capturedAt - print-start時刻。
    * @param {string} input.bindingOperationId - binding operation ID。
+   * @param {Object=} input.issuanceEvidence - runtimeが観測した発行文脈。
    * @returns {Object} repository result。
    */
   function recordPrintStartBindings(input = {}) {
@@ -1211,6 +1212,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           materialSource: source,
           spoolMount: mount,
           bindingOperationId: operationId,
+          issuanceEvidence: input.issuanceEvidence || null,
         }));
       }
     }

@@ -511,6 +511,12 @@ Gate 18.9 must cover:
   JobMaterialSegment records as a projection source when `job.filamentInfo[]`
   is absent. This projection sends per-spool `filaments[]` evidence without
   mutating 3dpmon inventory state.
+- K2/CFS UI print-start sends register a pending PrintPlan immediately before
+  transport dispatch, drop that pending record on dispatch failure, and only
+  connect it to print binding runtime after machine-observed `printStartTime` /
+  PrintJob ID and completed history are observed. Trusted print-start snapshots
+  include durable issuance evidence for device ID, session ID, connection
+  generation, PrintJob ID, and first observed time.
 - trusted print-start snapshots restored from same-process CAS store may regain
   debit eligibility only through module-owned attestation validation. Restart
   or import loses that process-local trust and must revalidate before debit.

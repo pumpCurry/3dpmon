@@ -34,9 +34,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1593 (PR #440)
+ * @version 1.390.1595 (PR #440)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-09-01 19:34:24
+ * @lastModified 2026-09-01 19:17:01
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -44,7 +44,10 @@
 
 "use strict";
 
-import { createPrinterCoreV3DeterministicId } from "./dashboard_data_schema_v3.js";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "./dashboard_data_schema_v3.js";
 import {
   MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
@@ -921,6 +924,7 @@ function createPrintStartMaterialSnapshotSignature(snapshot) {
     snapshot.mountId,
     snapshot.spoolId,
     snapshot.capturedAt,
+    stableStringifyPrinterCoreV3Value(snapshot.issuanceEvidence || null),
   ]);
 }
 
@@ -1330,6 +1334,7 @@ function createTrustedSourceSpecificMaterialUsageEvidence(input = {}) {
  * @param {string=} input.protocolToolAlias - print-start時点のprotocol tool alias。
  * @param {number|string=} input.order - print-start時点のassignment order。
  * @param {string=} input.bindingOperationId - binding operation ID。
+ * @param {Object=} input.issuanceEvidence - runtimeが観測した発行文脈。
  * @returns {Object} trusted print-start snapshot。
  * @throws {TypeError} 必須値不足や時刻不正の場合。
  * @example
@@ -1370,6 +1375,7 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
     materialSource: cloneJsonValue(input.materialSource || null),
     spoolMount: cloneJsonValue(input.spoolMount || null),
     bindingOperationId: toTrimmedString(input.bindingOperationId) || null,
+    issuanceEvidence: cloneJsonValue(input.issuanceEvidence || null),
     trusted: true,
     authority: {
       mode: "trusted-print-start-material-snapshot",

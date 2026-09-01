@@ -425,6 +425,25 @@ Gate 18.9I-3:
 - この接続は外部payload projectionだけであり、managed spool残量debit、legacy
   `usageHistory`、`filamentSpools.remainingLengthMm` は更新しない。
 
+Gate 18.9I-4:
+
+- K2/CFS印刷開始UIで生成したPrinter Core command requestを、実送信直前に
+  `dashboard_material_accounting_print_binding_live_bridge.js` へpending登録する。
+- pending登録は送信済みPrintPlanの保持だけであり、実機 `printStartTime` / `printJobId`
+  観測前にはprint binding runtimeを呼び出さない。
+- transport送信が失敗した場合はhostname単位でpendingを破棄し、未送信PrintPlanが後続観測へ
+  誤ってbindされないようにする。
+- WebSocket statusでK2 Printer Core v3 shadow付きmachineの `printStartTime` を観測した場合だけ、
+  pending PrintPlanを `recordObservedPrintStart()` へ渡す。採否はruntime側の
+  current job / device / session / generation / CAS検査に委ねる。
+- `printStore.history` へ完了履歴が入った後、同じpending PrintPlanを
+  `recordObservedPrintCompletion()` へ渡す。K2/Creality履歴の `materialUsed` CSVはruntime側で
+  PrintPlan assignment順にsource-specific usageへ展開する。
+- trusted print-start snapshotには `issuanceEvidence` として、runtimeが観測した
+  `deviceId`、`sessionId`、`connectionGeneration`、`printJobId`、`firstObservedAt` を保存する。
+- I-4でもmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
+  への書き込みは行わない。
+
 Gate 19 / 19.5:
 
 - CFS physical command は command kind ごとに実機 certification する。

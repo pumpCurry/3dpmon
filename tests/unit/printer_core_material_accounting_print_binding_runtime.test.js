@@ -398,6 +398,24 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
       ["T1A", "spool:a", "job:actual-1001", true, true],
       ["T1B", "spool:b", "job:actual-1001", true, true],
     ]);
+    expect(data.materialAccountingPrintBindingStore.printStartSnapshots.map((snapshot) => snapshot.issuanceEvidence)).toEqual([
+      {
+        source: "printer-core-print-binding-runtime",
+        deviceId: "serial:k2",
+        sessionId: "session:k2-live",
+        connectionGeneration: 7,
+        printJobId: "job:actual-1001",
+        firstObservedAt: "2026-09-01T08:01:00.000Z",
+      },
+      {
+        source: "printer-core-print-binding-runtime",
+        deviceId: "serial:k2",
+        sessionId: "session:k2-live",
+        connectionGeneration: 7,
+        printJobId: "job:actual-1001",
+        firstObservedAt: "2026-09-01T08:01:00.000Z",
+      },
+    ]);
   });
 
   it("同じ実機print-start観測を再評価してもstable identityで冪等になりsnapshotを増やさない", async () => {

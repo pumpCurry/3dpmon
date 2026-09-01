@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  *
- * @version 1.390.1593 (PR #440)
+ * @version 1.390.1595 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 19:34:24
+ * @lastModified 2026-09-01 19:17:01
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -830,6 +830,14 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
       spoolMounts: getCurrentSpoolMounts(data),
       capturedAt,
       bindingOperationId,
+      issuanceEvidence: {
+        source: "printer-core-print-binding-runtime",
+        deviceId: printJobResolution.deviceId,
+        sessionId: printJobResolution.sessionId,
+        connectionGeneration: printJobResolution.connectionGeneration,
+        printJobId,
+        firstObservedAt: capturedAt,
+      },
     });
     if (!result.ok) {
       return {

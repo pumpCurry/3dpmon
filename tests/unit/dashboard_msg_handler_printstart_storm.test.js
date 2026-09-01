@@ -73,10 +73,24 @@ vi.mock("../../3dp_lib/dashboard_aggregator.js", () => ({
 vi.mock("../../3dp_lib/dashboard_print_lifecycle.js", () => ({
   recordPrintLifecycle: vi.fn(), getPrintLifecycleMetrics: vi.fn(() => ({})), resetPrintLifecycle: vi.fn(),
 }));
+vi.mock("../../3dp_lib/printer_core/dashboard_material_accounting_print_binding_live_bridge.js", () => ({
+  recordObservedMaterialAccountingPrintCompletion: vi.fn(async () => ({ ok: true })),
+  recordObservedMaterialAccountingPrintStart: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock("../../3dp_lib/printer_core/dashboard_material_accounting_print_binding_runtime.js", () => ({
+  createMaterialAccountingPrintBindingRuntime: vi.fn(() => ({
+    recordObservedPrintCompletion: vi.fn(async () => ({ ok: true })),
+    recordObservedPrintStart: vi.fn(async () => ({ ok: true })),
+  })),
+}));
 
 import { processData } from "../../3dp_lib/dashboard_msg_handler.js";
 import { monitorData, ensureMachineData } from "../../3dp_lib/dashboard_data.js";
 import { notificationManager } from "../../3dp_lib/dashboard_notification_manager.js";
+import {
+  recordObservedMaterialAccountingPrintCompletion,
+  recordObservedMaterialAccountingPrintStart,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_print_binding_live_bridge.js";
 
 describe("processData printStarted 通知ストーム防止", () => {
   beforeEach(() => {
@@ -139,5 +153,58 @@ describe("processData printStarted 通知ストーム防止", () => {
 
     const starts = notificationManager.notify.mock.calls.filter(c => c[0] === "printStarted");
     expect(starts.length, "ジョブAとジョブBで計2回").toBe(2);
+  });
+
+  it("K2/CFSの実機printStartTime観測時にPrintBinding live bridgeへ開始観測を通知する", async () => {
+    const H = "K2Pro-PRINT-BINDING";
+    const REAL_ID = 1785991119;
+    ensureMachineData(H);
+    monitorData.machines[H].runtimeData.printerCoreV3Shadow = {
+      family: "k2",
+      deviceId: "serial:k2",
+      sessionId: "session:k2-live",
+      connectionGeneration: 7,
+    };
+
+    processData(makeK1Status(H, {
+      state: 1,
+      printProgress: 12,
+      printStartTime: REAL_ID,
+      printFileName: "/mnt/UDISK/printer_data/gcodes/two-color.gcode",
+    }), H);
+    await Promise.resolve();
+
+    expect(recordObservedMaterialAccountingPrintStart).toHaveBeenCalledWith(expect.objectContaining({
+      hostname: H,
+      printJobId: String(REAL_ID),
+    }));
+  });
+
+  it("K2/CFSの完了履歴登録時にPrintBinding live bridgeへ完了観測を通知する", async () => {
+    const H = "K2Pro-PRINT-BINDING-DONE";
+    const REAL_ID = 1785992222;
+    ensureMachineData(H);
+    monitorData.machines[H].runtimeData.printerCoreV3Shadow = {
+      family: "k2",
+      deviceId: "serial:k2",
+      sessionId: "session:k2-live",
+      connectionGeneration: 7,
+    };
+
+    processData(makeK1Status(H, {
+      state: 3,
+      deviceState: 0,
+      printProgress: 100,
+      printStartTime: REAL_ID,
+      printFileName: "/mnt/UDISK/printer_data/gcodes/two-color.gcode",
+      materialUsed: "3210,6543",
+      materialUsedMm: 9753,
+    }), H);
+    await Promise.resolve();
+
+    expect(recordObservedMaterialAccountingPrintCompletion).toHaveBeenCalledWith(expect.objectContaining({
+      hostname: H,
+      printJobId: String(REAL_ID),
+    }));
   });
 });
