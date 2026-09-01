@@ -10,13 +10,14 @@
  * 【機能内容サマリ】
  * - IndexedDB flush完了を待つ耐久保存契約を検証
  * - Gate 18.9H SpoolMount production storeのCAS commit境界を検証
+ * - Gate 18.9I PrintBinding shadow storeのCAS commit境界を検証
  *
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1586 (PR #440)
+ * @version 1.390.1589 (PR #440)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-01 17:02:15
+ * @lastModified 2026-09-01 18:15:11
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -37,6 +38,10 @@ import {
   createMaterialAccountingSpoolMountOperationPayloadDigest,
   normalizeStoredMaterialAccountingSpoolMountStore,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
+import {
+  createMaterialAccountingPrintBindingStoreDigest,
+  normalizeStoredMaterialAccountingPrintBindingStore,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_print_binding.js";
 import {
   reserveUniversalSpoolAssignment,
 } from "../../3dp_lib/printer_core/dashboard_material_accounting_spool_assignment_guard.js";
@@ -165,6 +170,7 @@ const {
   initStorage,
   importAllData,
   saveUnifiedStorageDurably,
+  commitMaterialAccountingPrintBindingStoreDurably,
   commitMaterialAccountingSpoolMountStoreDurably,
 } = await import("../../3dp_lib/dashboard_storage.js");
 
@@ -415,6 +421,93 @@ describe("saveUnifiedStorageDurably", () => {
       baseStoreDigest: baseStore.storeDigest,
       nextStore: normalizeStoredMaterialAccountingSpoolMountStore({ events: [operation] }),
       operation,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      casApplied: false,
+      reason: "production-cas-unavailable",
+    });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("PrintBinding shadow commitはCAS成功後だけmonitorDataを更新する", async () => {
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+    const nextStore = normalizeStoredMaterialAccountingPrintBindingStore({
+      ...baseStore,
+      unattributedUsage: [
+        {
+          printJobId: "job:shadow",
+          printPlanId: "plan:shadow",
+          deviceId: "device:k2",
+          usedLengthMm: 123,
+          reason: "unit-test",
+        },
+      ],
+    });
+    mocks.monitorData.materialAccountingPrintBindingStore = baseStore;
+    mocks.compareAndSwapSharedValue.mockImplementationOnce(async ({ expectedDigest, nextValue }) => {
+      expect(expectedDigest).toBe(createMaterialAccountingPrintBindingStoreDigest(baseStore));
+      expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(baseStore);
+      expect(nextValue.unattributedUsage).toHaveLength(1);
+      return {
+        ok: true,
+        casApplied: true,
+        backend: "indexedDB",
+        key: "materialAccountingPrintBindingStore",
+        reason: "cas-applied",
+        currentDigest: expectedDigest,
+        nextDigest: createMaterialAccountingPrintBindingStoreDigest(nextValue),
+      };
+    });
+
+    const result = await commitMaterialAccountingPrintBindingStoreDurably({
+      baseStoreDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+      nextStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, casApplied: true, reason: "cas-applied" });
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingPrintBindingStore",
+      expectedDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+      nextValue: nextStore,
+    }));
+    expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(nextStore);
+  });
+
+  it("PrintBinding shadow commitはCAS不一致ならmonitorDataを更新しない", async () => {
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+    const nextStore = normalizeStoredMaterialAccountingPrintBindingStore({
+      ...baseStore,
+      unattributedUsage: [{ printJobId: "job:shadow", usedLengthMm: 123 }],
+    });
+    mocks.monitorData.materialAccountingPrintBindingStore = baseStore;
+    mocks.compareAndSwapSharedValue.mockResolvedValueOnce({
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingPrintBindingStore",
+      reason: "cas-mismatch",
+      currentDigest: "digest:other",
+      nextDigest: createMaterialAccountingPrintBindingStoreDigest(nextStore),
+    });
+
+    const result = await commitMaterialAccountingPrintBindingStoreDurably({
+      baseStoreDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+      nextStore,
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "cas-mismatch" });
+    expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(baseStore);
+  });
+
+  it("PrintBinding shadow commitはlocalStorage fallbackでは成功扱いにしない", async () => {
+    mocks.idbAvailable = false;
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+
+    const result = await commitMaterialAccountingPrintBindingStoreDurably({
+      baseStoreDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+      nextStore: normalizeStoredMaterialAccountingPrintBindingStore(null),
     });
 
     expect(result).toMatchObject({

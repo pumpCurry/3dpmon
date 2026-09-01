@@ -23,6 +23,7 @@
  * - {@link createSourceSpecificMaterialUsageEvidence}：未信頼のsource-specific usage evidence shapeを生成
  * - {@link createMaterialResultSetCompletenessEvidence}：未信頼のresult-set completeness evidence shapeを生成
  * - {@link createTrustedMaterialResultSetCompletenessRegistry}：trusted result-set completeness 検証用registryを生成
+ * - {@link createMaterialAccountingPrintBindingStoreDigest}：print binding store digestを生成
  * - {@link createMaterialAccountingPrintBindingRepository}：print binding repositoryを生成
  * - {@link createMaterialSourceAccountingView}：UI用 read model contract を生成
  * - {@link canTransitionMaterialAccountingMigrationStatus}：migration lifecycle遷移可否を判定
@@ -32,9 +33,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1522 (PR #438)
+ * @version 1.390.1589 (PR #440)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 16:58:00
+ * @lastModified 2026-09-01 18:15:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -47,12 +48,14 @@ import {
   MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
   createMaterialAccountingPrintBindingRepositoryWithIssuer,
+  createMaterialAccountingPrintBindingStoreDigest,
   normalizeStoredMaterialAccountingPrintBindingStore,
 } from "./dashboard_material_accounting_print_binding_repository.js";
 
 export {
   MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
+  createMaterialAccountingPrintBindingStoreDigest,
   normalizeStoredMaterialAccountingPrintBindingStore,
 };
 

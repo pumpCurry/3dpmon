@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1523 (PR #438)
+ * @version 1.390.1589 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 16:16:00
+ * @lastModified 2026-09-01 18:15:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -973,6 +973,28 @@ export function normalizeStoredMaterialAccountingPrintBindingStore(stored) {
     },
     retainedUnsupportedEntries,
   };
+}
+
+/**
+ * MaterialAccounting PrintBinding store digestを生成する。
+ *
+ * 【詳細説明】
+ * - IndexedDB CASでprint-start snapshot / source-specific usage shadow storeを安全に更新するための
+ *   安定digestを作る。
+ * - operation cacheは正規化時に永続authorityから落とされるため、retry用一時cache差分で
+ *   store authority digestが揺れない。
+ *
+ * @function createMaterialAccountingPrintBindingStoreDigest
+ * @param {*} store - digest対象store候補。
+ * @returns {string} deterministic digest。
+ * @example
+ * const digest = createMaterialAccountingPrintBindingStoreDigest(store);
+ */
+export function createMaterialAccountingPrintBindingStoreDigest(store) {
+  const normalizedStore = normalizeStoredMaterialAccountingPrintBindingStore(store);
+  return `fnv1a128:${createPrinterCoreV3DeterministicId("material-accounting-print-binding-store", [
+    stableStringifyPrinterCoreV3Value(normalizedStore),
+  ])}`;
 }
 
 /**

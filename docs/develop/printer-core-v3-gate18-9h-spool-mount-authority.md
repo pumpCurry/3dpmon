@@ -359,13 +359,20 @@ Gate 18.9H-2 follow-up:
 Gate 18.9I-1:
 
 - runtime print-start から PrintPlan + production SpoolMount snapshot を保存する。
-  実機で観測した `printJobId` が無い場合は保存せず、現在 `OPEN` な
-  source別SpoolMountが揃わない場合もblockedにする。
-- completion observation を JobMaterialSegment / shadow ledger event へ接続する。
-- managed remaining はまだ減らさない。
+  caller が渡した `printJobId` は自己申告として扱い、対象 `hostname` の
+  `monitorData.machines[hostname]` に現在観測されている `printStore.current.id`
+  または `storedData.printId` と一致する場合だけ採用する。実機観測済み
+  `printJobId` が無い場合、または一致しない場合は保存しない。
+- print-start時点で現在 `OPEN` なsource別SpoolMountが揃わない場合もblockedにする。
+- `materialAccountingPrintBindingStore` は通常flush queue投入だけでは成功扱いにせず、
+  `commitMaterialAccountingPrintBindingStoreDurably()` のIndexedDB CASが
+  `casApplied:true` を返した後だけruntime storeへ反映する。
+- managed remaining、legacy `usageHistory`、ItemKeeper projection、
+  completion observation はまだ接続しない。
 
 Gate 18.9I-2:
 
+- completion observation を JobMaterialSegment / shadow ledger event へ接続する。
 - trusted source-specific usage issuer と legacy cutover guard を追加する。
 - K2/CFS first universal-authoritative debit を実機証跡に基づいて有効化する。
 

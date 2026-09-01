@@ -18,6 +18,7 @@
  * - {@link saveUnifiedStorage}：全データ保存
  * - {@link saveUnifiedStorageDurably}：全データを耐久保存完了まで待つ
  * - {@link commitMaterialAccountingSpoolMountStoreDurably}：SpoolMount storeをCAS境界で耐久保存
+ * - {@link commitMaterialAccountingPrintBindingStoreDurably}：PrintBinding storeをCAS境界で耐久保存
  * - {@link restoreUnifiedStorage}：全データ復元
  * - {@link restoreLegacyStoredData}：レガシーデータ読込
  * - {@link cleanupLegacy}：レガシー削除
@@ -28,9 +29,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1586 (PR #440)
+ * @version 1.390.1589 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 17:02:15
+ * @lastModified 2026-09-01 18:15:11
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -47,7 +48,10 @@ import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity
 import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashboard_material_source_observation.js";
 import { normalizeStoredMaterialAccountingMigrationJournal } from "./printer_core/dashboard_material_accounting_migration_journal.js";
 import { normalizeStoredMaterialAccountingMigrationShadowCommitStore } from "./printer_core/dashboard_material_accounting_migration_shadow_commit.js";
-import { normalizeStoredMaterialAccountingPrintBindingStore } from "./printer_core/dashboard_material_accounting_print_binding.js";
+import {
+  createMaterialAccountingPrintBindingStoreDigest,
+  normalizeStoredMaterialAccountingPrintBindingStore,
+} from "./printer_core/dashboard_material_accounting_print_binding.js";
 import {
   createMaterialAccountingSpoolMountStoreDigest,
   normalizeStoredMaterialAccountingSpoolMountStore,
@@ -103,6 +107,8 @@ let _idbInitialized = false;
 
 /** SpoolMount production commit直列化用mutex */
 let _spoolMountCommitMutex = Promise.resolve();
+/** PrintBinding shadow commit直列化用mutex */
+let _printBindingCommitMutex = Promise.resolve();
 
 /**
  * Universal MaterialSource移行dry-run journalを現在のmonitorDataへ安全にマージする。
@@ -1477,6 +1483,80 @@ export async function saveUnifiedStorageDurably() {
     return { ok: false, backend: "indexedDB", reason: "idb_flush_failed" };
   }
   return { ok: true, backend: "indexedDB", reason: "flushed" };
+}
+
+/**
+ * MaterialAccounting PrintBinding shadow storeをCAS境界で耐久保存する。
+ *
+ * 【詳細説明】
+ * - print binding storeはまだ残量debit権威ではないが、後続のsource-specific usage attributionの
+ *   根拠になるため、print-start snapshotをqueue投入だけで成功扱いしない。
+ * - IndexedDB shared store上の現在digestが`baseStoreDigest`と一致した場合だけ`nextStore`を書き込み、
+ *   transaction完了後に初めて`monitorData.materialAccountingPrintBindingStore`を更新する。
+ * - IndexedDB未使用、CAS不一致、保存失敗ではメモリ上のstoreも進めない。
+ *
+ * @function commitMaterialAccountingPrintBindingStoreDurably
+ * @param {Object} input - commit入力。
+ * @param {string} input.baseStoreDigest - runtimeが準備時に見たbase store digest。
+ * @param {Object} input.nextStore - CAS成功時に保存する次store。
+ * @returns {Promise<{ok:boolean,casApplied:boolean,backend:string,key:string,reason:string,currentDigest?:string,nextDigest?:string,error?:string}>} commit結果。
+ * @example
+ * const result = await commitMaterialAccountingPrintBindingStoreDurably({ baseStoreDigest, nextStore });
+ */
+export async function commitMaterialAccountingPrintBindingStoreDurably(input = {}) {
+  const commitPromise = _printBindingCommitMutex.then(() => _commitMaterialAccountingPrintBindingStoreDurably(input));
+  _printBindingCommitMutex = commitPromise.catch(() => {});
+  return commitPromise;
+}
+
+/**
+ * PrintBinding store commitの実処理を行う。
+ *
+ * @private
+ * @function _commitMaterialAccountingPrintBindingStoreDurably
+ * @param {Object} input - commit入力。
+ * @returns {Promise<{ok:boolean,casApplied:boolean,backend:string,key:string,reason:string,currentDigest?:string,nextDigest?:string,error?:string}>} commit結果。
+ */
+async function _commitMaterialAccountingPrintBindingStoreDurably(input = {}) {
+  const key = "materialAccountingPrintBindingStore";
+  const baseStoreDigest = String(input.baseStoreDigest || "").trim();
+  if (!baseStoreDigest) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "base-store-digest-required" };
+  }
+  if (!_idbInitialized || !isIdbAvailable()) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "production-cas-unavailable" };
+  }
+
+  const normalizedNextStore = normalizeStoredMaterialAccountingPrintBindingStore(input.nextStore);
+  const result = await compareAndSwapSharedValue({
+    key,
+    expectedDigest: baseStoreDigest,
+    createDigest: createMaterialAccountingPrintBindingStoreDigest,
+    nextValue: normalizedNextStore,
+  });
+  if (!result || result.ok !== true || result.casApplied !== true) {
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key,
+      reason: result?.reason || "durable-cas-not-applied",
+      currentDigest: result?.currentDigest,
+      nextDigest: result?.nextDigest,
+      error: result?.error,
+    };
+  }
+
+  monitorData.materialAccountingPrintBindingStore = normalizedNextStore;
+  return {
+    ok: true,
+    casApplied: true,
+    backend: "indexedDB",
+    key,
+    reason: "cas-applied",
+    currentDigest: result.currentDigest,
+    nextDigest: result.nextDigest,
+  };
 }
 
 /**

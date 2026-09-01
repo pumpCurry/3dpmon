@@ -489,6 +489,9 @@ Gate 18.9 must cover:
 - confirmed unused sources remaining distinct from unknown sources
 - print-start snapshot preserving historical attribution even if current mount
   changes later
+- print-start binding accepting a job ID only after it matches the current
+  machine-observed job ID, then committing the snapshot through a durable CAS
+  boundary before advancing runtime state
 - legacy cutover sealing future jobs out of legacy intervals
 
 ## Consequences

@@ -14,11 +14,12 @@
  *
  * 【公開関数一覧】
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
+ * - {@link createMaterialAccountingPrintBindingStoreDigest}：print binding store digestを生成
  * - {@link createMaterialAccountingPrintBindingRepository}：print binding repositoryを生成
  *
- * @version 1.390.1516 (PR #438)
+ * @version 1.390.1589 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 15:14:00
+ * @lastModified 2026-09-01 18:15:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9F でsource-aware残量read model/UIへ接続する
@@ -29,6 +30,7 @@
 export {
   MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
+  createMaterialAccountingPrintBindingStoreDigest,
   createMaterialAccountingPrintBindingRepository,
   normalizeStoredMaterialAccountingPrintBindingStore,
 } from "./dashboard_material_accounting_contract.js";

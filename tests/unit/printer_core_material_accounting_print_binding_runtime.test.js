@@ -11,13 +11,14 @@
  * - Gate 18.9I-1 のprint-start binding runtimeを検証
  * - 実印刷ジョブID観測後にMaterialSource/SpoolMount snapshotを保存する境界を検証
  * - current mount変更ではなくprint-start時点のsource別mountで後続帰属できることを固定
+ * - PrintBinding専用CAS成功後だけruntime storeを進める境界を検証
  *
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1587 (PR #440)
+ * @version 1.390.1589 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 18:15:00
+ * @lastModified 2026-09-01 18:15:11
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -46,8 +47,11 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({
 }));
 
 vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
+  commitMaterialAccountingPrintBindingStoreDurably: vi.fn(),
   saveUnifiedStorage: vi.fn(),
 }));
+
+const storageMock = await import("../../3dp_lib/dashboard_storage.js");
 
 const {
   resolveObservedMaterialSourceRecord,
@@ -140,10 +144,41 @@ function createMaterialSourceObservationStore(deviceId = "serial:k2") {
  */
 function createRuntimeData() {
   return {
+    machines: {},
     materialSourceObservations: createMaterialSourceObservationStore(),
     materialAccountingSpoolMountStore: createEmptyMaterialAccountingSpoolMountStore(),
     materialAccountingPrintBindingStore: normalizeStoredMaterialAccountingPrintBindingStore(null),
   };
+}
+
+/**
+ * runtime用monitorDataへ実機観測済み印刷ジョブを設定する。
+ *
+ * @function attachObservedPrintJob
+ * @param {Object} data - runtime data。
+ * @param {Object=} options - 観測値オプション。
+ * @param {string=} options.hostname - 対象ホスト名。
+ * @param {string=} options.printJobId - 実機で観測したPrintJob ID。
+ * @returns {string} 設定したホスト名。
+ */
+function attachObservedPrintJob(data, options = {}) {
+  const hostname = options.hostname || "K2Pro-69E7";
+  const printJobId = options.printJobId || "job:actual-1001";
+  data.machines = {
+    ...(data.machines || {}),
+    [hostname]: {
+      storedData: {
+        printId: { rawValue: printJobId },
+        state: { rawValue: 2 },
+      },
+      printStore: {
+        current: { id: printJobId },
+        history: [],
+      },
+      runtimeData: {},
+    },
+  };
+  return hostname;
 }
 
 /**
@@ -241,6 +276,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     const data = createRuntimeData();
     attachOpenMounts(data);
     const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data);
     const persist = vi.fn(async ({ nextStore }) => {
       data.materialAccountingPrintBindingStore = nextStore;
       return { ok: true, persisted: true, backend: "test" };
@@ -249,6 +285,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
 
     const result = await runtime.recordObservedPrintStart({
       printPlan: plan,
+      hostname,
       printJobId: "job:actual-1001",
       capturedAt: "2026-09-01T08:01:00.000Z",
       bindingOperationId: "binding:actual-1001",
@@ -288,6 +325,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
   it("現在OPENなSpoolMountが無いsourceを含むprint-startは保存しない", async () => {
     const data = createRuntimeData();
     attachOpenMounts(data, { omitSecond: true });
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:missing-mount" });
     const runtime = createMaterialAccountingPrintBindingRuntime({
       data,
       persist: vi.fn(),
@@ -295,6 +333,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
 
     const result = await runtime.recordObservedPrintStart({
       printPlan: createPlan(data),
+      hostname,
       printJobId: "job:missing-mount",
       capturedAt: "2026-09-01T08:01:00.000Z",
       bindingOperationId: "binding:missing-mount",
@@ -307,6 +346,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
 
   it("同じraw source aliasが別deviceにあってもPrintPlanのdeviceだけを解決する", async () => {
     const data = createRuntimeData();
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:device-boundary" });
     data.materialSourceObservations.byDeviceId["serial:k2-other"] =
       createMaterialSourceObservationStore("serial:k2-other").byDeviceId["serial:k2-other"];
     const otherSource = resolveSource(data, "source:k2:cfs:1a", "serial:k2-other");
@@ -332,6 +372,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
 
     const result = await runtime.recordObservedPrintStart({
       printPlan: createPlan(data),
+      hostname,
       printJobId: "job:device-boundary",
       capturedAt: "2026-09-01T08:01:00.000Z",
       bindingOperationId: "binding:device-boundary",
@@ -345,6 +386,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
   it("persist失敗時はruntime storeを更新しない", async () => {
     const data = createRuntimeData();
     attachOpenMounts(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:persist-failed" });
     const before = data.materialAccountingPrintBindingStore;
     const runtime = createMaterialAccountingPrintBindingRuntime({
       data,
@@ -353,6 +395,7 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
 
     const result = await runtime.recordObservedPrintStart({
       printPlan: createPlan(data),
+      hostname,
       printJobId: "job:persist-failed",
       capturedAt: "2026-09-01T08:01:00.000Z",
       bindingOperationId: "binding:persist-failed",
@@ -361,5 +404,79 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     expect(result.ok).toBe(false);
     expect(result.reasons).toContain("print-binding-persist-failed");
     expect(data.materialAccountingPrintBindingStore).toBe(before);
+  });
+
+  it("caller自己申告だけのprintJobIdは実機観測済みjobと一致しなければsnapshotを保存しない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:actual-1001" });
+    const runtime = createMaterialAccountingPrintBindingRuntime({
+      data,
+      persist: vi.fn(),
+    });
+
+    const result = await runtime.recordObservedPrintStart({
+      printPlan: createPlan(data),
+      hostname,
+      printJobId: "job:forged-9999",
+      capturedAt: "2026-09-01T08:01:00.000Z",
+      bindingOperationId: "binding:forged-9999",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("observed-print-job-id-mismatch");
+    expect(data.materialAccountingPrintBindingStore.printStartSnapshots).toEqual([]);
+  });
+
+  it("既定persistはPrintBinding専用CASが成功するまでruntime storeを進めない", async () => {
+    const data = createRuntimeData();
+    Object.assign(mockMonitorData, data);
+    attachOpenMounts(mockMonitorData);
+    const hostname = attachObservedPrintJob(mockMonitorData, { printJobId: "job:cas-default" });
+    storageMock.commitMaterialAccountingPrintBindingStoreDurably.mockImplementationOnce(async ({ nextStore }) => {
+      expect(mockMonitorData.materialAccountingPrintBindingStore.printStartSnapshots).toEqual([]);
+      mockMonitorData.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "indexedDB", reason: "cas-applied" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime();
+
+    const result = await runtime.recordObservedPrintStart({
+      printPlan: createPlan(mockMonitorData),
+      hostname,
+      printJobId: "job:cas-default",
+      capturedAt: "2026-09-01T08:01:00.000Z",
+      bindingOperationId: "binding:cas-default",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(storageMock.commitMaterialAccountingPrintBindingStoreDurably).toHaveBeenCalledTimes(1);
+    expect(mockMonitorData.materialAccountingPrintBindingStore.printStartSnapshots).toHaveLength(2);
+  });
+
+  it("既定persistはPrintBinding専用CAS未適用ならsnapshotを成功扱いしない", async () => {
+    const data = createRuntimeData();
+    Object.assign(mockMonitorData, data);
+    attachOpenMounts(mockMonitorData);
+    const hostname = attachObservedPrintJob(mockMonitorData, { printJobId: "job:cas-failed" });
+    const before = mockMonitorData.materialAccountingPrintBindingStore;
+    storageMock.commitMaterialAccountingPrintBindingStoreDurably.mockResolvedValueOnce({
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      reason: "cas-mismatch",
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntime();
+
+    const result = await runtime.recordObservedPrintStart({
+      printPlan: createPlan(mockMonitorData),
+      hostname,
+      printJobId: "job:cas-failed",
+      capturedAt: "2026-09-01T08:01:00.000Z",
+      bindingOperationId: "binding:cas-failed",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reasons).toContain("print-binding-persist-failed");
+    expect(mockMonitorData.materialAccountingPrintBindingStore).toBe(before);
   });
 });

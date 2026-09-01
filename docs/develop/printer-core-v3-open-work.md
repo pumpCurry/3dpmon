@@ -26,7 +26,7 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
 | Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service implemented, H-1b durable persistence implemented, trusted resolver + CAS precondition hardening added, H-2 filament manager source mount UI added, destructive spool lifecycle guarded | H-1a/H-1b/H-2 tested | n/a | CAS-backed 3DPmon management only / physical command and debit disabled |
-| Gate 18.9I Print Binding Runtime | print-start binding runtime added; observed PrintJob ID and current source-specific OPEN SpoolMounts are required before saving snapshots | runtime tests added | pending | shadow binding only / no managed remaining debit |
+| Gate 18.9I Print Binding Runtime | print-start binding runtime added; caller job ID is accepted only when it matches the current machine-observed PrintJob ID, current source-specific OPEN SpoolMounts are required, and snapshot persistence is CAS-backed | runtime + durable CAS tests added | pending | shadow binding only / no managed remaining debit |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -80,8 +80,12 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
   `updateSpool({inferred:true})` / `updateSpool({isPending:true})` による
   OPEN/reservation中spoolの未確定化も拒否する。
 - Gate 18.9I-1では、runtimeからprint-start binding repositoryを呼び出し、
-  実機で観測した `printJobId` とprint-start時点で現在 `OPEN` なsource別
+  caller指定の `printJobId` が対象hostの現在観測済み `printStore.current.id`
+  または `storedData.printId` と一致し、print-start時点で現在 `OPEN` なsource別
   SpoolMountが揃う場合だけ `materialAccountingPrintBindingStore` へsnapshotを保存する。
+  snapshot保存は通常flush queueではなく専用 `commitMaterialAccountingPrintBindingStoreDurably()` の
+  IndexedDB CAS `casApplied:true` を成功境界とし、未観測/不一致job ID、CAS不一致、
+  IndexedDB未使用ではruntime storeを進めない。
   この段階ではcompletion usage observation、managed spool残量debit、
   legacy `usageHistory`、ItemKeeper projectionへはまだ接続しない。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。

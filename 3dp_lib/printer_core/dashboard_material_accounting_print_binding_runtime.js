@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start binding runtimeを生成
  *
- * @version 1.390.1587 (PR #440)
+ * @version 1.390.1589 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-01 18:23:00
+ * @lastModified 2026-09-01 18:15:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でcompletion usage observation runtimeを接続する
@@ -26,13 +26,14 @@
 "use strict";
 
 import { monitorData } from "../dashboard_data.js";
-import { saveUnifiedStorage } from "../dashboard_storage.js";
+import { commitMaterialAccountingPrintBindingStoreDurably } from "../dashboard_storage.js";
 import {
   createPrinterCoreV3DeterministicId,
   stableStringifyPrinterCoreV3Value,
 } from "./dashboard_data_schema_v3.js";
 import {
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
+  createMaterialAccountingPrintBindingStoreDigest,
   createMaterialAccountingPrintBindingRepository,
   normalizeStoredMaterialAccountingPrintBindingStore,
 } from "./dashboard_material_accounting_print_binding.js";
@@ -50,6 +51,107 @@ import {
  */
 function toTrimmedString(value) {
   return String(value ?? "").trim();
+}
+
+/**
+ * storedData互換値からraw/computed/valueを順に取り出す。
+ *
+ * @private
+ * @function readStoredDatumValue
+ * @param {*} value - storedData entry候補。
+ * @returns {*} 観測値候補。
+ */
+function readStoredDatumValue(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    if ("rawValue" in value) return value.rawValue;
+    if ("computedValue" in value) return value.computedValue;
+    if ("value" in value) return value.value;
+  }
+  return value;
+}
+
+/**
+ * MachineDataから現在印刷中のjob ID候補を収集する。
+ *
+ * 【詳細説明】
+ * - print-start bindingは実機観測済みジョブだけを根拠にするため、caller引数だけを採用しない。
+ * - K1/K2で観測位置が異なるため、`printStore.current.id`と`storedData.printId`の両方を読む。
+ *
+ * @private
+ * @function collectCurrentPrintJobIdsFromMachine
+ * @param {Object|null|undefined} machine - MachineData候補。
+ * @returns {string[]} 現在ジョブID候補。
+ */
+function collectCurrentPrintJobIdsFromMachine(machine) {
+  const ids = [];
+  const candidates = [
+    machine?.printStore?.current?.id,
+    machine?.printStore?.current?.printId,
+    readStoredDatumValue(machine?.storedData?.printId),
+    readStoredDatumValue(machine?.storedData?.currentPrintID),
+  ];
+  for (const candidate of candidates) {
+    const id = toTrimmedString(candidate);
+    if (id && !ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * 実機観測済みPrintJob IDを解決する。
+ *
+ * 【詳細説明】
+ * - `hostname`が指定された場合は、その機器の現在ジョブ観測だけを見る。
+ * - `request.printJobId`は期待値として扱い、実機観測集合と一致した場合だけ採用する。
+ * - hostname未指定で複数候補がある場合は曖昧なので採用しない。
+ *
+ * @private
+ * @function resolveObservedPrintJobId
+ * @param {Object} data - monitorData互換データ。
+ * @param {Object} request - runtime request。
+ * @returns {{ok:boolean,printJobId:string,reasons:string[],observedPrintJobIds:string[]}} 解決結果。
+ */
+function resolveObservedPrintJobId(data, request) {
+  const requestedPrintJobId = toTrimmedString(request.printJobId || request.observedPrintJobId);
+  const hostname = toTrimmedString(request.hostname || request.host);
+  const machines = data?.machines && typeof data.machines === "object" ? data.machines : {};
+  const machineEntries = hostname
+    ? [[hostname, machines[hostname]]]
+    : Object.entries(machines);
+  const observedIds = [];
+  for (const [, machine] of machineEntries) {
+    for (const id of collectCurrentPrintJobIdsFromMachine(machine)) {
+      if (!observedIds.includes(id)) {
+        observedIds.push(id);
+      }
+    }
+  }
+  if (requestedPrintJobId) {
+    if (observedIds.includes(requestedPrintJobId)) {
+      return { ok: true, printJobId: requestedPrintJobId, reasons: [], observedPrintJobIds: observedIds };
+    }
+    return {
+      ok: false,
+      printJobId: "",
+      reasons: observedIds.length > 0
+        ? ["observed-print-job-id-mismatch"]
+        : ["observed-print-job-id-required"],
+      observedPrintJobIds: observedIds,
+    };
+  }
+  if (observedIds.length === 1) {
+    return { ok: true, printJobId: observedIds[0], reasons: [], observedPrintJobIds: observedIds };
+  }
+  return {
+    ok: false,
+    printJobId: "",
+    reasons: observedIds.length > 1
+      ? ["observed-print-job-id-ambiguous"]
+      : ["observed-print-job-id-required"],
+    observedPrintJobIds: observedIds,
+  };
 }
 
 /**
@@ -182,9 +284,9 @@ function getCurrentSpoolMounts(data) {
  * 既定の永続化処理を実行する。
  *
  * 【詳細説明】
- * - print binding storeは既存のunified storage shared keyに載せる。
- * - `saveUnifiedStorage(true)`はIndexedDB利用時はqueue投入結果を返す設計なので、
- *   runtimeでは戻り値が明示失敗でない限り保存要求を受け付けたものとして扱う。
+ * - print binding storeは後続のsource-specific usage attribution根拠になるため、通常flush queueではなく
+ *   専用IndexedDB CAS commitが成功した場合だけruntime storeを進める。
+ * - IndexedDB未使用やCAS不一致は成功扱いせず、callerへblockedとして返す。
  *
  * @private
  * @function persistPrintBindingStoreWithUnifiedStorage
@@ -194,13 +296,12 @@ function getCurrentSpoolMounts(data) {
  * @returns {Promise<Object>} 永続化結果。
  */
 async function persistPrintBindingStoreWithUnifiedStorage(input = {}) {
-  input.data.materialAccountingPrintBindingStore =
-    normalizeStoredMaterialAccountingPrintBindingStore(input.nextStore);
-  const saved = saveUnifiedStorage(true);
-  if (saved?.ok === false) {
-    return saved;
-  }
-  return saved || { ok: true, backend: "unified-storage", reason: "queued" };
+  const previousStore = normalizeStoredMaterialAccountingPrintBindingStore(input.previousStore);
+  const nextStore = normalizeStoredMaterialAccountingPrintBindingStore(input.nextStore);
+  return commitMaterialAccountingPrintBindingStoreDurably({
+    baseStoreDigest: createMaterialAccountingPrintBindingStoreDigest(previousStore),
+    nextStore,
+  });
 }
 
 /**
@@ -221,7 +322,7 @@ function isPersistOk(result) {
  *
  * 【詳細説明】
  * - repository自体はpureなshadow storeとして維持し、runtimeだけがmonitorDataと保存処理を知る。
- * - 実機から観測したPrintJob IDが無い段階ではbindingを記録しない。
+ * - 実機から観測したPrintJob IDが無い、またはcaller指定IDと実機観測IDが一致しない段階ではbindingを記録しない。
  * - 記録対象はprint-start時点のsnapshotだけであり、spool残量debitやlegacy hostSpoolMap更新は行わない。
  *
  * @function createMaterialAccountingPrintBindingRuntime
@@ -265,10 +366,13 @@ export function createMaterialAccountingPrintBindingRuntime(input = {}) {
   async function recordObservedPrintStart(request = {}) {
     const previousStore = snapshot();
     const printPlan = request.printPlan;
-    const printJobId = toTrimmedString(request.printJobId || request.observedPrintJobId);
-    if (!printJobId) {
-      return createBlockedResult(["observed-print-job-id-required"], previousStore);
+    const printJobResolution = resolveObservedPrintJobId(data, request);
+    if (!printJobResolution.ok) {
+      return createBlockedResult(printJobResolution.reasons, previousStore, {
+        observedPrintJobIds: printJobResolution.observedPrintJobIds,
+      });
     }
+    const printJobId = printJobResolution.printJobId;
     const capturedAt = resolveCapturedAt(request.capturedAt, input.now);
     const bindingOperationId = toTrimmedString(request.bindingOperationId) ||
       createBindingOperationId(printPlan, printJobId, capturedAt);
