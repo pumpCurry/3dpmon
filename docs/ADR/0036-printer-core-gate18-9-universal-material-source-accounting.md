@@ -214,6 +214,13 @@ a newly received job observation. Conversely, an observation received before the
 command was submitted is treated as stale or pre-command evidence even if its
 device timestamp looks newer.
 
+K2/CFS print-completion binding also uses 3dpmon receipt time as interval
+evidence. The first local receipt time for a completion observation is fixed on
+the pending bridge record and reused for runtime/CAS retries. A later retry must
+not move `completionObservedReceivedAt` forward, because MaterialSource
+observations received after the first completion notification are not evidence
+that the same source was continuous during the print interval.
+
 MaterialBindingPlan is not sufficient unless it is digest-bound to the actual
 transport command request. The command binding includes command ID, device ID,
 session ID, connection generation, remote path, file hash, and the material

@@ -427,6 +427,9 @@ Gate 18.9I-2:
   managed spool残量、legacy `usageHistory`、ItemKeeper projectionへは反映しない。
 - completion writeも専用CAS境界を必須とし、`casApplied:true` が無いpersist結果では
   runtime storeを進めない。
+- completion writeがCAS失敗などでpendingを残した場合、live bridgeは初回completion受信時刻を
+  `completionFirstObservedReceivedAt` として固定する。retry時も同じ時刻をruntimeへ渡し、
+  初回completion後に観測したMaterialSource snapshotを印刷intervalへ遡及採用しない。
 
 Gate 18.9I-3:
 

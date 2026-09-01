@@ -124,7 +124,9 @@ UI設定や保存済みtarget情報だけでproduction操作へ昇格しない�
    source初回観測がprint-start以後、またはtrim後にどちらかのcoverage開始がprint-startより後ろへ
    進んだrecordは、source-specific segmentを保存してもmanaged debit候補へ昇格しない。印刷区間中の
    provider disconnect/reconnectやproviderGeneration変更は、同じslot/material状態へ戻った場合でも
-   provisional source全体のphysical discontinuityとして扱う。
+   provisional source全体のphysical discontinuityとして扱う。completion通知後にCAS失敗などで
+   pendingが残った場合も、live bridgeは初回completion受信時刻を
+   `completionFirstObservedReceivedAt` として固定し、retryで後続受信時刻へ動かさない。
   Gate 18.9I-3では、このshadow storeに保存された同一device + printJobIdの
   `observed-used` / `confirmed-unused` `JobMaterialSegment` をItemKeeper送信用
   `jobs[].filaments[]` へread-only投影する。
