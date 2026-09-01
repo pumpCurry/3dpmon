@@ -14,7 +14,7 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1606 (PR #440)
+ * @version 1.390.1607 (PR #440)
  * @since   1.390.1422 (PR #435)
  * @lastModified 2026-09-01 21:55:00
  * -----------------------------------------------------------
@@ -238,7 +238,7 @@ describe("MaterialSourceObservationStore", () => {
     expect(reconnected.record.events.map((event) => event.changeKind)).toContain("provider-reconnected");
   });
 
-  it("event logをtrimした場合はcoverage開始時刻を保持範囲の先頭へ前進させる", () => {
+  it("event logをtrimした場合はcoverage開始時刻を削除済みeventの最遅時刻へ前進させる", () => {
     const store = createEmptyMaterialSourceObservations();
     recordMaterialTopologyObservation(store, {
       host: "K2Pro-69E7",
@@ -274,10 +274,10 @@ describe("MaterialSourceObservationStore", () => {
 
     expect(changed.record.events).toHaveLength(1);
     expect(changed.record.events[0].changeKind).toBe("source-changed");
-    expect(changed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:10.000Z");
-    expect(changed.record.eventCoverageTrimmedAt).toBe("2026-08-27T12:00:10.000Z");
-    expect(changed.record.latestBySourceId["cfs:1:slot:0"].eventCoverageStartedAt).toBe("2026-08-27T12:00:10.000Z");
-    expect(changed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:00:10.000Z");
+    expect(changed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(changed.record.eventCoverageTrimmedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(changed.record.latestBySourceId["cfs:1:slot:0"].eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
+    expect(changed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
   });
 
   it("source固有event coverage開始時刻をsourceごとの初回観測から保持する", () => {
@@ -319,7 +319,7 @@ describe("MaterialSourceObservationStore", () => {
     expect(second.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:05:00.000Z");
   });
 
-  it("source別event log trimでは該当sourceのcoverage開始だけをsource最古retained eventへ前進させる", () => {
+  it("source別event log trimでは削除されたsource eventの最遅時刻へcoverageを前進させる", () => {
     const topology = createTopology();
     const store = createEmptyMaterialSourceObservations();
     recordMaterialTopologyObservation(store, {
@@ -371,14 +371,14 @@ describe("MaterialSourceObservationStore", () => {
       limits: { maxEventsPerSource: 1, maxEventsPerDevice: 8 },
     });
 
-    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
-    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
-    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageTrimmedAt).toBeNull();
-    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:02:00.000Z");
-    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:02:00.000Z");
+    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
+    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
+    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageTrimmedAt).toBe("2026-08-27T12:01:00.000Z");
+    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
+    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:01:00.000Z");
   });
 
-  it("source別trim watermarkはretained eventの挿入順ではなく最古observedAtから選ぶ", () => {
+  it("source別trim watermarkはretained eventではなく削除済みeventの最遅observedAtから選ぶ", () => {
     const topology = createTopology();
     const store = createEmptyMaterialSourceObservations();
     const first = recordMaterialTopologyObservation(store, {
@@ -421,9 +421,112 @@ describe("MaterialSourceObservationStore", () => {
       limits: { maxEventsPerSource: 2, maxEventsPerDevice: 8 },
     });
 
-    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:00:00.000Z");
-    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:03:00.000Z");
-    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:03:00.000Z");
+    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
+    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:01:00.000Z");
+    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:01:00.000Z");
+  });
+
+  it("device event trimでは削除されたeventの最遅observedAtまでcoverageを前進させる", () => {
+    const topology = createTopology();
+    const store = createEmptyMaterialSourceObservations();
+    const first = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 10,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology,
+      snapshotCompleteness: "complete",
+      limits: { maxEventsPerSource: 8, maxEventsPerDevice: 8 },
+    });
+    first.record.events = [
+      { sourceId: null, observedAt: "2026-08-27T12:10:00.000Z", changeKind: "provider-disconnected" },
+      { sourceId: "external:0", observedAt: "2026-08-27T12:00:00.000Z", changeKind: "source-observed" },
+    ];
+    first.record.eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+    first.record.latestBySourceId["external:0"].eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+    first.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+
+    const trimmed = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 11,
+      observedAt: "2026-08-27T12:11:00.000Z",
+      topology: createTopology({
+        sources: topology.sources.map((source) => source.sourceId === "external:0"
+          ? { ...source, status: { ...source.status, selected: true } }
+          : source),
+      }),
+      snapshotCompleteness: "complete",
+      limits: { maxEventsPerSource: 8, maxEventsPerDevice: 2 },
+    });
+
+    expect(trimmed.record.events.map((event) => event.observedAt)).toEqual([
+      "2026-08-27T12:00:00.000Z",
+      "2026-08-27T12:11:00.000Z",
+    ]);
+    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:10:00.000Z");
+    expect(trimmed.record.latestBySourceId["external:0"].eventCoverageStartedAt).toBe("2026-08-27T12:10:00.000Z");
+    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:10:00.000Z");
+  });
+
+  it("source event trimでは削除されたsource eventの最遅observedAtまでcoverageを前進させる", () => {
+    const topology = createTopology();
+    const store = createEmptyMaterialSourceObservations();
+    const first = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 10,
+      observedAt: "2026-08-27T12:00:00.000Z",
+      topology,
+      snapshotCompleteness: "complete",
+      limits: { maxEventsPerSource: 8, maxEventsPerDevice: 8 },
+    });
+    first.record.events = [
+      { sourceId: "cfs:1:slot:2", observedAt: "2026-08-27T12:10:00.000Z", changeKind: "provider-disconnected" },
+      { sourceId: "cfs:1:slot:2", observedAt: "2026-08-27T12:00:00.000Z", changeKind: "source-observed" },
+      { sourceId: "external:0", observedAt: "2026-08-27T12:00:00.000Z", changeKind: "source-observed" },
+    ];
+    first.record.eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+    first.record.latestBySourceId["external:0"].eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+    first.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt = "2026-08-27T12:00:00.000Z";
+
+    const trimmed = recordMaterialTopologyObservation(store, {
+      host: "K2Pro-69E7",
+      deviceId: "serial:905251280E69E7",
+      identityStrength: "stable",
+      sessionId: "k2-session-1",
+      providerId: "k2-ws9999-boxsInfo",
+      providerGeneration: "ws-1",
+      sequence: 11,
+      observedAt: "2026-08-27T12:11:00.000Z",
+      topology: createTopology({
+        sources: topology.sources.map((source) => source.sourceId === "external:0"
+          ? { ...source, status: { ...source.status, selected: true } }
+          : source),
+      }),
+      snapshotCompleteness: "complete",
+      limits: { maxEventsPerSource: 1, maxEventsPerDevice: 8 },
+    });
+
+    expect(trimmed.record.events.map((event) => `${event.sourceId}:${event.observedAt}`)).toEqual([
+      "cfs:1:slot:2:2026-08-27T12:00:00.000Z",
+      "external:0:2026-08-27T12:11:00.000Z",
+    ]);
+    expect(trimmed.record.eventCoverageStartedAt).toBe("2026-08-27T12:10:00.000Z");
+    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageStartedAt).toBe("2026-08-27T12:10:00.000Z");
+    expect(trimmed.record.latestBySourceId["cfs:1:slot:2"].eventCoverageTrimmedAt).toBe("2026-08-27T12:10:00.000Z");
   });
 
   it("provisional deviceの履歴はstable deviceへ安全にrekeyでき、conflict中はmergeしない", () => {
