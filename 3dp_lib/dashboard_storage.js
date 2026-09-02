@@ -30,9 +30,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1659 (PR #440)
+ * @version 1.390.1660 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 18:09:00
+ * @lastModified 2026-09-02 18:21:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1976,7 +1976,6 @@ export function recordPrintHistoryFetchCoverage(host, historyWindow) {
   printStore.historyCoverage = {
     ...(printStore.historyCoverage && typeof printStore.historyCoverage === "object" ? printStore.historyCoverage : {}),
     activeAnchorComplete: printStore.historyAuthorityIncomplete === true ? false : activeAnchorComplete,
-    totalLifetimeComplete: printStore.historyCoverage?.totalLifetimeComplete === false ? false : true,
     source: "print-history-fetch",
     observedAt: getCurrentTimestamp(),
     newestPrintJobId,
@@ -2977,13 +2976,14 @@ function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
 }
 
 /**
- * 復元されたprint history fetch coverageを再probe待ちへ戻す。
+ * 復元されたprint history coverageを再probe待ちへ戻す。
  *
  * 【詳細説明】
- * - `recordPrintHistoryFetchCoverage()`の`activeAnchorComplete:true`は、現在起動中の
- *   3DPmonがプリンタから実際に受け取った履歴windowだけを根拠にする。
- * - 再起動後は、保存済みのfetch証跡が「停止中に印刷がなかった」ことまでは証明しないため、
- *   最初の履歴再取得が終わるまでactive anchor coverageをfail-closedにする。
+ * - `activeAnchorComplete:true`は、現在起動中の3DPmonがプリンタから実際に受け取った
+ *   履歴windowだけを根拠にする。
+ * - 明示retention後の`source:"print-history-retention"`も元は同じfresh fetch proofから派生する。
+ *   再起動後は停止中に印刷がなかったことを証明しないため、最初の履歴再取得が終わるまで
+ *   active anchor coverageをfail-closedにする。
  * - `totalLifetimeComplete:false`は明示retention済みの総履歴不完全性なので保持する。
  *
  * @private
@@ -2998,7 +2998,6 @@ function _markRestoredFetchCoverageRequiresReprobe(machineData) {
     typeof machineData !== "object" ||
     !coverage ||
     typeof coverage !== "object" ||
-    coverage.source !== "print-history-fetch" ||
     coverage.activeAnchorComplete !== true
   ) {
     return machineData;
@@ -3008,8 +3007,8 @@ function _markRestoredFetchCoverageRequiresReprobe(machineData) {
     historyCoverage: {
       ...coverage,
       activeAnchorComplete: false,
-      source: "print-history-fetch-restore-reprobe-required",
-      staleSource: "print-history-fetch",
+      source: "print-history-restore-reprobe-required",
+      staleSource: coverage.source || "unknown",
       restoredAt: getCurrentTimestamp()
     }
   };

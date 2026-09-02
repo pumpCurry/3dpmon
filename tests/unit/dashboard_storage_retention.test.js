@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1658 (PR #440)
+ * @version 1.390.1660 (PR #440)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 18:32:30
+ * @lastModified 2026-09-02 18:21:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -329,6 +329,7 @@ describe("印刷履歴保持設定", () => {
       source: "print-history-fetch",
       coverageProof: "fetch-window-crosses-active-anchor"
     });
+    expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage.totalLifetimeComplete).toBeUndefined();
   });
 
   it("復元されたfetch coverageは再probe前にactive anchor証明として扱わない", () => {
@@ -361,8 +362,41 @@ describe("印刷履歴保持設定", () => {
     expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({
       activeAnchorComplete: false,
       totalLifetimeComplete: false,
-      source: "print-history-fetch-restore-reprobe-required",
+      source: "print-history-restore-reprobe-required",
       staleSource: "print-history-fetch"
+    });
+  });
+
+  it("復元されたretention coverageも再probe前にactive anchor証明として扱わない", () => {
+    globalThis.localStorage.setItem("3dpmon-global", JSON.stringify({
+      appSettings: { printHistoryMaxEntries: 2 }
+    }));
+    globalThis.localStorage.setItem("3dpmon-host-K1Max", JSON.stringify({
+      printStore: {
+        history: [
+          { id: 1700000600, filename: "latest.gcode" },
+          { id: 1699999900, filename: "before-anchor.gcode" }
+        ],
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: false,
+          source: "print-history-retention",
+          sourceLength: 6,
+          retainedLength: 2,
+          limit: 2
+        },
+        current: null,
+        videos: {}
+      }
+    }));
+
+    restoreUnifiedStorage();
+
+    expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({
+      activeAnchorComplete: false,
+      totalLifetimeComplete: false,
+      source: "print-history-restore-reprobe-required",
+      staleSource: "print-history-retention"
     });
   });
 

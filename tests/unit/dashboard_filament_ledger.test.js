@@ -187,7 +187,7 @@ describe("deriveSpoolRemaining 冪等性", () => {
         history: [job(101, 20000, { filamentId: "sp1" })],
         historyCoverage: {
           totalLifetimeComplete: true,
-          source: "print-history-fetch-restore-reprobe-required"
+          source: "print-history-restore-reprobe-required"
         }
       }
     };
