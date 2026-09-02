@@ -137,6 +137,15 @@ registry intentionally remains empty until a K2 live fixture is captured and
 reviewed. Caller-supplied fixture receipts, reviewed commits, or capture hashes
 must still report `reviewed-live-fixture-registry-entry-required` until that
 module-owned immutable registry entry is added.
+The analyzer also reports `gate18_9J2` readiness. This is stricter than the
+Gate 18.9I evidence check: it requires a K2/CFS target, at least two loaded CFS
+sources, source-aware managed mounts for every loaded source in the fixture,
+trusted print-start snapshots, source-specific `JobMaterialSegment` records,
+at least one observed-used segment, at least one explicit `confirmed-unused`
+0mm segment, digest-consistent ItemKeeper projection evidence, and a matching
+CFS Debug / Certification panel export. Even when
+`gate18_9J2.readyForFixtureReview` is true, it does not enable production
+ItemKeeper projection or reviewed registry registration by itself.
 
 Required sequence:
 
@@ -181,6 +190,12 @@ Pass criteria:
   receives `legacy-single-spool-map-present-for-multi-source-device` and
   `loaded-source-managed-mount-missing` warnings instead of being silently
   treated as source-aware.
+- `scripts/analyze_material_accounting_export.mjs` reports
+  `gate18_9J2.status:"candidate-ready-for-fixture-review"` only when the same
+  export also contains the stricter fixture-review inputs described above.
+  `gate18_9J2.canRegisterReviewedFixtureEntry` and
+  `gate18_9J2.canProjectItemKeeperSourceUsage` remain false until a later
+  module-owned reviewed registry entry and issuer activation are implemented.
 
 ## Gate 10: K2 CFS Topology Certification
 

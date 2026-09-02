@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1634 (PR #440)
+ * @version 1.390.1638 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 09:58:00
+ * @lastModified 2026-09-02 11:55:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -361,6 +361,8 @@ describe("analyze_material_accounting_export", () => {
     expect(device.printBinding).toMatchObject({
       printStartSnapshotCount: 1,
       jobMaterialSegmentCount: 2,
+      observedUsedSegmentCount: 2,
+      confirmedUnusedSegmentCount: 0,
       itemKeeperDigestConsistentSegmentCount: 2,
       itemKeeperDigestConsistentUsedLengthMm: 9753,
       itemKeeperRuntimeCertifiedSegmentCount: 0,
@@ -385,6 +387,91 @@ describe("analyze_material_accounting_export", () => {
       ["1B", 1, 1, 6543, 1, 6543, 0, 0, 0, 0, 88],
       ["external", 0, 0, 0, 0, 0, 0, 0, 0, 0, null],
     ]);
+  });
+
+  it("J-2 live fixture候補は使用sourceと明示0mm未使用sourceとcertification exportを要求する", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: true,
+    });
+    payload.materialSourceObservations.byDeviceId["serial:k2"].latestBySourceId["source:k2:cfs:1c"] = {
+      sourceId: "source:k2:cfs:1c",
+      materialSourceId: "source:k2:cfs:1c",
+      deviceId: "serial:k2",
+      kind: "cfs-slot",
+      displayLabel: "1C",
+      presence: "loaded",
+      selected: false,
+      remaining: { normalizedPercent: 100, valid: true },
+      material: { type: "PLA", name: "Generic PLA", color: { cssColor: "#cccccc" } },
+      lastObservedAt: "2026-09-01T08:00:00.000Z",
+    };
+    payload.materialAccountingSpoolMountStore.spoolMounts.push({
+      mountId: "mount:1c",
+      materialSourceId: "source:k2:cfs:1c",
+      spoolId: "spool:c",
+      status: "open",
+      openedAt: "2026-09-01T07:32:00.000Z",
+      verification: "operator-confirmed",
+      sourceBindingAtOpen: {
+        deviceId: "serial:k2",
+        materialSourceId: "source:k2:cfs:1c",
+        sourceId: "source:k2:cfs:1c",
+        aliases: ["cfs:1:slot:2", "T1C"],
+      },
+    });
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments.push(certifyItemKeeperProjectionSegment({
+      segmentId: "seg:t1c",
+      deviceId: "serial:k2",
+      printJobId: "job:1",
+      spoolId: "spool:c",
+      mountId: "mount:1c",
+      materialSourceId: "source:k2:cfs:1c",
+      protocolToolAlias: "T1C",
+      usedLengthMm: 0,
+      usageState: "confirmed-unused",
+      confidence: "high",
+      debit: { status: "eligible", canDebit: false, reasons: [] },
+      order: 2,
+    }));
+
+    const missingCertification = analyzeMaterialAccountingExport(payload);
+    expect(missingCertification.gate18_9J2).toMatchObject({
+      status: "waiting-live-fixture-capture",
+      readyForFixtureReview: false,
+      canRegisterReviewedFixtureEntry: false,
+      canProjectItemKeeperSourceUsage: false,
+    });
+    expect(missingCertification.gate18_9J2.reasons).toContain("cfs-certification-panel-export-missing");
+
+    const ready = analyzeMaterialAccountingExport(payload, {
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          liveSendEnabled: false,
+        },
+        summary: {
+          material: {
+            summary: { loadedSourceCount: 3 },
+          },
+        },
+      },
+    });
+    expect(ready.gate18_9J2).toMatchObject({
+      status: "candidate-ready-for-fixture-review",
+      readyForFixtureReview: true,
+      canRegisterReviewedFixtureEntry: false,
+      canProjectItemKeeperSourceUsage: false,
+      reasons: [],
+    });
+    expect(ready.gate18_9J2.devices[0]).toMatchObject({
+      readyForFixtureReview: true,
+      printBinding: {
+        observedUsedSegmentCount: 2,
+        confirmedUnusedSegmentCount: 1,
+        itemKeeperDigestConsistentSegmentCount: 3,
+      },
+    });
   });
 
   it("raw source aliasとcanonical MaterialSource IDが分かれていてもmountとsegmentをsourceへ紐付ける", () => {

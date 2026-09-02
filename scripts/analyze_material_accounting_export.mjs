@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1634 (PR #440)
+ * @version 1.390.1638 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 09:58:00
+ * @lastModified 2026-09-02 11:55:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -851,6 +851,15 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
     const segmentDeviceId = toText(segment.deviceId);
     return !segmentDeviceId || !deviceId || segmentDeviceId === deviceId;
   });
+  const observedUsedSegments = scopedSegments.filter((segment) => (
+    toText(segment.usageState) === "observed-used" &&
+    toFiniteNumberOrNull(segment.usedLengthMm) !== null &&
+    toFiniteNumberOrNull(segment.usedLengthMm) > 0
+  ));
+  const confirmedUnusedSegments = scopedSegments.filter((segment) => (
+    toText(segment.usageState) === "confirmed-unused" &&
+    toFiniteNumberOrNull(segment.usedLengthMm) === 0
+  ));
   const reasons = [];
   if (multiSourceExpected && sources.length === 0) {
     reasons.push("material-sources-not-observed");
@@ -894,6 +903,8 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
       jobMaterialSegmentCount: scopedSegments.length,
       sourceSpecificUsageCount: sources.reduce((sum, source) => sum + source.sourceSpecificUsageCount, 0),
       sourceSpecificUsedLengthMm: sources.reduce((sum, source) => sum + source.sourceSpecificUsedLengthMm, 0),
+      observedUsedSegmentCount: observedUsedSegments.length,
+      confirmedUnusedSegmentCount: confirmedUnusedSegments.length,
       itemKeeperDigestConsistentSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperDigestConsistentUsageCount, 0),
       itemKeeperDigestConsistentUsedLengthMm: sources.reduce((sum, source) => sum + source.itemKeeperDigestConsistentUsedLengthMm, 0),
       itemKeeperFixtureAcceptedSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperFixtureAcceptedUsageCount, 0),
@@ -916,6 +927,111 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
       reasons,
     },
     sources,
+  };
+}
+
+/**
+ * Gate 18.9J-2 live fixture capture readinessを診断する。
+ *
+ * 【詳細説明】
+ * - Gate 18.9Iの「source別shadow evidenceがある」判定とは別に、review済みfixture registryへ進むための
+ *   operator-facing checklistをread-only reportへ追加する。
+ * - ここではproduction issuerを開かず、足りないartifactと未充足理由だけを列挙する。
+ *
+ * @private
+ * @function createGate18_9J2CaptureReadinessReport
+ * @param {Object} input - 入力context。
+ * @param {Array<Object>} input.deviceSummaries - device summary配列。
+ * @param {Object|null} input.certificationSummary - CFS certification panel summary。
+ * @returns {Object} Gate18.9J-2 capture readiness summary。
+ */
+function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certificationSummary }) {
+  const candidateDevices = deviceSummaries.filter((device) => (
+    device.printerType === "creality-k2" &&
+    (device.multiSourceExpected || device.sourceCounts.cfs > 0)
+  ));
+  const deviceReports = candidateDevices.map((device) => {
+    const reasons = [];
+    if (device.sourceCounts.cfs < 2) {
+      reasons.push("cfs-source-count-less-than-two");
+    }
+    if (device.sourceCounts.loaded < 2) {
+      reasons.push("loaded-source-count-less-than-two");
+    }
+    if (device.sourceCounts.loadedWithoutManagedMount > 0) {
+      reasons.push("loaded-source-managed-mount-missing");
+    }
+    if (device.printBinding.printStartSnapshotCount <= 0) {
+      reasons.push("print-start-snapshot-missing");
+    }
+    if (device.printBinding.jobMaterialSegmentCount <= 0) {
+      reasons.push("job-material-segment-missing");
+    }
+    if (device.printBinding.observedUsedSegmentCount <= 0) {
+      reasons.push("observed-used-segment-missing");
+    }
+    if (device.printBinding.confirmedUnusedSegmentCount <= 0) {
+      reasons.push("confirmed-unused-zero-segment-missing");
+    }
+    if (device.printBinding.itemKeeperDigestConsistentSegmentCount <= 0) {
+      reasons.push("itemkeeper-projection-digest-consistent-segment-missing");
+    }
+    return {
+      hostname: device.hostname,
+      deviceId: device.deviceId,
+      model: device.model,
+      sourceCounts: device.sourceCounts,
+      printBinding: device.printBinding,
+      readyForFixtureReview: reasons.length === 0,
+      reasons,
+    };
+  });
+  const reasons = [];
+  if (candidateDevices.length === 0) {
+    reasons.push("k2-cfs-device-not-found");
+  }
+  if (!certificationSummary) {
+    reasons.push("cfs-certification-panel-export-missing");
+  } else {
+    if (certificationSummary.liveSendEnabled) {
+      reasons.push("certification-panel-live-send-enabled");
+    }
+    if (certificationSummary.loadedSourceCount !== null && certificationSummary.loadedSourceCount < 2) {
+      reasons.push("certification-panel-loaded-source-count-less-than-two");
+    }
+  }
+  for (const device of deviceReports) {
+    for (const reason of device.reasons) {
+      reasons.push(`${device.hostname}:${reason}`);
+    }
+  }
+  const ready = candidateDevices.length > 0 &&
+    Boolean(certificationSummary) &&
+    deviceReports.some((device) => device.readyForFixtureReview) &&
+    !certificationSummary.liveSendEnabled &&
+    reasons.length === 0;
+  return {
+    status: ready ? "candidate-ready-for-fixture-review" : "waiting-live-fixture-capture",
+    canRegisterReviewedFixtureEntry: false,
+    canProjectItemKeeperSourceUsage: false,
+    readyForFixtureReview: ready,
+    requiredArtifacts: [
+      "3dpmon all-data export after completed K2/CFS print",
+      "CFS Debug / Certification panel export from the same printer/session window",
+      "fixture capture sha256",
+      "reviewed commit full SHA",
+      "operator physical observation notes for used and unused loaded sources",
+    ],
+    checklist: [
+      "Mount managed 3DPmon spools to every loaded CFS source included in the fixture.",
+      "Keep at least two CFS sources loaded so used and unused source handling can both be reviewed.",
+      "Start the print through the guarded 3DPmon K2/CFS print-start flow.",
+      "Observe completion and export all data after print history has merged.",
+      "Run this analyzer with both --export and --certification.",
+      "Do not add a production reviewed registry entry until the exported fixture is reviewed.",
+    ],
+    devices: deviceReports,
+    reasons,
   };
 }
 
@@ -953,6 +1069,7 @@ export function analyzeMaterialAccountingExport(exportPayload, options = {}) {
     snapshots: printStartSnapshots,
     segments: jobMaterialSegments,
   }));
+  const certificationSummary = summarizeCertification(options.certificationPayload);
   const warnings = [];
   for (const device of deviceSummaries) {
     for (const reason of device.certificationReadiness.reasons) {
@@ -996,7 +1113,7 @@ export function analyzeMaterialAccountingExport(exportPayload, options = {}) {
       unattributedUsageCount: valuesOfCollection(printBindingStore.unattributedUsage).length,
     },
     devices: deviceSummaries,
-    certification: summarizeCertification(options.certificationPayload),
+    certification: certificationSummary,
     gate18_9I: {
       status: hasGate18_9IEvidence ? "evidence-present" : "waiting-live-shadow-accounting",
       canDebitManagedRemaining: false,
@@ -1007,6 +1124,10 @@ export function analyzeMaterialAccountingExport(exportPayload, options = {}) {
         "Managed remaining debit stays disabled until a later authority gate.",
       ],
     },
+    gate18_9J2: createGate18_9J2CaptureReadinessReport({
+      deviceSummaries,
+      certificationSummary,
+    }),
     warnings,
   };
 }

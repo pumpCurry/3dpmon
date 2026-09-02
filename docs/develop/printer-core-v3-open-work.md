@@ -58,6 +58,12 @@ runtime-certified evidenceがない限りfalse/0にする。Gate 18.9Iの `evide
 `loaded-source-managed-mount-missing`、multi-source機にlegacy 1本割当だけが残る場合は
 `legacy-single-spool-map-present-for-multi-source-device` として警告し、legacy 1本割当を
 source-aware mountとして扱わない。
+Gate 18.9J-2のcapture準備として、同analyzerは `gate18_9J2` readinessも出力する。
+これはGate 18.9Iより厳しく、K2/CFS target、2本以上のloaded CFS source、fixtureに含める
+loaded sourceすべてのsource-aware managed mount、trusted print-start snapshot、source別
+`JobMaterialSegment`、1件以上の `observed-used`、1件以上の明示 `confirmed-unused` 0mm、
+digest-consistent ItemKeeper projection evidence、同一runのCFS Debug / Certification panel exportを要求する。
+このreadinessがtrueでも、reviewed registry entry追加とproduction issuer activationは別GateまでHOLDする。
 
 Gate 18.9J-1では、ItemKeeper source-aware projectionを本番送信へ解禁せず、
 実機fixtureをreview可能なreceiptへまとめるだけにする。K2/Creality履歴の
