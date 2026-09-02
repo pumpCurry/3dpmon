@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.1645 (PR #441)
+ * @version 1.390.1657 (PR #440)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-09-02 14:33:53
+* @lastModified 2026-09-02 17:44:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -39,7 +39,8 @@ import {
   loadPrintVideos,
   savePrintVideos,
   saveUnifiedStorage,
-  applyPrintHistoryRetention
+  applyPrintHistoryRetention,
+  recordPrintHistoryFetchCoverage
 } from "./dashboard_storage.js";
 
 import { formatEpochToDateTime, formatDuration, normalizeJobId } from "./dashboard_utils.js";
@@ -1710,6 +1711,7 @@ export function parseRawHistoryList(rawArray, baseUrl, host) {
     )
     .map(r => parseRawHistoryEntry(r, baseUrl, host))
     .sort((a, b) => b.id - a.id);
+  recordPrintHistoryFetchCoverage(host, parsed);
   return applyPrintHistoryRetention(parsed, undefined, { host });
 }
 

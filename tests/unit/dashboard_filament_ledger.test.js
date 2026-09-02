@@ -281,6 +281,21 @@ describe("被覆ギャップ F2", () => {
     // anchor(100000) - (4000+5000) = 91000
     expect(r.remainingMm).toBe(91000);
   });
+
+  it("epoch秒IDではmerged history最古IDだけでactive anchor coverageを証明しない", () => {
+    addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 60000 });
+    setHistory("h", [
+      job(1700000600, 5000),
+      job(1700000500, 4000),
+      job(1699999900, 1000)
+    ]);
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 50000, sinceJobId: 1700000000, ts: 100 });
+
+    const r = deriveSpoolRemaining("sp1");
+
+    expect(r.verified).toBe(false);
+    expect(r.remainingMm).toBe(41000);
+  });
 });
 
 // =====================================================================

@@ -149,11 +149,15 @@ ItemKeeper projection or reviewed registry registration by itself.
 Gate 18.9J-2 readiness is scoped to the certification target device when the
 panel export contains a concrete device ID. Other monitored K2 printers in the
 same all-data export must not make the target fixture fail. The candidate job
-must also contain raw K2 `materialUsed` CSV from the target machine history, and
-the CSV source count must match both the print-start snapshot count and the
-`JobMaterialSegment` count. If the certification panel export carries a concrete
-session ID, that ID must match the candidate print-start/session evidence before
-the job can be marked ready for fixture review.
+must also contain raw K2 `materialUsed` CSV either from the target machine
+history or from the same job's `JobMaterialSegment.evidence.completionEvidence`
+fallback when print history retention has already removed the machine history
+row. The CSV source count must match both the print-start snapshot count and the
+`JobMaterialSegment` count, and each parsed CSV value must equal the matching
+segment's `usedLengthMm` in print-start binding order. If the certification
+panel export carries a concrete session ID, that ID must match the candidate
+print-start/session evidence before the job can be marked ready for fixture
+review.
 
 Required sequence:
 
@@ -168,8 +172,11 @@ Required sequence:
   disconnect/reconnect, source disappearance, alias conflict, or event-log
   coverage gap must keep the segment out of managed debit eligibility.
 - Confirm completed history appears with source-specific `materialUsed`
-  evidence, or confirm the result is left pending/unattributed when only total
-  usage or incomplete source counts are available.
+  evidence. If print history retention removes the row before fixture build,
+  confirm the same raw CSV is preserved in
+  `JobMaterialSegment.evidence.completionEvidence`; otherwise confirm the result
+  is left pending/unattributed when only total usage or incomplete source counts
+  are available.
 - Confirm the filament manager shows each source segment as read-only usage
   evidence beside the mounted 3DPmon spool. It may show estimated remaining, but
   must not write managed remaining or legacy K1-style usage records yet.
@@ -187,7 +194,9 @@ Pass criteria:
 - The saved print-start snapshot contains device, session, generation, print
   job, source, spool, and local receipt evidence.
 - Source-specific usage such as `T1A -> CFS 1A = 3210mm` and
-  `T1B -> CFS 1B = 6543mm` is preserved as separate JobMaterialSegment records.
+  `T1B -> CFS 1B = 6543mm` is preserved as separate JobMaterialSegment records,
+  and the raw `materialUsed` CSV parses to the same values in the same
+  print-start binding order.
 - A source that was mounted but not reported as used remains pending or
   unconfirmed unless result-set completeness evidence explicitly proves zero
   usage.
@@ -224,12 +233,16 @@ This builder is read-only. It creates `fixture-evidence.json`,
 `fixture-receipt.json`, `projection-digests.json`, and
 `capture-manifest.json` from the exported stores. A rejected receipt is still a
 useful artifact because it records the missing snapshot, segment, raw CSV,
-order, or usage-state evidence without mutating 3DPmon storage, ItemKeeper, or
-the reviewed production registry. The builder resolves raw history from the
-target machine only, using the requested `deviceId` and `printJobId` plus
-`printPlanId` when available. Device metadata is anchored to the 3DPmon export
-target/machine; certification JSON and CLI metadata may fill missing fields, but
-conflicts are reported as `fixture-review-not-ready` review blockers.
+order, parity, or usage-state evidence without mutating 3DPmon storage,
+ItemKeeper, or the reviewed production registry. The builder resolves raw
+history from the target machine only, using the requested `deviceId` and
+`printJobId` plus `printPlanId` when available. If that row is absent because of
+print history retention, the builder may use the same job's
+`JobMaterialSegment.evidence.completionEvidence.rawMaterialUsed` fallback, but
+conflicting fallback values or CSV/segment usage mismatches keep the fixture
+rejected. Device metadata is anchored to the 3DPmon export target/machine;
+certification JSON and CLI metadata may fill missing fields, but conflicts are
+reported as `fixture-review-not-ready` review blockers.
 
 ## Gate 10: K2 CFS Topology Certification
 

@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1653 (PR #440)
+ * @version 1.390.1657 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-09-02 16:45:11
+ * @lastModified 2026-09-02 17:44:30
  * -----------------------------------------------------------
  */
 
@@ -115,6 +115,27 @@ function _isHistoryAuthorityIncomplete(host) {
   const printStore = monitorData.machines?.[host]?.printStore;
   return printStore?.historyAuthorityIncomplete === true ||
     printStore?.historyCoverage?.activeAnchorComplete === false;
+}
+
+/**
+ * active anchor区間の履歴被覆が明示的に証明されているか判定する。
+ *
+ * 【詳細説明】
+ * - K1/K2のprint idは連番ではなくepoch秒などが使われるため、merged historyの最小IDや
+ *   `sinceJobId + 1`から欠落有無を推定しない。
+ * - storageがretention前のfetch windowから`activeAnchorComplete:true`を記録した場合だけ
+ *   verified/debit authorityの根拠として扱う。
+ *
+ * @private
+ * @function _isActiveAnchorCoverageProven
+ * @param {string} host - ホスト名。
+ * @param {number} sinceJobId - mount anchorのprint job id。
+ * @returns {boolean} active anchor coverageが明示証明済みならtrue。
+ */
+function _isActiveAnchorCoverageProven(host, sinceJobId) {
+  if (!(Number(sinceJobId) > 0)) return true;
+  const coverage = monitorData.machines?.[host]?.printStore?.historyCoverage;
+  return coverage?.activeAnchorComplete === true;
 }
 
 /**
@@ -708,9 +729,9 @@ export function getOpenMountInterval(spoolId, host) {
  * - totalLengthMm からの再計算（total − Σ全区間）も printIdRanges からの区間捏造も**行わない**。
  *   → 別スプール／重複区間に引きずられて過去を巻き込む事故を構造的に排除。
  *
- * 被覆チェック（安全側フラグのみ）: 最新区間 host の printStore.history の最小 printId O が
- *   当該区間 sinceJobId より新しい（O > sinceJobId + 1 相当）なら取りこぼしの可能性 →
- *   verified=false。ただし remaining は引き続きアンカー基準で計算する（過剰減算しない）。
+ * 被覆チェック（安全側フラグのみ）: 最新区間 host の履歴fetch windowが当該区間の
+ *   sinceJobIdを跨いだことをstorage側coverage metadataで証明できる場合だけ
+ *   verified=trueにする。printIdの連番性は仮定しない。
  *
  * 区間が空（mountHistory に mount 記録なし）→ spool.remainingLengthMm（現在値）をそのまま返す
  *   （mode:"none", verified:false）。勝手に total へリセットしない。
@@ -774,15 +795,9 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
   //   そのまま残量とし、ライブ消費のオーバーレイのみ適用する。
   const boundaryUnknown = anchorIv.boundaryStatus === "unknown";
 
-  // 当該区間の帰属消費 Σ と、被覆チェック用の最小 printId
+  // 当該区間の帰属消費 Σ。
   const hist = _historyForHost(anchorIv.host);
   let used = 0;
-  let minPrintId = Infinity;
-  for (const job of hist) {
-    const pid = _jobId(job);
-    if (!Number.isFinite(pid)) continue;
-    if (pid < minPrintId) minPrintId = pid;
-  }
   const _excl = excludeJobId != null ? String(excludeJobId) : null;
   if (!boundaryUnknown) {
     for (const job of hist) {
@@ -798,15 +813,11 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
     }
   }
 
-  // 被覆チェック: 最新区間 host の最小 printId O が sinceJobId より「新しい」なら未検証
-  // （O > sinceJobId + 1 相当 ⇒ since と O の間に取りこぼしジョブがありうる）。
-  // verified=false でも remaining はアンカー基準で計算（安全側＝過剰減算しない）。
+  // 被覆チェック: fetch window由来のcoverage証明だけを使う。
+  // printIdはepoch秒になり得るため、since+1やmerged history最古IDでは証明しない。
   const since = anchorIv.sinceJobId;
-  const O = minPrintId;
   let verified = true;
-  if (since > 0 && Number.isFinite(O) && O > since + 1) {
-    verified = false;
-  }
+  if (!_isActiveAnchorCoverageProven(anchorIv.host, since)) verified = false;
   // 境界不明区間は常に未検証（減算しない＝アンカー値を維持）。
   if (boundaryUnknown) verified = false;
 

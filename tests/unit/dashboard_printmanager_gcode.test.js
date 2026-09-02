@@ -18,6 +18,7 @@ vi.mock('../../3dp_lib/dashboard_storage.js', () => ({
   loadPrintHistory: vi.fn(() => []), savePrintHistory: vi.fn(),
   loadPrintVideos: vi.fn(() => []), savePrintVideos: vi.fn(),
   applyPrintHistoryRetention: vi.fn((history) => history),
+  recordPrintHistoryFetchCoverage: vi.fn(),
   MAX_PRINT_HISTORY: 100,
 }));
 vi.mock('../../3dp_lib/dashboard_utils.js', () => ({
@@ -292,6 +293,7 @@ describe('printfinish 確定: 印刷中ジョブを成功/失敗へ誤確定し�
   it('parseRawHistoryList: retentionへhost scopeを渡しledger保護対象を前段で落とさない', () => {
     const HOST = 'K2Pro-RETENTION';
     _storageMock.applyPrintHistoryRetention.mockClear();
+    _storageMock.recordPrintHistoryFetchCoverage.mockClear();
 
     parseRawHistoryList(
       [{ id: 1700000000, filename: '/x/a.gcode', starttime: 1700000000, usagetime: 60, printfinish: 1 }],
@@ -301,6 +303,28 @@ describe('printfinish 確定: 印刷中ジョブを成功/失敗へ誤確定し�
 
     expect(_storageMock.applyPrintHistoryRetention).toHaveBeenCalledTimes(1);
     expect(_storageMock.applyPrintHistoryRetention.mock.calls[0][2]).toEqual({ host: HOST });
+  });
+
+  it('parseRawHistoryList: fetch window coverageをretention前のparsed履歴でstorageへ記録する', () => {
+    const HOST = 'K2Pro-COVERAGE';
+    _storageMock.applyPrintHistoryRetention.mockClear();
+    _storageMock.recordPrintHistoryFetchCoverage.mockClear();
+
+    parseRawHistoryList(
+      [
+        { id: 1700000300, filename: '/x/new.gcode', starttime: 1700000300, usagetime: 60, printfinish: 1 },
+        { id: 1700000000, filename: '/x/old.gcode', starttime: 1700000000, usagetime: 60, printfinish: 1 }
+      ],
+      'http://127.0.0.1',
+      HOST
+    );
+
+    expect(_storageMock.recordPrintHistoryFetchCoverage).toHaveBeenCalledTimes(1);
+    expect(_storageMock.recordPrintHistoryFetchCoverage.mock.calls[0][0]).toBe(HOST);
+    expect(_storageMock.recordPrintHistoryFetchCoverage.mock.calls[0][1].map((job) => job.id)).toEqual([
+      1700000300,
+      1700000000
+    ]);
   });
 
   it('★jobsToRaw: discontinued=true を描画用 raw へ引き継ぐ（中止表示の前提）', () => {

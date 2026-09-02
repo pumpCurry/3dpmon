@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1656 (PR #440)
+ * @version 1.390.1657 (PR #440)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 17:05:50
+ * @lastModified 2026-09-02 17:44:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -115,6 +115,7 @@ const {
   applyPrintHistoryRetention,
   applyConfiguredPrintHistoryRetentionToAllMachines,
   initStorage,
+  recordPrintHistoryFetchCoverage,
   resolvePrintHistoryRetentionLimit,
   resolveUsageHistoryRetentionLimit,
   restoreUnifiedStorage,
@@ -235,7 +236,7 @@ describe("印刷履歴保持設定", () => {
     expect(mocks.monitorData.machines.K1Max.printStore.history.map((job) => job.id)).toEqual([103, 102, 101]);
   });
 
-  it("保持上限適用時はanchor直後のcoverage sentinelを残してverified判定を保護する", () => {
+  it("保持上限適用時はanchor直後の数値sentinelをcoverage証明として扱わない", () => {
     mocks.monitorData.appSettings.printHistoryMaxEntries = 1;
     mocks.monitorData.filamentSpools = [{ id: "spool-a", deleted: false }];
     mocks.protectedIntervals = [
@@ -250,7 +251,7 @@ describe("印刷履歴保持設定", () => {
           history: [
             { id: 103, filename: "third.gcode", materialUsedMm: 1000 },
             { id: 102, filename: "second.gcode", materialUsedMm: 1000 },
-            { id: 101, filename: "coverage-sentinel.gcode", materialUsedMm: 0 },
+            { id: 101, filename: "anchor-plus-one.gcode", materialUsedMm: 0 },
             { id: 99, filename: "before-anchor.gcode", materialUsedMm: 1000 }
           ],
           current: null,
@@ -262,8 +263,72 @@ describe("印刷履歴保持設定", () => {
     const result = applyConfiguredPrintHistoryRetentionToAllMachines();
 
     expect(result.changedHosts).toEqual(["K1Max"]);
-    expect(result.removedJobs).toBe(1);
-    expect(mocks.monitorData.machines.K1Max.printStore.history.map((job) => job.id)).toEqual([103, 102, 101]);
+    expect(result.removedJobs).toBe(2);
+    expect(mocks.monitorData.machines.K1Max.printStore.history.map((job) => job.id)).toEqual([103, 102]);
+    expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({
+      activeAnchorComplete: false,
+      totalLifetimeComplete: false,
+      source: "print-history-retention"
+    });
+  });
+
+  it("fetch windowがactive anchorを跨がない場合はactive anchor coverageを未完了にする", () => {
+    mocks.monitorData.filamentSpools = [{ id: "spool-a", deleted: false }];
+    mocks.protectedIntervals = [
+      { spoolId: "spool-a", host: "K1Max", sinceJobId: 1700000000, untilJobId: null, open: true }
+    ];
+    mocks.monitorData.machines = {
+      K1Max: {
+        printStore: {
+          history: [],
+          current: null,
+          videos: {}
+        }
+      }
+    };
+
+    const result = recordPrintHistoryFetchCoverage("K1Max", [
+      { id: 1700000600, filename: "new.gcode" },
+      { id: 1700000500, filename: "oldest-window.gcode" }
+    ]);
+
+    expect(result).toMatchObject({
+      recorded: true,
+      activeAnchorComplete: false,
+      oldestPrintJobId: 1700000500,
+      newestPrintJobId: 1700000600,
+      anchorSinceJobIds: [1700000000]
+    });
+    expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({
+      activeAnchorComplete: false,
+      source: "print-history-fetch",
+      coverageProof: "fetch-window-crosses-active-anchor"
+    });
+  });
+
+  it("fetch windowがactive anchorを跨ぐ場合はactive anchor coverageを完了にする", () => {
+    mocks.monitorData.filamentSpools = [{ id: "spool-a", deleted: false }];
+    mocks.protectedIntervals = [
+      { spoolId: "spool-a", host: "K1Max", sinceJobId: 1700000000, untilJobId: null, open: true }
+    ];
+
+    const result = recordPrintHistoryFetchCoverage("K1Max", [
+      { id: 1700000600, filename: "new.gcode" },
+      { id: 1699999900, filename: "before-anchor.gcode" }
+    ]);
+
+    expect(result).toMatchObject({
+      recorded: true,
+      activeAnchorComplete: true,
+      oldestPrintJobId: 1699999900,
+      newestPrintJobId: 1700000600,
+      anchorSinceJobIds: [1700000000]
+    });
+    expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({
+      activeAnchorComplete: true,
+      source: "print-history-fetch",
+      coverageProof: "fetch-window-crosses-active-anchor"
+    });
   });
 
   it("保持上限適用時はPrintBinding完了証跡が未commitのjob履歴を削除しない", () => {

@@ -608,6 +608,11 @@ Gate 18.9 must cover:
   a production fixture entry. Public registration may evaluate caller-provided
   fixture receipt metadata, but it mints certification only when the segment
   digest and fixture metadata match a module-owned immutable registry entry.
+  Fixture readiness may use `JobMaterialSegment.evidence.completionEvidence`
+  as a raw K2 `materialUsed` CSV fallback after print history retention removes
+  the target history row, but parser/profile metadata and every parsed CSV value
+  must still match the corresponding `JobMaterialSegment.usedLengthMm` in
+  print-start binding order.
   With the registry empty, production registration remains fail-closed with
   `reviewed-live-fixture-registry-entry-required`.
 - K2/CFS UI print-start sends create a module-attested MaterialBindingPlan

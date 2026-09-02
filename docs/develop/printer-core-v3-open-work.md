@@ -63,6 +63,10 @@ Gate 18.9J-2のcapture準備として、同analyzerは `gate18_9J2` readinessも
 loaded sourceすべてのsource-aware managed mount、trusted print-start snapshot、source別
 `JobMaterialSegment`、1件以上の `observed-used`、1件以上の明示 `confirmed-unused` 0mm、
 reviewable source-aware projection digest candidate、同一runのCFS Debug / Certification panel exportを要求する。
+raw K2 `materialUsed` CSVはtarget machine historyを優先し、履歴保持上限でhistory rowが先に
+落ちた場合だけ同一jobの `JobMaterialSegment.evidence.completionEvidence` fallbackを使う。
+ただしCSVのsource数、parser/profile、print-start binding order、各 `usedLengthMm` との
+値一致が崩れる場合はreadyにしない。
 このreadinessがtrueでも、reviewed registry entry追加とproduction issuer activationは別GateまでHOLDする。
 
 Gate 18.9J-1では、ItemKeeper source-aware projectionを本番送信へ解禁せず、

@@ -25,13 +25,14 @@
  * - {@link estimateStorageQuota}：容量取得
  * - {@link syncStorageNow}：即時同期
  * - {@link testMaxLocalStorageQuota}：書き込みテスト
+ * - {@link recordPrintHistoryFetchCoverage}：印刷履歴fetch windowのactive anchor被覆を記録
  * - {@link estimateLocalStorageUsageBytes}：使用量推定
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1656 (PR #440)
+ * @version 1.390.1657 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 17:05:50
+ * @lastModified 2026-09-02 17:44:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1373,7 +1374,7 @@ export function importHistoryOnly(data) {
     if (retained.length !== existing.printStore.history.length) {
       const sourceLength = existing.printStore.history.length;
       existing.printStore.history = retained;
-      _markExplicitPrintHistoryRetentionCoverage(existing.printStore, sourceLength, retained.length, resolvePrintHistoryRetentionLimit(monitorData.appSettings));
+      _markExplicitPrintHistoryRetentionCoverage(existing.printStore, sourceLength, retained.length, resolvePrintHistoryRetentionLimit(monitorData.appSettings), host);
       existing.printStore._historyRev = (Number(existing.printStore._historyRev) || 0) + 1;
     }
   }
@@ -1734,17 +1735,9 @@ function _collectLedgerProtectedPrintJobIds(host, history) {
     if (!interval || interval.boundaryStatus === "unknown") continue;
     const sinceJobId = Number(interval.sinceJobId) || 0;
     const untilJobId = interval.untilJobId == null ? null : Number(interval.untilJobId);
-    const coverageSentinelId = sinceJobId + 1;
     for (const job of history) {
       const jobId = Number(job?.id);
       if (!Number.isFinite(jobId)) continue;
-      if (
-        sinceJobId >= 0 &&
-        jobId === coverageSentinelId &&
-        (untilJobId == null || !Number.isFinite(untilJobId) || jobId <= untilJobId)
-      ) {
-        protectedIds.add(jobId);
-      }
       if (jobId <= sinceJobId) continue;
       if (untilJobId != null && Number.isFinite(untilJobId) && jobId > untilJobId) continue;
       const used = Number(attributedUsed(job, spoolId));
@@ -1877,20 +1870,125 @@ function _collectPrintBindingProtectedPrintJobIds(history) {
  * @param {number} sourceLength - retention適用前の履歴件数。
  * @param {number} retainedLength - retention適用後の履歴件数。
  * @param {number} limit - 設定保持上限。
+ * @param {string=} host - active anchor coverageを評価する対象ホスト名。
  * @returns {void}
  */
-function _markExplicitPrintHistoryRetentionCoverage(printStore, sourceLength, retainedLength, limit) {
+function _markExplicitPrintHistoryRetentionCoverage(printStore, sourceLength, retainedLength, limit, host = "") {
   if (!printStore || typeof printStore !== "object" || !(sourceLength > retainedLength)) {
     return;
   }
+  const existingCoverage = printStore.historyCoverage && typeof printStore.historyCoverage === "object"
+    ? printStore.historyCoverage
+    : {};
+  const activeAnchorSinceJobIds = _collectActiveLedgerAnchorSinceJobIds(host);
+  const existingActiveAnchorComplete = typeof existingCoverage.activeAnchorComplete === "boolean"
+    ? existingCoverage.activeAnchorComplete
+    : activeAnchorSinceJobIds.length === 0;
   printStore.historyCoverage = {
-    ...(printStore.historyCoverage && typeof printStore.historyCoverage === "object" ? printStore.historyCoverage : {}),
-    activeAnchorComplete: printStore.historyAuthorityIncomplete === true ? false : true,
+    ...existingCoverage,
+    activeAnchorComplete: printStore.historyAuthorityIncomplete === true ? false : existingActiveAnchorComplete,
     totalLifetimeComplete: false,
     source: "print-history-retention",
     sourceLength,
     retainedLength,
     limit
+  };
+}
+
+/**
+ * 指定ホストの現在のactive mount anchorを収集する。
+ *
+ * 【詳細説明】
+ * - print idはK1/K2とも連番とは限らずepoch秒が使われるため、`sinceJobId + 1`のような
+ *   算術的sentinelでは履歴被覆を証明できない。
+ * - ここではledger projectionから最新の有効区間だけを取り出し、fetch windowがそのanchorを
+ *   実際に跨いだかどうかを判定するための入力に限定する。
+ *
+ * @private
+ * @function _collectActiveLedgerAnchorSinceJobIds
+ * @param {string} host - 対象ホスト名。
+ * @returns {number[]} active anchor sinceJobId配列。
+ */
+function _collectActiveLedgerAnchorSinceJobIds(host) {
+  const anchors = [];
+  if (!host) return anchors;
+  const spools = Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [];
+  for (const spool of spools) {
+    const spoolId = spool?.id;
+    if (!spoolId) continue;
+    let intervals = [];
+    try {
+      intervals = getSpoolIntervals(spoolId) || [];
+    } catch {
+      intervals = [];
+    }
+    const activeIntervals = intervals.filter((interval) => interval && !interval.superseded && interval.host === host);
+    const openIntervals = activeIntervals.filter((interval) => interval.untilJobId == null);
+    if (activeIntervals.length === 0 || openIntervals.length >= 2) continue;
+    const interval = openIntervals[0] || activeIntervals[activeIntervals.length - 1];
+    if (!interval || interval.boundaryStatus === "unknown") continue;
+    const sinceJobId = Number(interval.sinceJobId) || 0;
+    if (sinceJobId > 0) anchors.push(sinceJobId);
+  }
+  return anchors;
+}
+
+/**
+ * プリンタから取得した履歴windowがactive anchorを被覆しているか記録する。
+ *
+ * 【詳細説明】
+ * - この関数は`parseRawHistoryList()`からretention適用前の「今回プリンタが返した履歴window」を
+ *   受け取り、storage内のmerged historyとは分けてcoverageを記録する。
+ * - 連番性は仮定しない。新しい順に得られたwindowの最古IDがactive anchor以下なら、
+ *   「少なくともanchorを跨ぐ範囲を今回fetchできた」と判断する。
+ * - windowがanchorまで届かない、または履歴が空の場合はactiveAnchorComplete=falseとして
+ *   ledgerのverified/debit authorityをfail-closedへ倒す。
+ *
+ * @function recordPrintHistoryFetchCoverage
+ * @param {string} host - 対象ホスト名。
+ * @param {Array<Object>} historyWindow - retention適用前のparsed print history。
+ * @returns {{recorded:boolean,activeAnchorComplete:boolean|null,oldestPrintJobId:number|null,newestPrintJobId:number|null,anchorSinceJobIds:number[]}} 記録結果。
+ */
+export function recordPrintHistoryFetchCoverage(host, historyWindow) {
+  if (!host) {
+    return {
+      recorded: false,
+      activeAnchorComplete: null,
+      oldestPrintJobId: null,
+      newestPrintJobId: null,
+      anchorSinceJobIds: []
+    };
+  }
+  ensureMachineData(host);
+  const printStore = monitorData.machines[host].printStore;
+  const ids = (Array.isArray(historyWindow) ? historyWindow : [])
+    .map((job) => Number(job?.id))
+    .filter(Number.isFinite);
+  const oldestPrintJobId = ids.length > 0 ? Math.min(...ids) : null;
+  const newestPrintJobId = ids.length > 0 ? Math.max(...ids) : null;
+  const anchorSinceJobIds = _collectActiveLedgerAnchorSinceJobIds(host);
+  const activeAnchorComplete = anchorSinceJobIds.length === 0
+    ? true
+    : (
+      oldestPrintJobId !== null &&
+      anchorSinceJobIds.every((sinceJobId) => oldestPrintJobId <= sinceJobId)
+    );
+  printStore.historyCoverage = {
+    ...(printStore.historyCoverage && typeof printStore.historyCoverage === "object" ? printStore.historyCoverage : {}),
+    activeAnchorComplete: printStore.historyAuthorityIncomplete === true ? false : activeAnchorComplete,
+    source: "print-history-fetch",
+    observedAt: getCurrentTimestamp(),
+    newestPrintJobId,
+    oldestPrintJobId,
+    anchorSinceJobIds,
+    coverageProof: "fetch-window-crosses-active-anchor"
+  };
+  return {
+    recorded: true,
+    activeAnchorComplete: printStore.historyCoverage.activeAnchorComplete,
+    oldestPrintJobId,
+    newestPrintJobId,
+    anchorSinceJobIds
   };
 }
 
@@ -1929,7 +2027,7 @@ export function applyPrintHistoryRetention(history, settings = monitorData.appSe
   }
   if (options.host) {
     const machine = monitorData.machines?.[options.host];
-    _markExplicitPrintHistoryRetentionCoverage(machine?.printStore, list.length, retained.length, limit);
+    _markExplicitPrintHistoryRetentionCoverage(machine?.printStore, list.length, retained.length, limit, options.host);
   }
   return retained;
 }
@@ -1959,7 +2057,7 @@ export function applyConfiguredPrintHistoryRetentionToAllMachines() {
     if (!Array.isArray(history) || history.length <= limit) continue;
     const retained = applyPrintHistoryRetention(history, monitorData.appSettings, { host });
     machine.printStore.history = retained;
-    _markExplicitPrintHistoryRetentionCoverage(machine.printStore, history.length, retained.length, limit);
+    _markExplicitPrintHistoryRetentionCoverage(machine.printStore, history.length, retained.length, limit, host);
     machine.printStore._historyRev = (Number(machine.printStore._historyRev) || 0) + 1;
     changedHosts.push(host);
     removedJobs += history.length - retained.length;
@@ -3801,7 +3899,7 @@ export function savePrintHistory(history, hostname) {
   const ps = monitorData.machines[host].printStore;
   const sourceLength = Array.isArray(history) ? history.length : 0;
   ps.history = applyPrintHistoryRetention(history, monitorData.appSettings, { host });
-  _markExplicitPrintHistoryRetentionCoverage(ps, sourceLength, ps.history.length, resolvePrintHistoryRetentionLimit(monitorData.appSettings));
+  _markExplicitPrintHistoryRetentionCoverage(ps, sourceLength, ps.history.length, resolvePrintHistoryRetentionLimit(monitorData.appSettings), host);
   // ★ 監査§6: 履歴 revision を単調インクリメント。relay delta の変更検出署名は
   //   O(1) の軽量サンプル（末尾ジョブ＋現在ジョブ）で、履歴中間の filamentInfo 編集・
   //   分割 upsert・reconcile 等（件数・末尾不変）を取りこぼしうる。履歴を実際に書き換える

@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1653 (PR #440)
+ * @version 1.390.1657 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 16:45:11
+ * @lastModified 2026-09-02 17:44:30
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -34,6 +34,8 @@ import {
   stableStringifyPrinterCoreV3Value,
 } from "../3dp_lib/printer_core/dashboard_data_schema_v3.js";
 import {
+  K2_MATERIAL_USED_CSV_PARSER_VERSION,
+  K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE,
   parseK2MaterialUsedSourceCsv,
   resolveK2MaterialUsedSourceCsv,
 } from "../3dp_lib/printer_core/dashboard_material_used_csv_parser.js";
@@ -822,6 +824,66 @@ function resolveSegmentCompletionMaterialUsedCsv(segments) {
 }
 
 /**
+ * completionEvidenceとJobMaterialSegment使用量の整合性を検査する。
+ *
+ * 【詳細説明】
+ * - completionEvidenceはprint history retention後のraw CSV代替証跡として使えるが、
+ *   parser version/source ordering profileが古い、またはCSV各partとsegment使用量が
+ *   ずれる場合はfixture readyにしてはいけない。
+ * - CSVの順序はprint-start snapshotの`order`を権威とし、同じsource/orderのsegmentへ照合する。
+ *
+ * @private
+ * @function validateSegmentCompletionMaterialUsedEvidence
+ * @param {Object[]} segments - JobMaterialSegment配列。
+ * @param {Object[]} snapshots - print-start snapshot配列。
+ * @param {Object} parsedMaterialUsed - parseK2MaterialUsedSourceCsvの戻り値。
+ * @returns {string[]} readinessを落とすべき理由配列。
+ */
+function validateSegmentCompletionMaterialUsedEvidence(segments, snapshots, parsedMaterialUsed) {
+  const reasons = [];
+  const sourceSegments = Array.isArray(segments) ? segments : [];
+  const sourceSnapshots = Array.isArray(snapshots) ? snapshots : [];
+  for (const segment of sourceSegments) {
+    const evidence = segment?.evidence?.completionEvidence;
+    if (!evidence || typeof evidence !== "object" || !toText(evidence.rawMaterialUsed)) continue;
+    if (toText(evidence.parserVersion) !== K2_MATERIAL_USED_CSV_PARSER_VERSION) {
+      reasons.push("completion-evidence-parser-version-mismatch");
+    }
+    if (toText(evidence.sourceOrderingProfile) !== K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE) {
+      reasons.push("completion-evidence-source-ordering-profile-mismatch");
+    }
+    const sourceCount = toFiniteNumberOrNull(evidence.sourceCount);
+    if (sourceCount !== null && sourceCount !== sourceSnapshots.length) {
+      reasons.push("completion-evidence-source-count-mismatch");
+    }
+    const partCount = toFiniteNumberOrNull(evidence.partCount);
+    if (partCount !== null && Array.isArray(parsedMaterialUsed?.parts) && partCount !== parsedMaterialUsed.parts.length) {
+      reasons.push("completion-evidence-part-count-mismatch");
+    }
+  }
+  if (!parsedMaterialUsed?.rawMaterialUsed || parsedMaterialUsed.reasons?.length > 0) {
+    return [...new Set(reasons)];
+  }
+  const orderedSnapshots = [...sourceSnapshots].sort((a, b) => resolveSourceOrder(a) - resolveSourceOrder(b));
+  for (let index = 0; index < orderedSnapshots.length; index += 1) {
+    const expectedUsed = toFiniteNumberOrNull(parsedMaterialUsed.usedLengthMm?.[index]);
+    if (expectedUsed === null) continue;
+    const snapshot = orderedSnapshots[index];
+    const segment = sourceSegments.find((candidate) => (
+      resolveBindingMaterialSourceId(candidate) === resolveBindingMaterialSourceId(snapshot) &&
+      resolveSourceOrder(candidate) === resolveSourceOrder(snapshot) &&
+      hasMatchingPrintStartSnapshotForSegment(candidate, sourceSnapshots)
+    ));
+    const observedUsed = toFiniteNumberOrNull(segment?.usedLengthMm);
+    if (!segment || observedUsed === null) continue;
+    if (Math.abs(observedUsed - expectedUsed) > 0.000001) {
+      reasons.push("raw-material-used-segment-value-mismatch");
+    }
+  }
+  return [...new Set(reasons)];
+}
+
+/**
  * print binding evidenceを同一print result set単位へ集約する。
  *
  * @private
@@ -885,6 +947,7 @@ function createPrintBindingCandidateJobs(snapshots, segments, deviceId, historie
       const rawMaterialUsedParserReasons = [
         ...parsedMaterialUsed.reasons,
         ...segmentCompletionEvidence.reasons,
+        ...validateSegmentCompletionMaterialUsedEvidence(group.segments, group.snapshots, parsedMaterialUsed),
       ];
       const observedUsedSegments = group.segments.filter((segment) => (
         toText(segment.usageState) === "observed-used" &&
