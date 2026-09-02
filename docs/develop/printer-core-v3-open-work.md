@@ -76,7 +76,8 @@ storage restore・同一プロセス内のdisconnect/reconnect後は新しい履
 `sinceJobId:0` はrecent history fetchだけでは被覆済みとしない。`boundaryStatus:"unknown"`なら
 アンカー残量を維持して過去減算を行わず、`known`として扱う場合でも総履歴完全性のpositive proofが
 必要になる。復元された `totalLifetimeComplete:true` は将来のtrusted issuer proofが無い限り
-未証明へ降格する。
+未証明へ降格する。このproofはJSONの`trusted:true`等ではなく、module-owned registry membership
+で検証できるobjectだけをauthorityとして扱う。
 履歴フィラメントの手動編集は、総履歴完全性がpositive proofで示されない場合は残量再計算を
 安全側で保留し、ユーザーへ警告表示する。completeness scanは対象spoolをmount interval・
 legacy current mount・明示履歴帰属で参照するhostへ限定する。通常のrecent history fetchだけでは

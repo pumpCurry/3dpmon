@@ -16,9 +16,9 @@
  * - {@link resolveK2MaterialUsedCompletionEvidenceCsv}：履歴rawとsegment完了rawを同じ規則で照合
  * - {@link parseK2MaterialUsedSourceCsv}：K2 materialUsed CSVをsource別使用量へ変換
  *
- * @version 1.390.1666 (PR #440)
+ * @version 1.390.1667 (PR #440)
  * @since   1.390.1632 (PR #440)
- * @lastModified 2026-09-02 19:20:31
+ * @lastModified 2026-09-02 19:33:18
  * -----------------------------------------------------------
  * @todo
  * - none

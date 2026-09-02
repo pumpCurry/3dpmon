@@ -38,6 +38,7 @@ const { setCurrentSpoolId, registerRebaselineHostUsage, finalizeFilamentUsage } 
 
 let rebaselineSpy;
 function reset() {
+  ledger.clearTrustedTotalLifetimeCoverageProofsForTest();
   mockMonitorData.machines = {};
   mockMonitorData.filamentSpools = [];
   mockMonitorData.usageHistory = [];
@@ -64,6 +65,7 @@ function setupEmptyStartPaused({ usedAtSwap = 2000 } = {}) {
       historyCoverage: {
         activeAnchorComplete: true,
         totalLifetimeComplete: true,
+        totalLifetimeProof: ledger.createTrustedTotalLifetimeCoverageProofForTest({ host: 'h' }),
         source: 'test-complete-history',
         oldestPrintJobId: 100,
         newestPrintJobId: 200,
@@ -144,6 +146,7 @@ describe('対照: 残量ありの genuine split は従来どおり（回帰防�
         historyCoverage: {
         activeAnchorComplete: true,
         totalLifetimeComplete: true,
+        totalLifetimeProof: ledger.createTrustedTotalLifetimeCoverageProofForTest({ host: 'h' }),
         source: 'test-complete-history',
         oldestPrintJobId: 100,
         newestPrintJobId: 200,

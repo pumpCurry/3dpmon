@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1663 (PR #440)
+ * @version 1.390.1667 (PR #440)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-09-02 18:52:20
+ * @lastModified 2026-09-02 19:43:12
  *
  * @vitest-environment jsdom
  */
@@ -866,6 +866,92 @@ describe("Printer Core v3 identity dry-run", () => {
       sourceProtocol: "retGcodeFileInfo2",
       totalNum: 1,
     });
+  });
+
+  it("K2 Moonraker履歴fallbackは旧connectionGeneration応答を現在接続へ採用しない", async () => {
+    vi.useFakeTimers();
+    let resolveHistoryResponse;
+    window.fetch = vi.fn((url) => {
+      const text = String(url || "");
+      if (text.includes("/server/history/list")) {
+        return new Promise((resolve) => {
+          resolveHistoryResponse = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, json: vi.fn() });
+    });
+
+    try {
+      mod.connectWithType("203.0.113.53:9999", "creality-k2");
+      const firstWs = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      firstWs.onopen();
+      await vi.advanceTimersByTimeAsync(1000 + 6000 * 3);
+      expect(window.fetch).toHaveBeenCalledWith(
+        "http://203.0.113.53:4408/server/history/list",
+        expect.objectContaining({ cache: "no-store" })
+      );
+
+      mod.connectWs("203.0.113.53:9999");
+      resolveHistoryResponse({
+        ok: true,
+        json: vi.fn(async () => ({
+          result: {
+            jobs: [
+              { filename: "stale-generation.gcode", start_time: 1784100000 },
+            ],
+          },
+        })),
+      });
+      await flushAsyncProbe();
+
+      expect(printManagerMock.updateHistoryList).not.toHaveBeenCalled();
+      expect(mod.getPrinterCoreV3ConnectionGeneration("203.0.113.53")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("K2 Moonraker履歴fallbackは切断後の同一connectionGeneration応答を採用しない", async () => {
+    vi.useFakeTimers();
+    let resolveHistoryResponse;
+    window.fetch = vi.fn((url) => {
+      const text = String(url || "");
+      if (text.includes("/server/history/list")) {
+        return new Promise((resolve) => {
+          resolveHistoryResponse = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, json: vi.fn() });
+    });
+
+    try {
+      mod.connectWithType("203.0.113.54:9999", "creality-k2");
+      const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      ws.onopen();
+      await vi.advanceTimersByTimeAsync(1000 + 6000 * 3);
+      expect(window.fetch).toHaveBeenCalledWith(
+        "http://203.0.113.54:4408/server/history/list",
+        expect.objectContaining({ cache: "no-store" })
+      );
+
+      ws.onclose();
+      resolveHistoryResponse({
+        ok: true,
+        json: vi.fn(async () => ({
+          result: {
+            jobs: [
+              { filename: "disconnected-generation.gcode", start_time: 1784100060 },
+            ],
+          },
+        })),
+      });
+      await flushAsyncProbe();
+
+      expect(printManagerMock.updateHistoryList).not.toHaveBeenCalled();
+      expect(mod.getPrinterCoreV3ConnectionGeneration("203.0.113.54")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("F012でK2確定後はhostnameがK2 prefixでない疎なdeltaでもK2 shadowを維持する", () => {

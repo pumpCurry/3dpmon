@@ -178,7 +178,9 @@ not treated as covered by recent-history fetch alone: `unknown` intervals keep
 their anchor value without retroactive debit, while `known` intervals need
 positive total-lifetime authority before historical jobs can be debited.
 Restored `totalLifetimeComplete:true` is demoted unless a future trusted issuer
-proof is present. Manual history filament edits keep the cached remaining length
+proof is present. That proof is trusted only when a module-owned registry
+recognizes the proof object; saved/imported JSON fields such as `trusted:true`
+are not authority. Manual history filament edits keep the cached remaining length
 and show a warning when total-history completeness has no positive authority;
 their completeness scan is limited to hosts that actually reference the target
 spool. Durable completionEvidence fallback also requires sourceCount/partCount

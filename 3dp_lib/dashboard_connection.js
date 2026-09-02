@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1663 (PR #440)
+ * @version 1.390.1667 (PR #440)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-09-02 18:52:20
+ * @lastModified 2026-09-02 19:43:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -3819,6 +3819,50 @@ function _getK2MoonrakerFallbackBaseUrl(host) {
 }
 
 /**
+ * K2補助HTTP fallback開始時の接続scopeを取得する。
+ *
+ * 【詳細説明】
+ * - `server/history/list` や `server/files/list` はWebSocketとは別HTTP requestで返るため、
+ *   再接続後に古い応答が戻ると現在接続の履歴・ファイル一覧へ誤って混入し得る。
+ * - `/info` probeと同じstate object / connectionGeneration / dest境界を再利用し、
+ *   request開始時点で既に現在接続ではない場合はfallback自体を開始しない。
+ *
+ * @private
+ * @function _captureK2MoonrakerFallbackConnectionScope
+ * @param {string} host - hostname または接続キー
+ * @returns {{state:ConnectionState|null,connectionGeneration:number,connectionDest:string,connectionHost:string}|null} 現在接続scope、または不採用。
+ */
+function _captureK2MoonrakerFallbackConnectionScope(host) {
+  const st = connectionMap[host];
+  const target = _findConnectionTarget(st?.dest || host) || _findConnectionTarget(host);
+  const scope = _captureHttpInfoProbeConnectionScope(st?.dest || host, host, target);
+  return _isK2MoonrakerFallbackConnectionScopeCurrent(scope) ? scope : null;
+}
+
+/**
+ * K2補助HTTP fallbackのscopeが現在のOPEN接続として採用可能か判定する。
+ *
+ * 【詳細説明】
+ * - generation一致だけでは、同じ接続世代がcloseした直後に遅延HTTP応答が戻った場合を
+ *   rejectできない。
+ * - 履歴coverageやファイル一覧UIを現在値として扱うには、同一scopeに加えて
+ *   `state === "connected"` かつ対応WebSocketがOPENであることを必須にする。
+ *
+ * @private
+ * @function _isK2MoonrakerFallbackConnectionScopeCurrent
+ * @param {object|null|undefined} scope - {@link _captureK2MoonrakerFallbackConnectionScope} の戻り値候補。
+ * @returns {boolean} fallback応答を現在接続由来として採用できる場合true。
+ */
+function _isK2MoonrakerFallbackConnectionScopeCurrent(scope) {
+  return Boolean(
+    _isHttpInfoProbeConnectionScopeCurrent(scope) &&
+    scope?.state?.state === "connected" &&
+    scope.state.ws &&
+    scope.state.ws.readyState === WebSocket.OPEN
+  );
+}
+
+/**
  * timeout付きでJSON endpointを取得する。
  *
  * 【詳細説明】
@@ -3872,7 +3916,15 @@ async function _fetchK2MoonrakerHistoryFallback(host) {
   if (!baseUrl) {
     return false;
   }
+  const scope = _captureK2MoonrakerFallbackConnectionScope(host);
+  if (!scope) {
+    return false;
+  }
   const body = await _fetchJsonWithTimeout(`${baseUrl}/server/history/list`);
+  if (!_isK2MoonrakerFallbackConnectionScopeCurrent(scope)) {
+    pushLog("K2履歴fallbackの古い応答を破棄しました（接続scopeが失効済み）", "warn", false, host);
+    return false;
+  }
   const jobs = body?.result?.jobs;
   if (!Array.isArray(jobs)) {
     return false;
@@ -3906,7 +3958,15 @@ async function _fetchK2MoonrakerFileListFallback(host) {
   if (!baseUrl) {
     return false;
   }
+  const scope = _captureK2MoonrakerFallbackConnectionScope(host);
+  if (!scope) {
+    return false;
+  }
   const body = await _fetchJsonWithTimeout(`${baseUrl}/server/files/list?root=gcodes`);
+  if (!_isK2MoonrakerFallbackConnectionScopeCurrent(scope)) {
+    pushLog("K2ファイル一覧fallbackの古い応答を破棄しました（接続scopeが失効済み）", "warn", false, host);
+    return false;
+  }
   const files = body?.result;
   if (!Array.isArray(files)) {
     return false;

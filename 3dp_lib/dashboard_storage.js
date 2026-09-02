@@ -31,9 +31,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1666 (PR #440)
+ * @version 1.390.1667 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 19:20:31
+ * @lastModified 2026-09-02 19:33:18
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -49,6 +49,7 @@ import {
   attributedUsed,
   getSpoolIntervals,
   initLedgerAnchors,
+  isTrustedTotalLifetimeCoverageProof,
   quarantineInvalidMountEvents
 } from "./dashboard_filament_ledger.js";
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
@@ -3035,8 +3036,8 @@ function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
  * 【詳細説明】
  * - 現在のproductionには総履歴完全性を発行する正式issuerがまだ無いため、通常の復元値は
  *   安全側で未証明へ戻す。
- * - 将来issuerを追加する場合は、ここでproof objectのscope/issuer/digestを検証してから
- *   trueの持ち越しを許可する。
+ * - 将来issuerを追加する場合も、ledger moduleのWeakSet registryに登録されたproof objectだけを
+ *   trueの持ち越し許可に使う。保存・importされたplain JSONはobject identityを失うため信頼しない。
  *
  * @private
  * @function _isTrustedRestoredTotalLifetimeCoverage
@@ -3044,14 +3045,7 @@ function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
  * @returns {boolean} 復元後もtotalLifetimeComplete:trueを信頼してよい場合true。
  */
 function _isTrustedRestoredTotalLifetimeCoverage(coverage) {
-  const proof = coverage?.totalLifetimeProof;
-  return Boolean(
-    proof &&
-    typeof proof === "object" &&
-    proof.issuer === "3dpmon-total-lifetime-coverage:v1" &&
-    proof.scope === "spool-lifetime" &&
-    proof.trusted === true
-  );
+  return isTrustedTotalLifetimeCoverageProof(coverage?.totalLifetimeProof);
 }
 
 /**

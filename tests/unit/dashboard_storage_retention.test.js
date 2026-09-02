@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1664 (PR #440)
+ * @version 1.390.1667 (PR #440)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 19:18:30
+ * @lastModified 2026-09-02 19:33:18
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -95,7 +95,8 @@ vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
   initLedgerAnchors: vi.fn(),
   quarantineInvalidMountEvents: vi.fn(() => 0),
   getSpoolIntervals: vi.fn(() => mocks.protectedIntervals),
-  attributedUsed: mocks.attributedUsed
+  attributedUsed: mocks.attributedUsed,
+  isTrustedTotalLifetimeCoverageProof: vi.fn(() => false)
 }));
 vi.mock("../../3dp_lib/dashboard_target_identity.js", () => ({ parseDest: vi.fn(), isIpLiteral: vi.fn(), extractHost: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_storage_idb.js", () => ({

@@ -41,14 +41,10 @@ const {
   recordFilamentEvent,
   getOpenFilamentEvent,
   resolveFilamentEvent,
-  runoutGateHeld
+  runoutGateHeld,
+  createTrustedTotalLifetimeCoverageProofForTest,
+  clearTrustedTotalLifetimeCoverageProofsForTest
 } = await import("../../3dp_lib/dashboard_filament_ledger.js");
-
-const TRUSTED_TOTAL_LIFETIME_PROOF = Object.freeze({
-  issuer: "3dpmon-total-lifetime-coverage:v1",
-  scope: "spool-lifetime",
-  trusted: true
-});
 
 /**
  * ヘルパー: printStore.history エントリ（parse 後スキーマ）を生成。
@@ -79,7 +75,7 @@ function setHistory(host, entries, coverageOverrides = {}) {
       historyCoverage: {
         activeAnchorComplete: true,
         totalLifetimeComplete: true,
-        totalLifetimeProof: TRUSTED_TOTAL_LIFETIME_PROOF,
+        totalLifetimeProof: createTrustedTotalLifetimeCoverageProofForTest({ host }),
         source: "test-complete-history",
         oldestPrintJobId: ids.length > 0 ? Math.min(...ids) : 0,
         newestPrintJobId: ids.length > 0 ? Math.max(...ids) : 0,
@@ -97,6 +93,7 @@ function addSpool(sp) {
 }
 
 function reset() {
+  clearTrustedTotalLifetimeCoverageProofsForTest();
   mockMonitorData.machines = {};
   mockMonitorData.filamentSpools = [];
   mockMonitorData.usageHistory = [];
@@ -1101,7 +1098,7 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
         historyCoverage: {
           activeAnchorComplete: true,
           totalLifetimeComplete: true,
-          totalLifetimeProof: TRUSTED_TOTAL_LIFETIME_PROOF,
+          totalLifetimeProof: createTrustedTotalLifetimeCoverageProofForTest({ host: "h" }),
           source: "test-complete-history"
         },
         history: [
@@ -1138,7 +1135,7 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
         historyCoverage: {
           activeAnchorComplete: true,
           totalLifetimeComplete: true,
-          totalLifetimeProof: TRUSTED_TOTAL_LIFETIME_PROOF,
+          totalLifetimeProof: createTrustedTotalLifetimeCoverageProofForTest({ host: "K2Pro" }),
           source: "test-complete-history"
         },
         history: [

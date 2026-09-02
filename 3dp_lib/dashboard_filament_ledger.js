@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1666 (PR #440)
+ * @version 1.390.1667 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-09-02 19:20:31
+ * @lastModified 2026-09-02 19:33:18
  * -----------------------------------------------------------
  */
 
@@ -36,6 +36,18 @@
 
 import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { wallNowMs, randomEventId } from "./dashboard_time.js";
+
+/**
+ * module-owned total-lifetime proofのprocess-local registry。
+ *
+ * 【詳細説明】
+ * - `totalLifetimeProof.trusted === true` のような保存可能JSONだけではcallerがauthorityを偽造できるため、
+ *   registryに登録済みの同一object identityだけをtrusted proofとして扱う。
+ * - production issuerはまだ未実装であり、現時点でこのregistryへ登録する公開production APIは用意しない。
+ *
+ * @constant {WeakSet<object>}
+ */
+const TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS = new WeakSet();
 
 /**
  * 値を [min, max] の範囲にクランプする。
@@ -119,6 +131,65 @@ function _isHistoryAuthorityIncomplete(host) {
 }
 
 /**
+ * 総履歴complete proofがmodule-owned issuerから発行されたものか判定する。
+ *
+ * 【詳細説明】
+ * - JSON shape一致だけでは復元・import・caller supplied objectをtrusted扱いできないため、
+ *   WeakSet registry membershipを必須にする。
+ * - 将来production issuerを追加する場合も、この関数を唯一の検証境界として使う。
+ *
+ * @function isTrustedTotalLifetimeCoverageProof
+ * @param {*} proof - 総履歴complete proof候補。
+ * @returns {boolean} module-owned registryに登録されたproofならtrue。
+ */
+export function isTrustedTotalLifetimeCoverageProof(proof) {
+  return Boolean(proof && typeof proof === "object" && TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS.has(proof));
+}
+
+/**
+ * unit test専用に総履歴complete proofを発行する。
+ *
+ * 【詳細説明】
+ * - production issuerはGate未通過のため提供しない。
+ * - Vitest環境以外では常にblocked proofを返し、外部callerがこの関数経由でauthorityをmintできないようにする。
+ *
+ * @function createTrustedTotalLifetimeCoverageProofForTest
+ * @param {Object=} input - テスト用proofに含める追加情報。
+ * @returns {Object} テスト環境ではWeakSet登録済みproof、それ以外ではblocked proof。
+ */
+export function createTrustedTotalLifetimeCoverageProofForTest(input = {}) {
+  const isTestRuntime = globalThis?.process?.env?.NODE_ENV === "test" ||
+    globalThis?.process?.env?.VITEST === "true";
+  const proof = Object.freeze({
+    ...input,
+    issuer: "3dpmon-total-lifetime-coverage:v1",
+    scope: "spool-lifetime",
+    trusted: Boolean(isTestRuntime),
+    authority: isTestRuntime
+      ? "module-owned-total-lifetime-coverage-test-registry"
+      : "total-lifetime-coverage-production-issuer-unavailable"
+  });
+  if (isTestRuntime) {
+    TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS.add(proof);
+  }
+  return proof;
+}
+
+/**
+ * unit test用に総履歴complete proof registryを初期化する。
+ *
+ * 【詳細説明】
+ * - WeakSetはclear()を持たないため、新しいtest processでは自然に空になる。
+ * - 既存API形状との対称性を保つため、no-opの明示フックとして提供する。
+ *
+ * @function clearTrustedTotalLifetimeCoverageProofsForTest
+ * @returns {void}
+ */
+export function clearTrustedTotalLifetimeCoverageProofsForTest() {
+  // WeakSetは列挙・clearできないため、テスト間では新規proofを都度発行してobject identityを分離する。
+}
+
+/**
  * 総履歴complete proofを台帳authorityとして信頼してよいか判定する。
  *
  * 【詳細説明】
@@ -135,11 +206,7 @@ function _isTrustedTotalLifetimeCoverage(coverage) {
   const proof = coverage?.totalLifetimeProof;
   return Boolean(
     coverage?.totalLifetimeComplete === true &&
-    proof &&
-    typeof proof === "object" &&
-    proof.issuer === "3dpmon-total-lifetime-coverage:v1" &&
-    proof.scope === "spool-lifetime" &&
-    proof.trusted === true
+    isTrustedTotalLifetimeCoverageProof(proof)
   );
 }
 

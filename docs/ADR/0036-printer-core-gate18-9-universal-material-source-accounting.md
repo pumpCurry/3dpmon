@@ -632,6 +632,9 @@ Gate 18.9 must cover:
   authority before old jobs can be debited. Restored
   `totalLifetimeComplete:true` is demoted unless a future trusted issuer proof
   is present, because ordinary persisted booleans are not lifetime authority.
+  The trusted proof must be validated by module-owned registry membership, not
+  by JSON fields such as `trusted:true`; plain saved/imported proof objects are
+  diagnostic only.
   Manual history filament edits must visibly warn the operator and keep the
   cached remaining length when total-history completeness has no positive
   authority. Completeness checks for manual recompute are scoped to hosts that
