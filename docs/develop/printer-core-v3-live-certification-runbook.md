@@ -158,6 +158,13 @@ segment's `usedLengthMm` in print-start binding order. If the certification
 panel export carries a concrete session ID, that ID must match the candidate
 print-start/session evidence before the job can be marked ready for fixture
 review.
+The analyzer exposes these decisions as `manifest.deviceCorrelation` and
+`manifest.sessionCorrelation`. A `matched` result means the target device or
+session was present and consistent. A `not-provided` result is acceptable only
+for rehearsal artifacts that intentionally omit that concrete identifier. A
+`mismatch` result keeps official fixture review blocked because the export could
+otherwise bind one printer's panel evidence to another printer's history row or
+bind a stale session to a fresh print.
 When both the target machine history row and durable segment completion evidence
 contain raw K2 `materialUsed` CSV for the same job, the history row remains the
 canonical raw source, but the durable segment raw must match it exactly; a
