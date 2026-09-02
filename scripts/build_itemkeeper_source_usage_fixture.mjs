@@ -20,7 +20,7 @@
  *
  * @version 1.390.1643 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 15:11:47
+ * @lastModified 2026-09-02 15:19:24
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2 registry entry追加時にreviewed registry entry skeleton出力を追加する
@@ -563,7 +563,9 @@ function createIdentityReviewBlockers({ device, certificationPayload, options, s
   if (toText(options.firmwareVersion) && device.firmwareVersion && options.firmwareVersion !== device.firmwareVersion) {
     blockers.push("cli-firmware-version-override-conflicts-with-export");
   }
-  const certificationSessionId = toText(certificationPrinter.sessionId);
+  const certificationSessionId = isConcreteIdentityText(certificationPrinter.sessionId)
+    ? toText(certificationPrinter.sessionId)
+    : "";
   const sessionIds = Array.isArray(sessionEvidence?.sessionIds) ? sessionEvidence.sessionIds : [];
   if (certificationSessionId && sessionIds.length <= 0) {
     blockers.push("certification-session-id-missing");

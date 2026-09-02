@@ -16,7 +16,7 @@
  *
  * @version 1.390.1643 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 15:11:47
+ * @lastModified 2026-09-02 15:19:24
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -320,6 +320,33 @@ describe("build_itemkeeper_source_usage_fixture", () => {
     expect(result.status).toBe("fixture-review-not-ready");
     expect(result.fixtureEvidence.print.sessionIds).toEqual(["session:k2-a", "session:old"]);
     expect(result.reviewBlockers).toContain("candidate-session-id-ambiguous");
+  });
+
+  it("redacted certification sessionは実sessionとの照合対象にしない", () => {
+    const payload = createExportPayload();
+    for (const snapshot of payload.materialAccountingPrintBindingStore.printStartSnapshots) {
+      snapshot.issuanceEvidence = { sessionId: "session:k2-a" };
+    }
+
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          printer: {
+            model: "F012",
+            firmwareVersion: "1.1.6.7",
+            sessionId: "<ID_001>",
+          },
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-accepted");
+    expect(result.fixtureEvidence.print.sessionId).toBe("session:k2-a");
+    expect(result.reviewBlockers).not.toContain("certification-session-id-mismatch");
   });
 
   it("CLIからartifact一式を書き出す", async () => {
