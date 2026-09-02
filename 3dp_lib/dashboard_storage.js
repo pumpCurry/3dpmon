@@ -29,9 +29,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1645 (PR #441)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 07:23:40
+ * @lastModified 2026-09-02 14:38:14
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -43,7 +43,12 @@ import { monitorData, ensureMachineData, PLACEHOLDER_HOSTNAME } from "./dashboar
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
-import { initLedgerAnchors, quarantineInvalidMountEvents } from "./dashboard_filament_ledger.js";
+import {
+  attributedUsed,
+  getSpoolIntervals,
+  initLedgerAnchors,
+  quarantineInvalidMountEvents
+} from "./dashboard_filament_ledger.js";
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashboard_material_source_observation.js";
 import { normalizeStoredMaterialAccountingMigrationJournal } from "./printer_core/dashboard_material_accounting_migration_journal.js";
@@ -1364,6 +1369,11 @@ export function importHistoryOnly(data) {
       const tb = Number(b.starttime || b.id || 0);
       return tb - ta;
     });
+    const retained = applyPrintHistoryRetention(existing.printStore.history, monitorData.appSettings, { host });
+    if (retained.length !== existing.printStore.history.length) {
+      existing.printStore.history = retained;
+      existing.printStore._historyRev = (Number(existing.printStore._historyRev) || 0) + 1;
+    }
   }
 
   // ── フィラメント使用実績 (usageHistory): 不整合チェック付きマージ ──
@@ -1586,11 +1596,11 @@ function _discoverHostKeysInLocalStorage() {
   return hosts;
 }
 /**
- * 印刷履歴の最大保持件数
+ * 印刷履歴のレガシー最大保持件数
  *
- * localStorage に保存する印刷履歴配列の上限を定める。
- * これまでは 250 件までの保持であったが、過去の履歴を
- * より多く参照できるよう 1500 件まで保存できるようにする。
+ * 旧バージョンで固定上限として使っていた値。現在の既定動作は
+ * `monitorData.appSettings.printHistoryMaxEntries === 0` による無制限保持で、
+ * この値はユーザーが明示的に自動削除をONにする際の初期候補として扱う。
  *
  * @constant {number}
  */
@@ -1599,12 +1609,201 @@ export const MAX_PRINT_HISTORY = 1500;
 /**
  * フィラメント使用履歴の最大保持件数
  *
- * 1 印刷で最大 2 リールまで使用する想定のため、
- * 4500 件を上限として保持する。
+ * 旧バージョンで固定上限として使っていた値。現在の既定動作は
+ * `monitorData.appSettings.usageHistoryMaxEntries === 0` による無制限保持で、
+ * 明示的に上限を指定する場合の初期候補として扱う。
  *
  * @constant {number}
  */
 export const MAX_USAGE_HISTORY = 4500;
+
+/**
+ * IndexedDB利用時にlocalStorageへ書き出す回復用印刷履歴バックアップ件数。
+ *
+ * 【詳細説明】
+ * - IndexedDBが正本である場合、localStorageは緊急復元用の近傍snapshotに限定する。
+ * - 正本の無制限履歴はIndexedDB側に残し、localStorage quotaで保存全体が失敗することを避ける。
+ *
+ * @constant {number}
+ */
+const LOCAL_STORAGE_PRINT_HISTORY_BACKUP_LIMIT = MAX_PRINT_HISTORY;
+
+/**
+ * IndexedDB利用時にlocalStorageへ書き出す回復用使用履歴バックアップ件数。
+ *
+ * @constant {number}
+ */
+const LOCAL_STORAGE_USAGE_HISTORY_BACKUP_LIMIT = MAX_USAGE_HISTORY;
+
+/**
+ * 履歴保持件数設定を厳格な十進整数として正規化する。
+ *
+ * 【詳細説明】
+ * - boolean、配列、指数表記、16進表記など、JavaScriptの暗黙Number変換で別の意味になる値は拒否する。
+ * - 設定値は「履歴を削除する権限」なので、意図が明確な正の整数だけを採用する。
+ *
+ * @private
+ * @function _resolveRetentionLimitStrict
+ * @param {*} raw - appSettingsから読んだ未検証値。
+ * @returns {number} 0または1以上の安全な整数。0は無制限。
+ */
+function _resolveRetentionLimitStrict(raw) {
+  if (typeof raw === "number") {
+    return Number.isSafeInteger(raw) && raw > 0 ? raw : 0;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!/^[0-9]+$/.test(trimmed)) return 0;
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+  }
+  return 0;
+}
+
+/**
+ * 印刷履歴の自動削除上限を正規化する。
+ *
+ * 【詳細説明】
+ * - 0は「自動削除しない」を表す明示値として扱う。
+ * - 未設定、null、負数、不正値も安全側で0へ倒し、Electron版では容量由来の履歴欠落を起こさない。
+ * - 1以上の有限数だけを件数上限として採用し、小数は切り捨てる。
+ *
+ * @function resolvePrintHistoryRetentionLimit
+ * @param  {Object|null|undefined} settings - monitorData.appSettings相当の設定オブジェクト。
+ * @returns {number} 0または1以上の整数。0は無制限を示す。
+ */
+export function resolvePrintHistoryRetentionLimit(settings = monitorData.appSettings) {
+  return _resolveRetentionLimitStrict(settings?.printHistoryMaxEntries);
+}
+
+/**
+ * 指定ホストのprintStore.historyから削除してはいけない台帳根拠ジョブIDを収集する。
+ *
+ * 【詳細説明】
+ * - `deriveSpoolRemaining()` は装着区間の `host/sinceJobId/untilJobId` と
+ *   printStore.history の消費ジョブを使って残量を冪等に導出する。
+ * - 自動削除がこの根拠ジョブを落とすと、次回reconcileで残量が増えたように見えるため、
+ *   retention limitより優先して保持対象に加える。
+ *
+ * @private
+ * @function _collectLedgerProtectedPrintJobIds
+ * @param {string} host - 対象ホスト名。
+ * @param {Array<Object>} history - 新しい順に並ぶprintStore.history。
+ * @returns {Set<number>} 保護対象の数値job id集合。
+ */
+function _collectLedgerProtectedPrintJobIds(host, history) {
+  const protectedIds = new Set();
+  if (!host || !Array.isArray(history) || history.length === 0) return protectedIds;
+  const spools = Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [];
+  for (const spool of spools) {
+    const spoolId = spool?.id;
+    if (!spoolId) continue;
+    let intervals = [];
+    try {
+      intervals = getSpoolIntervals(spoolId) || [];
+    } catch {
+      intervals = [];
+    }
+    const activeIntervals = intervals.filter((interval) => interval && !interval.superseded && interval.host === host);
+    const openIntervals = activeIntervals.filter((interval) => interval.untilJobId == null);
+    if (activeIntervals.length === 0 || openIntervals.length >= 2) continue;
+    const interval = openIntervals[0] || activeIntervals[activeIntervals.length - 1];
+    if (!interval || interval.boundaryStatus === "unknown") continue;
+    const sinceJobId = Number(interval.sinceJobId) || 0;
+    const untilJobId = interval.untilJobId == null ? null : Number(interval.untilJobId);
+    for (const job of history) {
+      const jobId = Number(job?.id);
+      if (!Number.isFinite(jobId)) continue;
+      if (jobId <= sinceJobId) continue;
+      if (untilJobId != null && Number.isFinite(untilJobId) && jobId > untilJobId) continue;
+      const used = Number(attributedUsed(job, spoolId));
+      if (Number.isFinite(used) && used > 0) protectedIds.add(jobId);
+    }
+  }
+  return protectedIds;
+}
+
+/**
+ * 印刷履歴配列へ設定済みの自動削除上限を適用する。
+ *
+ * 【詳細説明】
+ * - 履歴配列は既存のprintmanager契約どおり「新しい順」に並んでいる前提で扱う。
+ * - 上限0の場合は配列をコピーして返すだけで、古い履歴を削除しない。
+ * - 上限1以上の場合は先頭側の新しい履歴だけを保持し、末尾側の古い履歴を削除する。
+ *
+ * @function applyPrintHistoryRetention
+ * @param  {Array<Object>} history - 新しい順に並んだ印刷履歴配列。
+ * @param  {Object|null|undefined} settings - monitorData.appSettings相当の設定オブジェクト。
+ * @param  {Object} [options={}] - retention補助オプション。
+ * @param  {string} [options.host] - 台帳保護ジョブを判定する対象ホスト名。
+ * @returns {Array<Object>} 保持設定を反映した新しい配列。
+ */
+export function applyPrintHistoryRetention(history, settings = monitorData.appSettings, options = {}) {
+  const list = Array.isArray(history) ? history : [];
+  const limit = resolvePrintHistoryRetentionLimit(settings);
+  if (limit <= 0) return list.slice();
+  const retained = list.slice(0, limit);
+  const seen = new Set(retained.map((job) => Number(job?.id)).filter(Number.isFinite));
+  const protectedIds = _collectLedgerProtectedPrintJobIds(options.host, list);
+  if (protectedIds.size === 0) return retained;
+  for (const job of list.slice(limit)) {
+    const jobId = Number(job?.id);
+    if (!Number.isFinite(jobId) || seen.has(jobId) || !protectedIds.has(jobId)) continue;
+    retained.push(job);
+    seen.add(jobId);
+  }
+  return retained;
+}
+
+/**
+ * 現在の保持設定を全ホストの保存済み印刷履歴へ即時適用する。
+ *
+ * 【詳細説明】
+ * - ストレージ設定UIで自動削除をON/OFFした直後、既存履歴にも同じ契約を反映するための
+ *   明示的なチョークポイント。
+ * - 上限0の場合は削除を行わず、結果だけを返す。
+ * - 1件以上の削除があったホストでは `_historyRev` を加算し、relay差分検出が履歴短縮を
+ *   見落とさないようにする。保存自体は呼び出し元が行う。
+ *
+ * @function applyConfiguredPrintHistoryRetentionToAllMachines
+ * @returns {{changedHosts:Array<string>, removedJobs:number, limit:number}} 適用結果。
+ */
+export function applyConfiguredPrintHistoryRetentionToAllMachines() {
+  const limit = resolvePrintHistoryRetentionLimit(monitorData.appSettings);
+  const changedHosts = [];
+  let removedJobs = 0;
+  if (limit <= 0) return { changedHosts, removedJobs, limit };
+
+  for (const [host, machine] of Object.entries(monitorData.machines || {})) {
+    if (host === PLACEHOLDER_HOSTNAME) continue;
+    const history = machine?.printStore?.history;
+    if (!Array.isArray(history) || history.length <= limit) continue;
+    const retained = applyPrintHistoryRetention(history, monitorData.appSettings, { host });
+    machine.printStore.history = retained;
+    machine.printStore._historyRev = (Number(machine.printStore._historyRev) || 0) + 1;
+    changedHosts.push(host);
+    removedJobs += history.length - retained.length;
+  }
+
+  return { changedHosts, removedJobs, limit };
+}
+
+/**
+ * フィラメント使用履歴の自動削除上限を正規化する。
+ *
+ * 【詳細説明】
+ * - 0は「自動削除しない」を表す。
+ * - 未設定、null、負数、不正値も0へ倒し、CFS/ItemKeeper連携で必要な過去履歴を
+ *   既定では失わない。
+ * - 1以上の有限数だけを件数上限として採用する。
+ *
+ * @function resolveUsageHistoryRetentionLimit
+ * @param  {Object|null|undefined} settings - monitorData.appSettings相当の設定オブジェクト。
+ * @returns {number} 0または1以上の整数。0は無制限を示す。
+ */
+export function resolveUsageHistoryRetentionLimit(settings = monitorData.appSettings) {
+  return _resolveRetentionLimitStrict(settings?.usageHistoryMaxEntries);
+}
 
 /**
  * フィラメント使用履歴配列が上限を超えた場合に古い記録を削除する。
@@ -1613,7 +1812,8 @@ export const MAX_USAGE_HISTORY = 4500;
  */
 export function trimUsageHistory() {
   const logs = monitorData.usageHistory;
-  if (logs.length <= MAX_USAGE_HISTORY) return;
+  const limit = resolveUsageHistoryRetentionLimit(monitorData.appSettings);
+  if (limit <= 0 || logs.length <= limit) return;
 
   // 各スプールの最新の startLength エントリ（装着記録）を保護
   // これが失われると autoCorrectCurrentSpool が残量を再計算できなくなる
@@ -1626,7 +1826,7 @@ export function trimUsageHistory() {
     }
   }
 
-  const cutoff = logs.length - MAX_USAGE_HISTORY;
+  const cutoff = logs.length - limit;
   const trimmed = logs.filter((_, i) => i >= cutoff || protectedIdx.has(i));
   // ★ レビュー指摘#8: トリム（先頭側の中間削除）でも rev を加算し変更検出を確実にする。
   if (trimmed.length !== logs.length) {
@@ -2339,18 +2539,134 @@ async function _commitMaterialAccountingSpoolMountStoreDurably(input = {}) {
 }
 
 /**
+ * localStorage回復バックアップ用に履歴配列を近傍snapshotへ制限する。
+ *
+ * 【詳細説明】
+ * - 正本がIndexedDBにある場合でも、障害時復元用にlocalStorageへ定期バックアップする。
+ * - ただし全履歴をlocalStorageへ書くとquotaで保存全体が失敗し得るため、バックアップだけを
+ *   既存の安全上限に制限し、切り詰めた事実をmetadataとして残す。
+ *
+ * @private
+ * @function _boundedRecoveryArray
+ * @param {Array<Object>} list - 保存候補の履歴配列。
+ * @param {number} limit - バックアップ上限件数。
+ * @param {"head"|"tail"} direction - headは先頭側、tailは末尾側を保持する。
+ * @returns {{items:Array<Object>, truncated:boolean,totalCount:number,limit:number}} 制限後の配列とmetadata。
+ */
+function _boundedRecoveryArray(list, limit, direction) {
+  const source = Array.isArray(list) ? list : [];
+  const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : source.length;
+  if (source.length <= safeLimit) {
+    return { items: source.slice(), truncated: false, totalCount: source.length, limit: safeLimit };
+  }
+  const items = direction === "tail" ? source.slice(-safeLimit) : source.slice(0, safeLimit);
+  return { items, truncated: true, totalCount: source.length, limit: safeLimit };
+}
+
+/**
+ * per-host localStorageへ保存するmachine snapshotを生成する。
+ *
+ * 【詳細説明】
+ * - runtimeDataは常に除外する。
+ * - IndexedDB利用時の回復バックアップではprintStore.historyだけを近傍snapshotへ制限し、
+ *   正本の無制限履歴はIndexedDBに任せる。
+ *
+ * @private
+ * @function _createLocalStorageMachineSnapshot
+ * @param {Object} machine - monitorData.machines配下のmachine。
+ * @param {Object} options - 保存オプション。
+ * @param {boolean} [options.boundedRecoveryBackup=false] - trueなら回復バックアップ上限を適用する。
+ * @returns {Object} JSON保存用machine snapshot。
+ */
+function _createLocalStorageMachineSnapshot(machine, options = {}) {
+  const { runtimeData: _omit, ...serializableMachine } = machine || {};
+  if (options.boundedRecoveryBackup && Array.isArray(serializableMachine.printStore?.history)) {
+    const bounded = _boundedRecoveryArray(
+      serializableMachine.printStore.history,
+      LOCAL_STORAGE_PRINT_HISTORY_BACKUP_LIMIT,
+      "head"
+    );
+    serializableMachine.printStore = {
+      ...serializableMachine.printStore,
+      history: bounded.items,
+      historyBackupTruncated: bounded.truncated,
+      historyBackupSourceLength: bounded.totalCount,
+      historyBackupLimit: bounded.limit
+    };
+  }
+  return serializableMachine;
+}
+
+/**
+ * localStorage回復バックアップ由来のmachine snapshotに履歴authority不完全フラグを付ける。
+ *
+ * 【詳細説明】
+ * - IndexedDBが正本の環境では、localStorage側の履歴はquota回避のためbounded backupになり得る。
+ * - そのbackupから復元した履歴を完全な台帳根拠として扱うと、欠落した古い消費が消えたぶんだけ
+ *   残量が巻き戻るため、復元時点でprintStoreへ明示フラグを残す。
+ * - 画面表示や履歴閲覧は維持しつつ、ledger側はこのフラグを見て自動derive/recomputeを停止する。
+ *
+ * @private
+ * @function _markLocalStorageRecoveryHistoryAuthority
+ * @param {Object|null|undefined} machineData - localStorageから読んだmachine snapshot。
+ * @param {Object} options - 復元オプション。
+ * @param {string=} options.source - 復元元名。
+ * @returns {Object|null|undefined} 必要ならprintStoreへauthority不完全metadataを付けたsnapshot。
+ */
+function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
+  if (
+    options.source !== "localStorage" ||
+    !machineData ||
+    typeof machineData !== "object" ||
+    machineData.printStore?.historyBackupTruncated !== true
+  ) {
+    return machineData;
+  }
+  const sourceLength = Number(machineData.printStore.historyBackupSourceLength);
+  const limit = Number(machineData.printStore.historyBackupLimit);
+  machineData.printStore = {
+    ...machineData.printStore,
+    historyAuthorityIncomplete: true,
+    historyAuthoritySource: "localStorage-bounded-recovery-backup",
+    historyAuthoritySourceLength: Number.isSafeInteger(sourceLength) && sourceLength >= 0
+      ? sourceLength
+      : null,
+    historyAuthorityLimit: Number.isSafeInteger(limit) && limit >= 0
+      ? limit
+      : null
+  };
+  return machineData;
+}
+
+/**
  * monitorData を per-host 分割形式で localStorage に書き込む。
  * グローバルデータは LS_KEY_GLOBAL に、per-host データは LS_KEY_HOST_PREFIX+hostname に書き込む。
  * 前回書き込みと同一ならスキップする。
  *
  * @private
+ * @param {Object} [options={}] - 保存オプション。
+ * @param {boolean} [options.boundedRecoveryBackup=false] - trueならlocalStorageを回復用bounded snapshotにする。
  * @returns {void}
  */
-function _writePerHostLocalStorage() {
+function _writePerHostLocalStorage(options = {}) {
   // グローバルデータ
   const globalData = {};
   for (const field of LS_GLOBAL_FIELDS) {
     if (field in monitorData) globalData[field] = monitorData[field];
+  }
+  if (options.boundedRecoveryBackup && Array.isArray(globalData.usageHistory)) {
+    const boundedUsage = _boundedRecoveryArray(
+      globalData.usageHistory,
+      LOCAL_STORAGE_USAGE_HISTORY_BACKUP_LIMIT,
+      "tail"
+    );
+    globalData.usageHistory = boundedUsage.items;
+    globalData.storageRecoveryBackup = {
+      ...(globalData.storageRecoveryBackup || {}),
+      usageHistoryTruncated: boundedUsage.truncated,
+      usageHistorySourceLength: boundedUsage.totalCount,
+      usageHistoryBackupLimit: boundedUsage.limit
+    };
   }
   const globalJson = JSON.stringify(globalData);
   if (globalJson !== _lastSavedJson) {
@@ -2366,7 +2682,7 @@ function _writePerHostLocalStorage() {
     const hostKey = LS_KEY_HOST_PREFIX + _encodeHostKey(host);
     /* ★ runtimeData は揮発状態のため永続化から除外
        (IndexedDB パスでは queueMachineWrite が除外済み、localStorage パスは未対応だった) */
-    const { runtimeData: _omit, ...serializableMachine } = machine;
+    const serializableMachine = _createLocalStorageMachineSnapshot(machine, options);
     const hostJson = JSON.stringify(serializableMachine);
     // per-host のデデュープは簡易チェック（サイズ比較）
     const prev = localStorage.getItem(hostKey);
@@ -2478,7 +2794,7 @@ function _flushStorage() {
       if (!_lastLsBackupEpoch || now - _lastLsBackupEpoch > 60000) {
         _lastLsBackupEpoch = now;
         try {
-          _writePerHostLocalStorage();
+          _writePerHostLocalStorage({ boundedRecoveryBackup: true });
         } catch (e) {
           console.warn("[saveUnifiedStorage] localStorage バックアップ失敗:", e.message);
         }
@@ -2650,7 +2966,8 @@ function _restoreFromData(shared, machines, options = {}) {
       }
     }
     const hostnameKeys = new Set(Object.keys(machines));
-    for (const [host, machineData] of Object.entries(machines)) {
+    for (const [host, rawMachineData] of Object.entries(machines)) {
+      const machineData = _markLocalStorageRecoveryHistoryAuthority(rawMachineData, options);
       // IPキーで、かつ同一プリンタのホスト名キーが存在する場合はスキップ
       const resolvedHostname = ipToHostname.get(host);
       if (resolvedHostname && hostnameKeys.has(resolvedHostname) && host !== resolvedHostname) {
@@ -3206,7 +3523,12 @@ export function loadPrintHistory(hostname) {
 }
 
 /**
- * 印刷履歴を保存する（過去データは古いものから削除）。
+ * 印刷履歴を保存する。
+ *
+ * 【詳細説明】
+ * - 既定では印刷履歴を自動削除しない。
+ * - `appSettings.printHistoryMaxEntries` が1以上の場合だけ、既存契約どおり新しい順の
+ *   配列先頭を保持し、末尾側の古い履歴を削除する。
  *
  * @param {Array<Object>} history - 保存対象の履歴配列
  */
@@ -3215,7 +3537,7 @@ export function savePrintHistory(history, hostname) {
   if (!host) return;
   ensureMachineData(host);
   const ps = monitorData.machines[host].printStore;
-  ps.history = history.slice(0, MAX_PRINT_HISTORY);
+  ps.history = applyPrintHistoryRetention(history, monitorData.appSettings, { host });
   // ★ 監査§6: 履歴 revision を単調インクリメント。relay delta の変更検出署名は
   //   O(1) の軽量サンプル（末尾ジョブ＋現在ジョブ）で、履歴中間の filamentInfo 編集・
   //   分割 upsert・reconcile 等（件数・末尾不変）を取りこぼしうる。履歴を実際に書き換える

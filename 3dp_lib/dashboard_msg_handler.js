@@ -17,9 +17,9 @@
  * - {@link processData}：データ部処理
  * - {@link processError}：エラー処理
  *
-* @version 1.390.1599 (PR #440)
+* @version 1.390.1641 (PR #441)
 * @since   1.390.214 (PR #95)
-* @lastModified 2026-09-01 21:16:00
+* @lastModified 2026-09-02 13:38:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -455,7 +455,8 @@ function _getMsgState(hostname) {
 
 /**
  * machine.historyData（タイマー情報の中間バッファ）の上限件数。
- * printStore.history（MAX_PRINT_HISTORY=1500）と同規模。これを超える分は古い順に破棄。
+ * printStore.history はユーザー設定で無制限保持できるが、この中間バッファは
+ * 未確定タイマー情報だけを運ぶため、過剰保持せず古い順に破棄する。
  * @constant {number}
  */
 const HISTORY_DATA_CAP = 1500;

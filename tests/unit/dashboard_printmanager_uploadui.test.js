@@ -14,6 +14,7 @@ vi.mock('../../3dp_lib/dashboard_storage.js', () => ({
   loadPrintCurrent: vi.fn(), savePrintCurrent: vi.fn(),
   loadPrintHistory: vi.fn(() => []), savePrintHistory: vi.fn(),
   loadPrintVideos: vi.fn(() => []), savePrintVideos: vi.fn(),
+  applyPrintHistoryRetention: vi.fn((history) => history),
   MAX_PRINT_HISTORY: 100,
 }));
 vi.mock('../../3dp_lib/dashboard_utils.js', () => ({

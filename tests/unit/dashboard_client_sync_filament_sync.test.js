@@ -1,14 +1,25 @@
 /**
- * @fileoverview リレー子のフィラメント共有状態同期（親権威・全置換）回帰テスト
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 リレー子フィラメント同期テスト
+ * @file dashboard_client_sync_filament_sync.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_client_sync_filament_sync_test
  *
- * バグ: 旧実装の _applySnapshot/_applyDelta は filamentSpools を「IDベースマージ +
- * sticky フラグ保護（existing.isActive = prevActive || ...）」で適用していたため、
- *   (a) 親で取り外し/交換しても子の isActive/isInUse/hostname が永遠に解除されない
- *   (b) 親で削除したスプールが子に残り続ける
- * という親子表示乖離（「本体で変更した内容が反映されない」）の根本原因だった。
+ * 【機能内容サマリ】
+ * - リレー子のフィラメント共有状態同期が親権威の全置換であることを検証
+ * - bounded relay printStore履歴を台帳完全authorityとして扱わないことを検証
  *
- * 修正: 親が唯一の権威として全置換（in-place）。mountHistory（ADR-0004 台帳）も
- * スナップショット/デルタで同期する。
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1645 (PR #441)
+ * @since   1.390.1645 (PR #441)
+ * @lastModified 2026-09-02 14:42:12
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -17,7 +28,7 @@ vi.hoisted(() => {
   globalThis.window = globalThis.window || {};
 });
 
-import { _applySharedFilamentState } from "../../3dp_lib/dashboard_client_sync.js";
+import { _applyRelayPrintStore, _applySharedFilamentState } from "../../3dp_lib/dashboard_client_sync.js";
 import { monitorData } from "../../3dp_lib/dashboard_data.js";
 
 /**
@@ -139,6 +150,58 @@ describe("_applySharedFilamentState — 親権威の全置換", () => {
     monitorData.filamentSpools.push(spool("A"));
     _applySharedFilamentState({ filamentSpools: [] });
     expect(monitorData.filamentSpools.length).toBe(0);
+  });
+});
+
+describe("_applyRelayPrintStore — bounded relay history の台帳authority境界", () => {
+  beforeEach(() => {
+    monitorData.machines = {};
+  });
+
+  it("親からbounded履歴を受けた子は履歴を完全authorityとして扱わない", () => {
+    _applyRelayPrintStore("K2Pro-69E7", {
+      history: [{ id: "job-1", start: 1 }],
+      current: null,
+      historyTruncated: true,
+      historyTotalCount: 1502,
+      historyWindowLimit: 1500
+    });
+
+    const printStore = monitorData.machines["K2Pro-69E7"].printStore;
+    expect(printStore.history).toEqual([{ id: "job-1", start: 1 }]);
+    expect(printStore.historyAuthorityIncomplete).toBe(true);
+    expect(printStore.historyAuthoritySource).toBe("relay-bounded-window");
+    expect(printStore.historyAuthoritySourceLength).toBe(1502);
+    expect(printStore.historyAuthorityLimit).toBe(1500);
+  });
+
+  it("親から完全履歴を受けた子は古い不完全authorityマークを解除する", () => {
+    monitorData.machines["K2Pro-69E7"] = {
+      printStore: {
+        history: [{ id: "old" }],
+        current: null,
+        videos: {},
+        historyAuthorityIncomplete: true,
+        historyAuthoritySource: "relay-bounded-window",
+        historyAuthoritySourceLength: 1502,
+        historyAuthorityLimit: 1500
+      }
+    };
+
+    _applyRelayPrintStore("K2Pro-69E7", {
+      history: [{ id: "job-2", start: 2 }],
+      current: null,
+      historyTruncated: false,
+      historyTotalCount: 1,
+      historyWindowLimit: 1500
+    });
+
+    const printStore = monitorData.machines["K2Pro-69E7"].printStore;
+    expect(printStore.history).toEqual([{ id: "job-2", start: 2 }]);
+    expect(printStore.historyAuthorityIncomplete).toBe(false);
+    expect(printStore.historyAuthoritySource).toBeNull();
+    expect(printStore.historyAuthoritySourceLength).toBeNull();
+    expect(printStore.historyAuthorityLimit).toBeNull();
   });
 });
 

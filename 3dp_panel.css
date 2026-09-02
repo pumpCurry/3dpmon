@@ -1,7 +1,7 @@
 /*
   3dp_panel.css
   GridStack パネルシステム用スタイル
-  Version 1.390.1584
+  Version 1.390.1641
 */
 
 /* ===============================================================
@@ -3291,6 +3291,28 @@ body.panel-mode .notification-container {
 .text-muted-xs { font-size: var(--font-xs); color: var(--color-text-muted); }
 .text-muted-sm { font-size: var(--font-sm); color: var(--color-text-muted); }
 .text-secondary-xs { font-size: var(--font-xs); color: var(--color-text-secondary); }
+
+/* ===============================================================
+   ストレージ設定
+   =============================================================== */
+.storage-setting-block {
+  margin-top: var(--space-2);
+}
+
+.storage-setting-help {
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  margin-top: var(--space-1);
+}
+
+.storage-number-input {
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  margin-left: var(--space-2);
+  padding: 3px;
+  width: 6em;
+}
 /* 右揃えセル */
 .text-right { text-align: right; }
 /* モノスペース */

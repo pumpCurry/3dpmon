@@ -92,6 +92,21 @@ const RESOLVED_PRESET = { presetId: "p1", name: "PLA" };
 const PRESET = { presetId: "p1", name: "PLA" };
 
 /**
+ * 新しい順に並んだ印刷履歴fixtureを生成する。
+ *
+ * @function makePrintHistory
+ * @param {number} count - 生成件数。
+ * @returns {Array<Object>} printStore.history互換の履歴配列。
+ */
+function makePrintHistory(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: count - index,
+    filename: `job-${count - index}.gcode`,
+    materialUsedMm: count - index,
+  }));
+}
+
+/**
  * relay bridge の Electron API mock を設定する。
  *
  * @function setupRelayApi
@@ -113,9 +128,21 @@ function setupRelayApi() {
 }
 
 describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
-  it("full snapshot と delta に Parent 権威の recovery / repair 診断を同梱する", () => {
+  it("full snapshot と delta に Parent 権威の recovery / repair 診断とbounded履歴を同梱する", () => {
     const relay = setupRelayApi();
     monitorData.appSettings.negativeRemainingDisplayMode = "clamp-zero";
+    monitorData.appSettings.printHistoryMaxEntries = 333;
+    monitorData.appSettings.usageHistoryMaxEntries = 444;
+    monitorData.machines = {
+      "K2Pro-69E7": {
+        storedData: { state: { rawValue: "idle" } },
+        printStore: {
+          history: makePrintHistory(1502),
+          current: null
+        }
+      }
+    };
+    monitorData.usageHistory = Array.from({ length: 4502 }, (_, index) => ({ usageId: `u-${index}` }));
     monitorData.inferredDecisionRecoveryRequired = {
       candidateHash: "ic-a",
       action: "confirm",
@@ -145,6 +172,12 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
     expect(snapshot.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
     expect(snapshot.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);
     expect(snapshot.appSettings.negativeRemainingDisplayMode).toBe("clamp-zero");
+    expect(snapshot.appSettings.printHistoryMaxEntries).toBe(333);
+    expect(snapshot.appSettings.usageHistoryMaxEntries).toBe(444);
+    expect(snapshot.printStores["K2Pro-69E7"].history).toHaveLength(1500);
+    expect(snapshot.printStores["K2Pro-69E7"].historyTruncated).toBe(true);
+    expect(snapshot.usageHistory).toHaveLength(4500);
+    expect(snapshot.usageHistoryTruncated).toBe(true);
 
     relayBroadcastIfNeeded();
 
@@ -155,6 +188,12 @@ describe("relayBroadcastIfNeeded — #418 recovery 診断同期", () => {
     expect(delta.shared.ledgerRepairRequired).toEqual(monitorData.ledgerRepairRequired);
     expect(delta.shared.mountHistoryRejectedEvents).toEqual(monitorData.mountHistoryRejectedEvents);
     expect(delta.shared.appSettingsNegativeRemainingDisplayMode).toBe("clamp-zero");
+    expect(delta.shared.appSettingsPrintHistoryMaxEntries).toBe(333);
+    expect(delta.shared.appSettingsUsageHistoryMaxEntries).toBe(444);
+    expect(delta.printStores["K2Pro-69E7"].history).toHaveLength(1500);
+    expect(delta.printStores["K2Pro-69E7"].historyTruncated).toBe(true);
+    expect(delta.shared.usageHistory).toHaveLength(4500);
+    expect(delta.shared.usageHistoryTruncated).toBe(true);
   });
 });
 

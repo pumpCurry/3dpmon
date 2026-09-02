@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1580 (PR #440)
+ * @version 1.390.1644 (PR #441)
  * @since   1.390.1540 (PR #439)
- * @lastModified 2026-09-01 13:38:00
+ * @lastModified 2026-09-02 14:10:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -83,7 +83,12 @@ vi.mock('../../3dp_lib/dashboard_filament_presets.js', () => ({ FILAMENT_PRESETS
 vi.mock('../../3dp_lib/dashboard_log_util.js', () => ({ logManager: { add: vi.fn() } }));
 vi.mock('../../3dp_lib/dashboard_utils.js', () => ({ getCurrentTimestamp: () => 0 }));
 const _initLedgerAnchors = vi.hoisted(() => vi.fn(() => ({ seeded: 0 })));
-vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({ initLedgerAnchors: _initLedgerAnchors, quarantineInvalidMountEvents: () => 0 }));
+vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({
+  attributedUsed: () => 0,
+  getSpoolIntervals: () => [],
+  initLedgerAnchors: _initLedgerAnchors,
+  quarantineInvalidMountEvents: () => 0
+}));
 
 /* IDB は実装の setIdbDbName 呼び出しを spy できる本物のモジュールを使う(LS 経路は無効化) */
 const _idbDbNameCalls = [];

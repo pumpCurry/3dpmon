@@ -142,6 +142,34 @@ describe("deriveSpoolRemaining 冪等性", () => {
     expect(first.remainingMm).toBe(50000);
     expect(first.mode).toBe("anchor");
   });
+
+  it("truncated復元履歴では自動derive/reconcileを止めて現在残量を維持する", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.hostA = {
+      printStore: {
+        historyAuthorityIncomplete: true,
+        history: [job(10, 20000, { filamentId: "sp1" })]
+      }
+    };
+    appendMountEvent({ host: "hostA", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 0, ts: 1000 });
+
+    const derived = deriveSpoolRemaining("sp1");
+    expect(derived).toMatchObject({
+      remainingMm: 90000,
+      verified: false,
+      mode: "halt-incomplete-history",
+      usedMm: 0
+    });
+
+    const reconciled = reconcileSpool("sp1", { ts: 1234 });
+    expect(reconciled).toMatchObject({
+      before: 90000,
+      after: 90000,
+      verified: false,
+      mode: "halt-incomplete-history"
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+  });
 });
 
 // =====================================================================
@@ -784,6 +812,30 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
     const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
     expect(res.used).toBe(5000);
     expect(res.after).toBe(95000);
+  });
+
+  it("truncated復元履歴を含む場合は手動総量再計算を止めて残量を巻き戻さない", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.h = {
+      printStore: {
+        historyAuthorityIncomplete: true,
+        history: [
+          job(200, 5000, { filamentInfo: [{ spoolId: "sp1", usedMm: 5000 }] })
+        ]
+      }
+    };
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(res).toMatchObject({
+      before: 90000,
+      after: 90000,
+      used: 0,
+      mode: "halt-incomplete-history",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+    expect(sp._remainingVerified).not.toBe(true);
   });
 
   it("他スプールに帰属するジョブは合算しない（multi-spool の per-reel 厳密帰属）", () => {

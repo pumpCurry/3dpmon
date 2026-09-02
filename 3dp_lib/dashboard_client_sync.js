@@ -22,9 +22,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1279 (PR #426)
+ * @version 1.390.1645 (PR #441)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-08-04 11:50:46
+ * @lastModified 2026-09-02 14:42:12
  * -----------------------------------------------------------
  */
 
@@ -55,6 +55,54 @@ import("./dashboard_ui.js")
 function _normalizeNegativeRemainingDisplayMode(value) {
   if (value === "clamp-zero") return "clamp-zero";
   if (value === "show-negative" || value === "show" || value === "signed") return "show-negative";
+  return null;
+}
+
+/**
+ * 親から受信した履歴保持上限を十進整数だけに正規化する。
+ *
+ * @private
+ * @function _normalizeRetentionLimit
+ * @param {*} value - relay snapshot/deltaの保持上限値。
+ * @returns {number} 0または1以上の安全な整数。0は無制限。
+ */
+function _normalizeRetentionLimit(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^[0-9]+$/.test(trimmed)) return 0;
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+  }
+  return 0;
+}
+
+/**
+ * relay printStore が持つ履歴件数メタ情報を安全な非負整数へ正規化する。
+ *
+ * 【詳細説明】
+ * - 親リレーは bounded window として履歴を配信するため、子側では
+ *   `historyTotalCount` / `historyWindowLimit` を診断メタ情報として保持する。
+ * - 不正値は authority 判定へ使わず null に倒し、表示や台帳ガードで
+ *   「根拠のない件数」として扱わない。
+ *
+ * @private
+ * @function _normalizeRelayHistoryCount
+ * @param {*} value - relay payload に含まれる履歴件数候補。
+ * @returns {?number} 0以上の安全な整数。不正値は null。
+ */
+function _normalizeRelayHistoryCount(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^[0-9]+$/.test(trimmed)) return null;
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
   return null;
 }
 
@@ -295,11 +343,19 @@ function _handleRelayMessage(msg) {
  * 親から受信した printStore（印刷履歴・現在ジョブ）を monitorData に反映する。
  * 子（satellite/readonly）はプリンタへ直接接続しないため、履歴はこの経路でのみ届く。
  *
- * @private
+ * 【詳細説明】
+ * - relay bridge は通信量抑制のため bounded window の履歴だけを配信する場合がある。
+ * - その場合、子の履歴は表示用の部分履歴であり、フィラメント台帳の完全authorityではないため、
+ *   `historyAuthorityIncomplete` を立てて後段のderive/recomputeをfail-closedさせる。
+ * - モジュール内部用だが、relay境界の回帰テストで直接検証するためexportしている。
+ *
+ * @function _applyRelayPrintStore
  * @param {string} hostname - ホスト名
- * @param {{history?:Array, current?:Object|null}} ps - 受信した printStore
+ * @param {{history?:Array, current?:Object|null, historyTruncated?:boolean, historyTotalCount?:number|string, historyWindowLimit?:number|string}} ps
+ *   - 受信した printStore。
+ * @returns {void}
  */
-function _applyRelayPrintStore(hostname, ps) {
+export function _applyRelayPrintStore(hostname, ps) {
   if (!ps) return;
   ensureMachineData(hostname);
   const machine = monitorData.machines[hostname];
@@ -307,6 +363,21 @@ function _applyRelayPrintStore(hostname, ps) {
   if (Array.isArray(ps.history)) machine.printStore.history = ps.history;
   if (Object.prototype.hasOwnProperty.call(ps, "current")) {
     machine.printStore.current = ps.current;
+  }
+  if (Object.prototype.hasOwnProperty.call(ps, "historyTruncated")) {
+    if (ps.historyTruncated === true) {
+      // 親から届いた履歴が bounded window の場合、子の履歴は表示用の部分履歴であり、
+      // 台帳再計算や残量再deriveの完全authorityとして扱ってはいけない。
+      machine.printStore.historyAuthorityIncomplete = true;
+      machine.printStore.historyAuthoritySource = "relay-bounded-window";
+      machine.printStore.historyAuthoritySourceLength = _normalizeRelayHistoryCount(ps.historyTotalCount);
+      machine.printStore.historyAuthorityLimit = _normalizeRelayHistoryCount(ps.historyWindowLimit);
+    } else {
+      machine.printStore.historyAuthorityIncomplete = false;
+      machine.printStore.historyAuthoritySource = null;
+      machine.printStore.historyAuthoritySourceLength = null;
+      machine.printStore.historyAuthorityLimit = null;
+    }
   }
 }
 
@@ -601,6 +672,12 @@ function _applySnapshot(state) {
         ?? state.appSettings.filamentRemainingDisplayMode
     );
     if (negativeMode) monitorData.appSettings.negativeRemainingDisplayMode = negativeMode;
+    if ("printHistoryMaxEntries" in state.appSettings) {
+      monitorData.appSettings.printHistoryMaxEntries = _normalizeRetentionLimit(state.appSettings.printHistoryMaxEntries);
+    }
+    if ("usageHistoryMaxEntries" in state.appSettings) {
+      monitorData.appSettings.usageHistoryMaxEntries = _normalizeRetentionLimit(state.appSettings.usageHistoryMaxEntries);
+    }
   }
 
   // ★ フィラメントデータ: 親が唯一の権威 — 受信内容で全置換する。
@@ -722,6 +799,12 @@ function _applyDelta(msg) {
     if ("appSettingsNegativeRemainingDisplayMode" in msg.shared) {
       const negativeMode = _normalizeNegativeRemainingDisplayMode(msg.shared.appSettingsNegativeRemainingDisplayMode);
       if (negativeMode) monitorData.appSettings.negativeRemainingDisplayMode = negativeMode;
+    }
+    if ("appSettingsPrintHistoryMaxEntries" in msg.shared) {
+      monitorData.appSettings.printHistoryMaxEntries = _normalizeRetentionLimit(msg.shared.appSettingsPrintHistoryMaxEntries);
+    }
+    if ("appSettingsUsageHistoryMaxEntries" in msg.shared) {
+      monitorData.appSettings.usageHistoryMaxEntries = _normalizeRetentionLimit(msg.shared.appSettingsUsageHistoryMaxEntries);
     }
   }
 

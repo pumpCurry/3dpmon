@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1279 (PR #426)
+ * @version 1.390.1645 (PR #441)
  * @since   2.2.1012
- * @lastModified 2026-08-04 11:50:46
+ * @lastModified 2026-09-02 14:38:14
  * -----------------------------------------------------------
  */
 
@@ -95,6 +95,41 @@ function _historyForHost(host) {
   const machine = monitorData.machines?.[host];
   const hist = machine?.printStore?.history;
   return Array.isArray(hist) ? hist : [];
+}
+
+/**
+ * 指定hostの履歴が台帳authorityとして不完全か判定する。
+ *
+ * 【詳細説明】
+ * - IndexedDB障害時などにlocalStorageのbounded recovery backupから復元した履歴は、
+ *   画面表示用の近傍snapshotであり、全消費履歴のauthorityではない。
+ * - この状態で自動deriveや手動総量再計算を行うと、欠落分が「未使用だった」ように扱われて
+ *   残量が増えるため、ledger処理側でfail-closedに使う。
+ *
+ * @private
+ * @function _isHistoryAuthorityIncomplete
+ * @param {string} host - ホスト名。
+ * @returns {boolean} 不完全な履歴authorityならtrue。
+ */
+function _isHistoryAuthorityIncomplete(host) {
+  return monitorData.machines?.[host]?.printStore?.historyAuthorityIncomplete === true;
+}
+
+/**
+ * いずれかのhostに不完全な履歴authorityがあるか判定する。
+ *
+ * 【詳細説明】
+ * - 手動総量再計算は全hostの明示帰属履歴を合算するため、1hostでもbounded復元履歴が混ざると
+ *   合算母集団が欠落し得る。対象spoolを絞るより安全側で全体を停止する。
+ *
+ * @private
+ * @function _hasAnyIncompleteHistoryAuthority
+ * @returns {boolean} 不完全履歴が存在する場合true。
+ */
+function _hasAnyIncompleteHistoryAuthority() {
+  return Object.values(monitorData.machines || {}).some((machine) => (
+    machine?.printStore?.historyAuthorityIncomplete === true
+  ));
 }
 
 /**
@@ -700,6 +735,16 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
   // アンカー区間 = 唯一の open（無ければ最終区間）
   const anchorIv = openIvs[0] || activeIvs[activeIvs.length - 1];
 
+  if (_isHistoryAuthorityIncomplete(anchorIv.host)) {
+    const remaining = _capLedgerRemaining(_base - (Number(liveUsedMm) || 0), _cap);
+    return {
+      remainingMm: remaining,
+      verified: false,
+      mode: "halt-incomplete-history",
+      usedMm: 0
+    };
+  }
+
   // ★ レビュー指摘(P0-1): 境界不明("unknown")区間では履歴の遡及減算をしない。
   //   境界を証明できない状態（例: mountHistory 欠落 → idle 種付けで sinceJobId=0）で
   //   後から機器の全履歴を取得すると、アンカー残量（既に過去消費を反映済みのことがある）から
@@ -938,6 +983,15 @@ export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
   if (!(total > 0)) {
     // 総量不明 → 総量基準が不能。アンカー方式へフォールバック。
     return reconcileSpool(spoolId, { ts });
+  }
+  if (_hasAnyIncompleteHistoryAuthority()) {
+    return {
+      before,
+      after: before,
+      used: 0,
+      mode: "halt-incomplete-history",
+      skipped: true
+    };
   }
   // 全ホストの履歴を走査し、当該スプールに明示帰属する完了ジョブの消費を合算
   let used = 0;

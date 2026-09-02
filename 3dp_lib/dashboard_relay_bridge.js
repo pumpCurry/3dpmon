@@ -22,9 +22,9 @@
  * - {@link buildCameraEndpoints}：カメラパススルー用エンドポイントを構築する
  * - {@link relayBroadcastIfNeeded}：変更があれば子へデルタ配信する
  *
- * @version 1.390.1279 (PR #426)
+ * @version 1.390.1644 (PR #441)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-08-04 11:50:46
+ * @lastModified 2026-09-02 14:10:41
  * -----------------------------------------------------------
  */
 
@@ -64,6 +64,69 @@ let _prevBizTz;
 
 /** 前回ブロードキャストした負残量表示モード（変更検出）。undefined=未送信 */
 let _prevNegativeRemainingDisplayMode;
+
+/** 前回ブロードキャストした印刷履歴保持設定（変更検出）。undefined=未送信 */
+let _prevPrintHistoryMaxEntries;
+
+/** 前回ブロードキャストした使用履歴保持設定（変更検出）。undefined=未送信 */
+let _prevUsageHistoryMaxEntries;
+
+/** リレーで子へ渡す印刷履歴の近傍上限。正本は親/IndexedDB側に保持する。 */
+const RELAY_PRINT_HISTORY_WINDOW_LIMIT = 1500;
+
+/** リレーで子へ渡す使用履歴の近傍上限。正本は親/IndexedDB側に保持する。 */
+const RELAY_USAGE_HISTORY_WINDOW_LIMIT = 4500;
+
+/**
+ * リレー輸送用に配列を近傍windowへ制限する。
+ *
+ * 【詳細説明】
+ * - 親のIndexedDB/local stateは正本として無制限保持できる。
+ * - 子は閲覧ミラーなので、スナップショット/差分の輸送では近傍だけを送り、巨大履歴で
+ *   relayや子のlocalStorageを詰まらせない。
+ *
+ * @private
+ * @function _createRelayWindow
+ * @param {Array<Object>} list - 送信候補の配列。
+ * @param {number} limit - 送信上限。
+ * @param {"head"|"tail"} direction - headは先頭側、tailは末尾側を保持する。
+ * @returns {{items:Array<Object>, truncated:boolean, totalCount:number, limit:number}} 送信用window。
+ */
+function _createRelayWindow(list, limit, direction) {
+  const source = Array.isArray(list) ? list : [];
+  if (source.length <= limit) {
+    return { items: source.slice(), truncated: false, totalCount: source.length, limit };
+  }
+  return {
+    items: direction === "tail" ? source.slice(-limit) : source.slice(0, limit),
+    truncated: true,
+    totalCount: source.length,
+    limit
+  };
+}
+
+/**
+ * printStoreをrelay用のbounded payloadへ変換する。
+ *
+ * @private
+ * @function _createRelayPrintStorePayload
+ * @param {Object} printStore - 親のprintStore。
+ * @returns {{history:Array<Object>, current:Object|null, historyTruncated:boolean, historyTotalCount:number, historyWindowLimit:number}} relay payload。
+ */
+function _createRelayPrintStorePayload(printStore) {
+  const bounded = _createRelayWindow(
+    printStore?.history || [],
+    RELAY_PRINT_HISTORY_WINDOW_LIMIT,
+    "head"
+  );
+  return {
+    history: bounded.items,
+    current: printStore?.current || null,
+    historyTruncated: bounded.truncated,
+    historyTotalCount: bounded.totalCount,
+    historyWindowLimit: bounded.limit
+  };
+}
 
 /**
  * 負残量表示モードを親子同期用の正規値へ変換する。
@@ -639,7 +702,7 @@ function _buildDelta() {
         + `${cur?.id ?? ""}|${cur?.materialUsedMm ?? ""}|${cur?.filamentId ?? ""}`;
       if (psSig !== _prevPrintHash.get(hostname)) {
         _prevPrintHash.set(hostname, psSig);
-        printStoresDelta[hostname] = { history: hist, current: cur };
+        printStoresDelta[hostname] = _createRelayPrintStorePayload(ps);
         hasChanges = true;
       }
     }
@@ -760,7 +823,17 @@ function _buildDelta() {
     sharedDelta.favoritePresets = monitorData.favoritePresets || [];
     sharedDelta.filamentEventContext = monitorData.filamentEventContext || {};
     sharedDelta.spoolSerialCounter = monitorData.spoolSerialCounter ?? 0;
-    sharedDelta.usageHistory = monitorData.usageHistory || [];
+    {
+      const usageWindow = _createRelayWindow(
+        monitorData.usageHistory || [],
+        RELAY_USAGE_HISTORY_WINDOW_LIMIT,
+        "tail"
+      );
+      sharedDelta.usageHistory = usageWindow.items;
+      sharedDelta.usageHistoryTruncated = usageWindow.truncated;
+      sharedDelta.usageHistoryTotalCount = usageWindow.totalCount;
+      sharedDelta.usageHistoryWindowLimit = usageWindow.limit;
+    }
     hasChanges = true;
   }
 
@@ -796,6 +869,22 @@ function _buildDelta() {
     hasChanges = true;
   }
 
+  const printHistoryMaxEntries = monitorData.appSettings.printHistoryMaxEntries ?? 0;
+  if (printHistoryMaxEntries !== _prevPrintHistoryMaxEntries) {
+    _prevPrintHistoryMaxEntries = printHistoryMaxEntries;
+    sharedDelta = sharedDelta || {};
+    sharedDelta.appSettingsPrintHistoryMaxEntries = printHistoryMaxEntries;
+    hasChanges = true;
+  }
+
+  const usageHistoryMaxEntries = monitorData.appSettings.usageHistoryMaxEntries ?? 0;
+  if (usageHistoryMaxEntries !== _prevUsageHistoryMaxEntries) {
+    _prevUsageHistoryMaxEntries = usageHistoryMaxEntries;
+    sharedDelta = sharedDelta || {};
+    sharedDelta.appSettingsUsageHistoryMaxEntries = usageHistoryMaxEntries;
+    hasChanges = true;
+  }
+
   if (!hasChanges) return null;
 
   const delta = { machines: machinesDelta, shared: sharedDelta };
@@ -828,10 +917,7 @@ function _buildFullSnapshot() {
     // 印刷履歴・現在ジョブ（子が履歴パネルを表示するために必要）
     const ps = machine.printStore;
     if (ps && (ps.history?.length || ps.current)) {
-      printStores[hostname] = {
-        history: ps.history || [],
-        current: ps.current || null
-      };
+      printStores[hostname] = _createRelayPrintStorePayload(ps);
     }
     // ファイル一覧（_cachedFileInfo は揮発。接続時に取得した最新を渡す）
     if (machine._cachedFileInfo) {
@@ -864,7 +950,19 @@ function _buildFullSnapshot() {
     favoritePresets: monitorData.favoritePresets || [],
     filamentEventContext: monitorData.filamentEventContext || {},
     spoolSerialCounter: monitorData.spoolSerialCounter ?? 0,
-    usageHistory: monitorData.usageHistory || [],
+    ...(() => {
+      const usageWindow = _createRelayWindow(
+        monitorData.usageHistory || [],
+        RELAY_USAGE_HISTORY_WINDOW_LIMIT,
+        "tail"
+      );
+      return {
+        usageHistory: usageWindow.items,
+        usageHistoryTruncated: usageWindow.truncated,
+        usageHistoryTotalCount: usageWindow.totalCount,
+        usageHistoryWindowLimit: usageWindow.limit
+      };
+    })(),
     appSettings: {
       connectionTargets: monitorData.appSettings.connectionTargets || [],
       // ★ ItemKeeper 連携設定を子へミラー（親が唯一の設定元・送信元）。
@@ -879,7 +977,9 @@ function _buildFullSnapshot() {
         monitorData.appSettings.negativeRemainingDisplayMode
           ?? monitorData.appSettings.negativeRemainingDisplay
           ?? monitorData.appSettings.filamentRemainingDisplayMode
-      )
+      ),
+      printHistoryMaxEntries: monitorData.appSettings.printHistoryMaxEntries ?? 0,
+      usageHistoryMaxEntries: monitorData.appSettings.usageHistoryMaxEntries ?? 0
     }
   };
 }
