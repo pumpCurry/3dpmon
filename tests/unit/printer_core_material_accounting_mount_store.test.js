@@ -137,6 +137,54 @@ describe("MaterialAccountingSpoolMountStore", () => {
     expect(store.storeDigest).not.toBe("tampered");
   });
 
+  it("future schemaVersionを名乗るstoreは中身を現行authorityへ復元せず丸ごと隔離する", () => {
+    const mount = createMount();
+    const stored = {
+      schemaVersion: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION + 1,
+      authority: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_AUTHORITY,
+      storeRevision: 12,
+      spoolMounts: [mount],
+      events: [createEvent({ operationId: mount.mountOperationId, recordRefs: [mount.mountOperationId] })],
+    };
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore(stored);
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.events).toEqual([]);
+    expect(store.storeRevision).toBe(0);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMountStore",
+        reason: "unsupported-store-schema-version",
+        record: stored,
+      }),
+    ]));
+  });
+
+  it("wrong authorityを名乗るstoreは中身を現行authorityへ復元せず丸ごと隔離する", () => {
+    const mount = createMount();
+    const stored = {
+      schemaVersion: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION,
+      authority: "foreign-material-accounting-store",
+      storeRevision: 12,
+      spoolMounts: [mount],
+      events: [createEvent({ operationId: mount.mountOperationId, recordRefs: [mount.mountOperationId] })],
+    };
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore(stored);
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.events).toEqual([]);
+    expect(store.storeRevision).toBe(0);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMountStore",
+        reason: "unsupported-store-authority",
+        record: stored,
+      }),
+    ]));
+  });
+
   it("creation eventがないmountはrestart idempotency authorityへ戻さず隔離する", () => {
     const mount = createMount();
     const store = normalizeStoredMaterialAccountingSpoolMountStore({

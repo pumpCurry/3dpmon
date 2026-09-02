@@ -160,7 +160,9 @@ source-aware mountとして扱わない。
   現segmentと一致する`digest`を要求し、plain import / localStorage restore上の文字列だけでは
   source-aware投影を解禁しない。現releaseではpublic登録関数もregistryをmintせず、
   future live certification issuerが接続されるまで未certifiedのK2 materialUsed CSV順序は
-  ItemKeeperへsource別true usageとして送らない。
+  ItemKeeperへsource別true usageとして送らない。PR #440 follow-upでは、
+  `materialAccountingSpoolMountStore` が明示的に未来 `schemaVersion` または別 `authority`
+  を名乗る場合に、中身を現行authorityへ推測復元せずstore全体を隔離するfail-closed境界を追加した。
   ただしmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
   への書き込みはまだ行わない。
   Gate 18.9I-4では、K2/CFS印刷開始UIで作ったPrinter Core command requestとは別に

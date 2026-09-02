@@ -19,9 +19,9 @@
  * - {@link createMaterialAccountingSpoolMountOperationPayloadDigest}：operation payload digestを生成
  * - {@link createMaterialAccountingSpoolMountStoreSnapshot}：store snapshotを生成
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1630 (PR #440)
  * @since   1.390.1575 (PR #440)
- * @lastModified 2026-09-02 08:28:00
+ * @lastModified 2026-09-02 09:15:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9H-2でフィラメント管理UIからoperator mount/unmount/replaceへ接続する
@@ -282,6 +282,73 @@ export function createEmptyMaterialAccountingSpoolMountStore(input = {}) {
     events: [],
     conflicts: [],
     retainedUnsupportedEntries: [],
+    invariants: { ...MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_INVARIANTS },
+  };
+  base.storeDigest = createMaterialAccountingSpoolMountStoreDigest(base);
+  return deepFreezeJson(base);
+}
+
+/**
+ * 保存済みstore envelopeを現行authorityとして復元できるか検査する。
+ *
+ * 【詳細説明】
+ * - `schemaVersion`や`authority`が明示されていない古いtest fixtureは従来どおり
+ *   record単位の正規化へ進める。
+ * - 一方で、明示的に未来schemaや別authorityを名乗るstoreは、recordがvalidに見えても
+ *   現行production authorityへ昇格させず、store全体をretainedへ隔離する。
+ *
+ * @private
+ * @function validateStoredStoreEnvelope
+ * @param {Object} input - 保存済みstore候補。
+ * @returns {{ok:boolean,reason:string|null}} envelope検査結果。
+ */
+function validateStoredStoreEnvelope(input) {
+  if (Object.prototype.hasOwnProperty.call(input, "schemaVersion")) {
+    const schemaVersion = Number(input.schemaVersion);
+    if (!Number.isInteger(schemaVersion) ||
+        schemaVersion !== MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION) {
+      return { ok: false, reason: "unsupported-store-schema-version" };
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "authority")) {
+    const authority = toTrimmedString(input.authority);
+    if (authority !== MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_AUTHORITY) {
+      return { ok: false, reason: "unsupported-store-authority" };
+    }
+  }
+  return { ok: true, reason: null };
+}
+
+/**
+ * 復元できないstore envelopeを空storeへ隔離する。
+ *
+ * 【詳細説明】
+ * - 未来schemaや別authorityの中身を現行schemaへ推測変換しない。
+ * - 元payloadは監査・手動復旧用に`retainedUnsupportedEntries`へ保持する。
+ *
+ * @private
+ * @function createUnsupportedStoreEnvelopeResult
+ * @param {Object} input - 保存済みstore候補。
+ * @param {string} reason - 隔離理由。
+ * @returns {Object} 空の正規化store。
+ */
+function createUnsupportedStoreEnvelopeResult(input, reason) {
+  const base = {
+    schemaVersion: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION,
+    authority: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_AUTHORITY,
+    storeRevision: 0,
+    storeDigest: "",
+    spoolMounts: [],
+    events: [],
+    conflicts: [],
+    retainedUnsupportedEntries: [
+      ...normalizeArray(input.retainedUnsupportedEntries),
+      createRetainedUnsupportedEntry({
+        kind: "spoolMountStore",
+        reason,
+        record: input,
+      }),
+    ],
     invariants: { ...MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_INVARIANTS },
   };
   base.storeDigest = createMaterialAccountingSpoolMountStoreDigest(base);
@@ -775,6 +842,10 @@ function filterMountsWithoutCreationEvents(mounts, events) {
  */
 export function normalizeStoredMaterialAccountingSpoolMountStore(stored) {
   const input = stored && typeof stored === "object" ? stored : {};
+  const envelopeValidation = validateStoredStoreEnvelope(input);
+  if (!envelopeValidation.ok) {
+    return createUnsupportedStoreEnvelopeResult(input, envelopeValidation.reason);
+  }
   const normalizedMounts = normalizeSpoolMounts(normalizeArray(input.spoolMounts));
   const verifiedMounts = filterUnsupportedActiveMountVerification(normalizedMounts.spoolMounts);
   const normalizedEvents = normalizeOperationEvents(normalizeArray(input.events), verifiedMounts.spoolMounts);

@@ -196,6 +196,12 @@ materialAccountingSpoolMountStore = {
 `operationsById` を durable authority として保存しない。再起動後の冪等性は、
 `spoolMounts[]` と durable `events[]` から operation index を再構築して回復する。
 
+保存済みstoreが明示的に未来 `schemaVersion` または別 `authority` を名乗る場合、
+中の `spoolMounts[]` / `events[]` が現行shapeとしてvalidに見えても、現行production
+authorityへ推測復元しない。store全体を `retainedUnsupportedEntries[]` へ保持し、
+active `spoolMounts[]` / `events[]` は空として復元する。これにより、将来schemaや別issuerの
+意味を現行Gate 18.9H authorityとして誤debit / 誤projectionへ使わない。
+
 ## Service API
 
 ```js
