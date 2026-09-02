@@ -197,6 +197,28 @@ Pass criteria:
   `gate18_9J2.canProjectItemKeeperSourceUsage` remain false until a later
   module-owned reviewed registry entry and issuer activation are implemented.
 
+Fixture artifact build:
+
+```powershell
+node scripts/build_itemkeeper_source_usage_fixture.mjs `
+  --export D:\Users\pcb\Downloads\3dpmon_export_POST.json `
+  --certification D:\Users\pcb\Downloads\K2Pro-69E7-cfs-certification_POST.json `
+  --device-id serial:<k2-device-id> `
+  --print-job-id <target-print-job-id> `
+  --reviewed-commit <full-git-sha-used-for-capture> `
+  --operator-action-id operator:k2-j2-capture-001 `
+  --firmware-version <observed-firmware-version> `
+  --output-dir tmp\gate18-9j2-capture-001 `
+  --pretty
+```
+
+This builder is read-only. It creates `fixture-evidence.json`,
+`fixture-receipt.json`, `projection-digests.json`, and
+`capture-manifest.json` from the exported stores. A rejected receipt is still a
+useful artifact because it records the missing snapshot, segment, raw CSV,
+order, or usage-state evidence without mutating 3DPmon storage, ItemKeeper, or
+the reviewed production registry.
+
 ## Gate 10: K2 CFS Topology Certification
 
 Goal: bind CFS topology fields to physical attach, detach, stale, reconnect, slot
