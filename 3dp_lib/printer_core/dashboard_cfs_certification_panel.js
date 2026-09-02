@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1646 (PR #440)
+ * @version 1.390.1647 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-09-02 15:42:55
+ * @lastModified 2026-09-02 16:08:12
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -117,41 +117,41 @@ function cloneJson(value) {
 }
 
 /**
- * redaction後bundle内の自由記述文字列からraw session IDを除去する。
+ * redaction後bundle内の自由記述文字列から既知raw identity文字列を除去する。
  *
  * 【詳細説明】
- * - Protocol Recorderは`sessionId` keyの値は秘匿するが、preflight detailのような自由記述文字列に
- *   埋め込まれたsession IDはkey名だけでは検出できない。
- * - Certification exportは対象sessionを既に知っているため、既知のraw session文字列だけを
- *   redacted printer.sessionId tokenへ置換して、通常文言への過剰redactionを避ける。
+ * - Protocol Recorderは`sessionId`/`deviceId` keyの値は秘匿するが、preflight detailや
+ *   arm bindingのような自由記述/派生keyに埋め込まれたidentityはkey名だけでは検出できない。
+ * - Certification exportは対象identityを既に知っているため、既知のraw identity文字列だけを
+ *   対応するredacted tokenへ置換して、通常文言への過剰redactionを避ける。
  *
  * @private
- * @function replaceKnownSessionText
+ * @function replaceKnownIdentityText
  * @param {*} value - redaction後bundle値。
- * @param {string} rawSessionId - export前のraw session ID。
- * @param {string} replacement - redaction済みsession token。
- * @returns {*} raw session文字列置換済み値。
+ * @param {string} rawIdentity - export前のraw identity文字列。
+ * @param {string} replacement - redaction済みidentity token。
+ * @returns {*} raw identity文字列置換済み値。
  */
-function replaceKnownSessionText(value, rawSessionId, replacement) {
-  const sessionText = toText(rawSessionId);
-  const replacementText = toText(replacement, "<SESSION_ID>");
-  if (!sessionText || value === null || value === undefined) {
+function replaceKnownIdentityText(value, rawIdentity, replacement) {
+  const identityText = toText(rawIdentity);
+  const replacementText = toText(replacement, "<IDENTITY>");
+  if (!identityText || value === null || value === undefined) {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => replaceKnownSessionText(entry, sessionText, replacementText));
+    return value.map((entry) => replaceKnownIdentityText(entry, identityText, replacementText));
   }
   if (typeof value === "object") {
     const result = {};
     for (const [key, childValue] of Object.entries(value)) {
-      result[key] = replaceKnownSessionText(childValue, sessionText, replacementText);
+      result[key] = replaceKnownIdentityText(childValue, identityText, replacementText);
     }
     return result;
   }
   if (typeof value !== "string") {
     return value;
   }
-  return value.split(sessionText).join(replacementText);
+  return value.split(identityText).join(replacementText);
 }
 
 /**
@@ -1049,10 +1049,15 @@ export function createCfsCertificationExportBundle(viewModel) {
     summaryTimeline: cloneJson(viewModel?.evidence?.timeline) || [],
   };
   const redactedBundle = redactProtocolValue(bundle);
-  const redacted = replaceKnownSessionText(
+  const sessionRedacted = replaceKnownIdentityText(
     redactedBundle,
     viewModel?.printer?.sessionId,
     redactedBundle?.manifest?.printer?.sessionId
+  );
+  const redacted = replaceKnownIdentityText(
+    sessionRedacted,
+    viewModel?.printer?.deviceId,
+    redactedBundle?.manifest?.printer?.deviceId
   );
   redacted.manifest = {
     ...(redacted.manifest || {}),

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1646 (PR #440)
+ * @version 1.390.1647 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-09-02 15:42:55
+ * @lastModified 2026-09-02 16:08:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -245,6 +245,11 @@ describe("dashboard_cfs_certification_panel", () => {
           semanticStatus: "uncertified",
         },
       },
+      arm: {
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+      },
       evidence: {
         info: {
           observedAt: "2026-08-29T10:00:00.000Z",
@@ -277,6 +282,7 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(serialized).not.toContain("K2Pro-69E7");
     expect(serialized).not.toContain("ABCDEF123456");
     expect(serialized).not.toContain("session-1");
+    expect(serialized).not.toContain("device-k2");
     expect(serialized).toContain("<MAC_001>");
     expect(serialized).toContain("<SERIAL_001>");
     expect(serialized).toContain("<IP_001>");
