@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1639 (PR #440)
+ * @version 1.390.1641 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 11:55:00
+ * @lastModified 2026-09-02 13:56:31
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -286,6 +286,82 @@ describe("build_itemkeeper_source_usage_fixture", () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("target deviceのmachine履歴だけからraw materialUsedを採用する", () => {
+    const payload = createExportPayload();
+    payload.appSettings.connectionTargets.unshift({
+      hostname: "K2Pro-Other",
+      printerType: "creality-k2",
+      printerCoreV3Identity: {
+        deviceIdSeed: "serial:k2-other",
+        reportedModel: "F012",
+      },
+    });
+    payload.machines = {
+      "K2Pro-Other": {
+        storedData: {
+          model: { rawValue: "F012" },
+          firmwareVersion: { rawValue: "1.1.6.7" },
+        },
+        printStore: {
+          history: [
+            {
+              printJobId: "job:k2-source-aware-001",
+              printPlanId: "plan:k2-source-aware-001",
+              materialUsed: "999,999",
+            },
+          ],
+        },
+      },
+      ...payload.machines,
+    };
+
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          printer: { model: "F012", firmwareVersion: "1.1.6.7" },
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-accepted");
+    expect(result.captureBundle.rawMaterialUsed).toBe("3210,0");
+    expect(result.fixtureReceipt.parsedUsedLengthMm).toEqual([3210, 0]);
+  });
+
+  it("certification identityがexport targetと矛盾する場合はreview不可として扱う", () => {
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: createExportPayload(),
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          printer: {
+            deviceId: "serial:k2-pro-69e7",
+            model: "K2 Plus",
+            firmwareVersion: "9.9.9.9",
+          },
+        },
+      },
+      options: createOptions({ model: "", firmwareVersion: "" }),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-review-not-ready");
+    expect(result.reviewBlockers).toEqual([
+      "certification-model-mismatch",
+      "certification-firmware-version-mismatch",
+    ]);
+    expect(result.fixtureReceipt.ok).toBe(true);
+    expect(result.fixtureEvidence.device).toMatchObject({
+      deviceId: "serial:k2-pro-69e7",
+      model: "F012",
+      firmwareVersion: "1.1.6.7",
+    });
   });
 
   it("必須引数とfull SHAをfail-fastで検査する", () => {
