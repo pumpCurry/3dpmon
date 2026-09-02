@@ -163,6 +163,10 @@ source-aware mountとして扱わない。
   ItemKeeperへsource別true usageとして送らない。PR #440 follow-upでは、
   `materialAccountingSpoolMountStore` が明示的に未来 `schemaVersion` または別 `authority`
   を名乗る場合に、中身を現行authorityへ推測復元せずstore全体を隔離するfail-closed境界を追加した。
+  さらにItemKeeper source-aware projectionのdigest/registry判定を
+  `dashboard_itemkeeper_source_usage_projection_certification.js` へ分離し、
+  `dashboard_integration_itemkeeper.js` からtest-only issuerをexportしない。production moduleが
+  test-only issuerをimportする経路もESLint allowlistで禁止する。
   ただしmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
   への書き込みはまだ行わない。
   Gate 18.9I-4では、K2/CFS印刷開始UIで作ったPrinter Core command requestとは別に

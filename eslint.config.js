@@ -18,6 +18,14 @@ const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS = [
     importNames: ['createMaterialAccountingPrintBindingRuntimeForTest'],
     message: 'Test-only print binding runtime factory must not be imported by production modules.',
   },
+  {
+    regex: '(^|/)dashboard_itemkeeper_source_usage_projection_certification\\.js$',
+    importNames: [
+      'clearItemKeeperSourceUsageProjectionCertificationsForTest',
+      'registerItemKeeperSourceUsageProjectionCertificationForTest',
+    ],
+    message: 'ItemKeeper source usage projection test issuer must not be imported by production modules.',
+  },
 ];
 
 const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_CONTRACT = TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS

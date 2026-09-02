@@ -24,6 +24,7 @@
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 
 import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
@@ -110,5 +111,34 @@ export const value = createMaterialAccountingPrintBindingRepositoryWithIssuer;
 
     expect(messagesForRule(runtimeMessages, "no-restricted-imports")).toEqual([]);
     expect(messagesForRule(contractMessages, "no-restricted-imports")).toEqual([]);
+  });
+
+  it("ItemKeeper連携production moduleはForTest projection issuerをexportしない", async () => {
+    const source = await readFile(
+      path.join(REPO_ROOT, "3dp_lib/dashboard_integration_itemkeeper.js"),
+      "utf8"
+    );
+
+    expect(source).not.toMatch(/export\s+function\s+registerItemKeeperSourceUsageProjectionCertificationForTest\b/);
+    expect(source).not.toMatch(/export\s+function\s+clearItemKeeperSourceUsageProjectionCertificationsForTest\b/);
+  });
+
+  it("production moduleはItemKeeper ForTest projection issuer helperをimportできない", async () => {
+    const messages = await lintSyntheticProductionModule(
+      "3dp_lib/dashboard_integration_itemkeeper.js",
+      `import {
+  clearItemKeeperSourceUsageProjectionCertificationsForTest,
+  registerItemKeeperSourceUsageProjectionCertificationForTest,
+} from "./printer_core/dashboard_itemkeeper_source_usage_projection_certification.js";
+export const value = [
+  clearItemKeeperSourceUsageProjectionCertificationsForTest,
+  registerItemKeeperSourceUsageProjectionCertificationForTest,
+];
+`
+    );
+
+    expect(messagesForRule(messages, "no-restricted-imports")).toHaveLength(2);
+    expect(messagesForRule(messages, "no-restricted-imports").join("\n"))
+      .toContain("ItemKeeper source usage projection test issuer must not be imported by production modules");
   });
 });

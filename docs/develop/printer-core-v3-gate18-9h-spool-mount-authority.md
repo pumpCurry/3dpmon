@@ -511,6 +511,11 @@ Gate 18.9I-4:
 - trusted factory / issuer-injected repository / test-only runtime factory のimport境界は
   `3dp_lib/**/*.js` のproduction module全体へESLint allowlistとして固定する。allowed module以外の
   relative path違いimportもrelease前lintで失敗させる。
+- ItemKeeper source-aware projectionのdigest/registry判定は
+  `dashboard_itemkeeper_source_usage_projection_certification.js` に分離する。
+  `dashboard_integration_itemkeeper.js` はproduction placeholder登録とdigestだけを公開し、
+  test-only issuer / registry resetはexportしない。production moduleからtest-only issuerを
+  importする経路もrelease前lintで失敗させる。
 - `MaterialBindingPlan`本体と`commandBinding`は、pending登録時にdevice/session/generation/file/source/spool/toolの
   semantic projectionで再照合する。module-attested planであっても、request Aのbindingを
   別source/fileのplanへ混ぜた場合は拒否する。

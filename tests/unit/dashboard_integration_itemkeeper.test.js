@@ -8,9 +8,9 @@
  * 依存モジュールは全て vi.doMock でモックする（dashboard_notification_manager は
  * モジュール読込時に document へ触れるため node 環境では必ずモックすること）。
  *
- * @version 1.390.1627 (PR #440)
+ * @version 1.390.1631 (PR #440)
  * @since 1.390.0 (Initial)
- * @lastModified 2026-09-02 07:55:51
+ * @lastModified 2026-09-02 09:34:00
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
@@ -81,11 +81,13 @@ vi.doMock("../../3dp_lib/dashboard_printmanager.js", () => ({
 
 const {
   ItemKeeperIntegration,
-  clearItemKeeperSourceUsageProjectionCertificationsForTest,
   createItemKeeperSourceUsageProjectionCertificationDigest,
   registerItemKeeperSourceUsageProjectionCertification,
-  registerItemKeeperSourceUsageProjectionCertificationForTest,
 } = await import("../../3dp_lib/dashboard_integration_itemkeeper.js");
+const {
+  clearItemKeeperSourceUsageProjectionCertificationsForTest,
+  registerItemKeeperSourceUsageProjectionCertificationForTest,
+} = await import("../../3dp_lib/printer_core/dashboard_itemkeeper_source_usage_projection_certification.js");
 
 /**
  * テスト用JobMaterialSegmentへmodule-owned ItemKeeper projection証跡を付与する。
