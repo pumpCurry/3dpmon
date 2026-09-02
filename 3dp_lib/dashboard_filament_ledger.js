@@ -26,15 +26,15 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1659 (PR #440)
+ * @version 1.390.1662 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-09-02 18:09:00
+ * @lastModified 2026-09-02 18:41:09
  * -----------------------------------------------------------
  */
 
 "use strict";
 
-import { monitorData } from "./dashboard_data.js";
+import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { wallNowMs, randomEventId } from "./dashboard_time.js";
 
 /**
@@ -134,9 +134,20 @@ function _isHistoryAuthorityIncomplete(host) {
  * @returns {boolean} active anchor coverageが明示証明済みならtrue。
  */
 function _isActiveAnchorCoverageProven(host, sinceJobId) {
-  if (!(Number(sinceJobId) > 0)) return true;
+  const since = Number(sinceJobId);
+  if (!(since > 0)) return true;
   const coverage = monitorData.machines?.[host]?.printStore?.historyCoverage;
-  return coverage?.activeAnchorComplete === true;
+  const anchorSinceJobIds = Array.isArray(coverage?.anchorSinceJobIds)
+    ? coverage.anchorSinceJobIds.map((id) => Number(id)).filter(Number.isFinite)
+    : [];
+  const oldestPrintJobId = Number(coverage?.oldestPrintJobId);
+  const newestPrintJobId = Number(coverage?.newestPrintJobId);
+  return coverage?.activeAnchorComplete === true &&
+    anchorSinceJobIds.includes(since) &&
+    Number.isFinite(oldestPrintJobId) &&
+    Number.isFinite(newestPrintJobId) &&
+    oldestPrintJobId <= since &&
+    since <= newestPrintJobId;
 }
 
 /**
@@ -151,7 +162,8 @@ function _isActiveAnchorCoverageProven(host, sinceJobId) {
  * @returns {boolean} 不完全履歴が存在する場合true。
  */
 function _hasAnyIncompleteHistoryAuthority() {
-  return Object.values(monitorData.machines || {}).some((machine) => {
+  return Object.entries(monitorData.machines || {}).some(([host, machine]) => {
+    if (host === PLACEHOLDER_HOSTNAME) return false;
     const printStore = machine?.printStore;
     return Boolean(printStore) && (
       printStore.historyAuthorityIncomplete === true ||
@@ -173,7 +185,8 @@ function _hasAnyIncompleteHistoryAuthority() {
  * @returns {boolean} 総量再計算に使えない履歴が存在する場合true。
  */
 function _hasAnyIncompleteTotalHistoryAuthority() {
-  return Object.values(monitorData.machines || {}).some((machine) => {
+  return Object.entries(monitorData.machines || {}).some(([host, machine]) => {
+    if (host === PLACEHOLDER_HOSTNAME) return false;
     const printStore = machine?.printStore;
     return Boolean(printStore) && (
       printStore.historyAuthorityIncomplete === true ||
@@ -784,8 +797,9 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
 
   // アンカー区間 = 唯一の open（無ければ最終区間）
   const anchorIv = openIvs[0] || activeIvs[activeIvs.length - 1];
+  const since = anchorIv.sinceJobId;
 
-  if (_isHistoryAuthorityIncomplete(anchorIv.host)) {
+  if (_isHistoryAuthorityIncomplete(anchorIv.host) || !_isActiveAnchorCoverageProven(anchorIv.host, since)) {
     const remaining = _capLedgerRemaining(_base - (Number(liveUsedMm) || 0), _cap);
     return {
       remainingMm: remaining,
@@ -822,7 +836,6 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
 
   // 被覆チェック: fetch window由来のcoverage証明だけを使う。
   // printIdはepoch秒になり得るため、since+1やmerged history最古IDでは証明しない。
-  const since = anchorIv.sinceJobId;
   let verified = true;
   if (!_isActiveAnchorCoverageProven(anchorIv.host, since)) verified = false;
   // 境界不明区間は常に未検証（減算しない＝アンカー値を維持）。

@@ -71,6 +71,7 @@ function job(id, usedMm, extra = {}) {
 }
 
 function setupHost(host, { history = [], currentId = '', used = NaN, state = 1 } = {}) {
+  const historyIds = history.map((entry) => Number(entry?.id)).filter(Number.isFinite);
   mockMonitorData.machines[host] = {
     printStore: {
       current: currentId ? { id: currentId } : null,
@@ -79,6 +80,9 @@ function setupHost(host, { history = [], currentId = '', used = NaN, state = 1 }
         activeAnchorComplete: true,
         totalLifetimeComplete: true,
         source: 'test-complete-history',
+        oldestPrintJobId: historyIds.length > 0 ? Math.min(...historyIds) : 0,
+        newestPrintJobId: historyIds.length > 0 ? Math.max(...historyIds) : 0,
+        anchorSinceJobIds: historyIds,
       },
     },
     storedData: {

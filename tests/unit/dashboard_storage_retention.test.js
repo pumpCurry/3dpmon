@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1660 (PR #440)
+ * @version 1.390.1662 (PR #440)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 18:21:00
+ * @lastModified 2026-09-02 18:41:09
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -297,6 +297,40 @@ describe("印刷履歴保持設定", () => {
       activeAnchorComplete: false,
       oldestPrintJobId: 1700000500,
       newestPrintJobId: 1700000600,
+      anchorSinceJobIds: [1700000000]
+    });
+    expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({
+      activeAnchorComplete: false,
+      source: "print-history-fetch",
+      coverageProof: "fetch-window-crosses-active-anchor"
+    });
+  });
+
+  it("fetch windowがactive anchorより古い場合もactive anchor coverageを未完了にする", () => {
+    mocks.monitorData.filamentSpools = [{ id: "spool-a", deleted: false }];
+    mocks.protectedIntervals = [
+      { spoolId: "spool-a", host: "K1Max", sinceJobId: 1700000000, untilJobId: null, open: true }
+    ];
+    mocks.monitorData.machines = {
+      K1Max: {
+        printStore: {
+          history: [],
+          current: null,
+          videos: {}
+        }
+      }
+    };
+
+    const result = recordPrintHistoryFetchCoverage("K1Max", [
+      { id: 1699999900, filename: "before-anchor.gcode" },
+      { id: 1699999800, filename: "older.gcode" }
+    ]);
+
+    expect(result).toMatchObject({
+      recorded: true,
+      activeAnchorComplete: false,
+      oldestPrintJobId: 1699999800,
+      newestPrintJobId: 1699999900,
       anchorSinceJobIds: [1700000000]
     });
     expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({

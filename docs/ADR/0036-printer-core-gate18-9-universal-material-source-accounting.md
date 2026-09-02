@@ -618,7 +618,9 @@ Gate 18.9 must cover:
   values reject the fixture/analyzer candidate. A persisted
   `historyCoverage.activeAnchorComplete:true` is not reused after restart or
   storage restore; it is demoted to re-probe-required until the current process
-  receives a new print history window that crosses the active anchor.
+  receives a new print history window that covers the current active anchor
+  (`oldestPrintJobId <= anchorSinceJobId <= newestPrintJobId`) and records that
+  same anchor in `anchorSinceJobIds`.
   With the registry empty, production registration remains fail-closed with
   `reviewed-live-fixture-registry-entry-required`.
 - K2/CFS UI print-start sends create a module-attested MaterialBindingPlan

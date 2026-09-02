@@ -164,7 +164,9 @@ canonical raw source, but the durable segment raw must match it exactly; a
 mismatch or mixed segment raw values keeps the fixture rejected. Stored
 `historyCoverage.activeAnchorComplete:true` is also only a current-process fetch
 proof. After app restart or storage restore, it must be treated as
-re-probe-required until a new printer history fetch crosses the active anchor.
+re-probe-required until a new printer history fetch covers the current active
+anchor (`oldestPrintJobId <= anchorSinceJobId <= newestPrintJobId`) and records
+that same anchor in `anchorSinceJobIds`.
 
 Required sequence:
 
