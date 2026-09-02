@@ -73,9 +73,15 @@ raw K2 `materialUsed` CSVはtarget machine historyを優先し、履歴保持上
 storage restore・同一プロセス内のdisconnect/reconnect後は新しい履歴fetchが現在のactive anchorを
 `oldestPrintJobId <= anchorSinceJobId <= newestPrintJobId` として覆い、同じ
 `anchorSinceJobId` を `anchorSinceJobIds` に記録するまで再probe待ちとして扱う。
+`sinceJobId:0` はrecent history fetchだけでは被覆済みとしない。`boundaryStatus:"unknown"`なら
+アンカー残量を維持して過去減算を行わず、`known`として扱う場合でも総履歴完全性のpositive proofが
+必要になる。復元された `totalLifetimeComplete:true` は将来のtrusted issuer proofが無い限り
+未証明へ降格する。
 履歴フィラメントの手動編集は、総履歴完全性がpositive proofで示されない場合は残量再計算を
-安全側で保留し、ユーザーへ警告表示する。通常のrecent history fetchだけでは
-`totalLifetimeComplete:true`を発行しない。
+安全側で保留し、ユーザーへ警告表示する。completeness scanは対象spoolをmount interval・
+legacy current mount・明示履歴帰属で参照するhostへ限定する。通常のrecent history fetchだけでは
+`totalLifetimeComplete:true`を発行しない。durable completionEvidence fallbackはparser/profileに加え、
+`sourceCount`/`partCount` metadata欠落もreject reasonとして扱う。
 このreadinessがtrueでも、reviewed registry entry追加とproduction issuer activationは別GateまでHOLDする。
 
 Gate 18.9J-1では、ItemKeeper source-aware projectionを本番送信へ解禁せず、

@@ -622,10 +622,19 @@ Gate 18.9 must cover:
   window that covers the current active anchor
   (`oldestPrintJobId <= anchorSinceJobId <= newestPrintJobId`) and records that
   same anchor in `anchorSinceJobIds`.
+  A `sinceJobId:0` interval is not treated as covered by default; if the
+  interval is `unknown` it keeps the anchor remaining value without retroactive
+  subtraction, and if it is `known` it still needs positive total-lifetime
+  authority before old jobs can be debited. Restored
+  `totalLifetimeComplete:true` is demoted unless a future trusted issuer proof
+  is present, because ordinary persisted booleans are not lifetime authority.
   Manual history filament edits must visibly warn the operator and keep the
   cached remaining length when total-history completeness has no positive
-  authority. Ordinary recent-history fetches do not mint
-  `totalLifetimeComplete:true`.
+  authority. Completeness checks for manual recompute are scoped to hosts that
+  actually mention the target spool by mount interval, current legacy mount, or
+  explicit history attribution. Ordinary recent-history fetches do not mint
+  `totalLifetimeComplete:true`. Durable completionEvidence fallback requires
+  parser version, ordering profile, source count, and part count metadata.
   With the registry empty, production registration remains fail-closed with
   `reviewed-live-fixture-registry-entry-required`.
 - K2/CFS UI print-start sends create a module-attested MaterialBindingPlan

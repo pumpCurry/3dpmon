@@ -166,9 +166,16 @@ mismatch or mixed segment raw values keeps the fixture rejected. Stored
 proof. After app restart, storage restore, disconnect, or reconnect, it must be
 treated as re-probe-required until a new printer history fetch covers the
 current active anchor (`oldestPrintJobId <= anchorSinceJobId <= newestPrintJobId`)
-and records that same anchor in `anchorSinceJobIds`. Manual history filament
-edits keep the cached remaining length and show a warning when total-history
-completeness has no positive authority.
+and records that same anchor in `anchorSinceJobIds`. A `sinceJobId:0` mount is
+not treated as covered by recent-history fetch alone: `unknown` intervals keep
+their anchor value without retroactive debit, while `known` intervals need
+positive total-lifetime authority before historical jobs can be debited.
+Restored `totalLifetimeComplete:true` is demoted unless a future trusted issuer
+proof is present. Manual history filament edits keep the cached remaining length
+and show a warning when total-history completeness has no positive authority;
+their completeness scan is limited to hosts that actually reference the target
+spool. Durable completionEvidence fallback also requires sourceCount/partCount
+metadata in addition to parser/profile metadata.
 
 Required sequence:
 

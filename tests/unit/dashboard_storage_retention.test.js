@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1663 (PR #440)
+ * @version 1.390.1664 (PR #440)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 18:52:20
+ * @lastModified 2026-09-02 19:18:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -469,6 +469,37 @@ describe("印刷履歴保持設定", () => {
       totalLifetimeComplete: false,
       source: "print-history-restore-reprobe-required",
       staleSource: "print-history-retention"
+    });
+  });
+
+  it("trusted proofの無い復元totalLifetimeComplete trueは総履歴authorityとして扱わない", () => {
+    globalThis.localStorage.setItem("3dpmon-global", JSON.stringify({
+      appSettings: { printHistoryMaxEntries: 0 }
+    }));
+    globalThis.localStorage.setItem("3dpmon-host-K1Max", JSON.stringify({
+      printStore: {
+        history: [
+          { id: 1700000600, filename: "latest.gcode" }
+        ],
+        historyCoverage: {
+          activeAnchorComplete: false,
+          totalLifetimeComplete: true,
+          source: "legacy-restored-total-proof",
+          observedAt: 1700000700
+        },
+        current: null,
+        videos: {}
+      }
+    }));
+
+    restoreUnifiedStorage();
+
+    expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({
+      activeAnchorComplete: false,
+      totalLifetimeComplete: false,
+      source: "print-history-restore-reprobe-required",
+      staleSource: "legacy-restored-total-proof",
+      staleTotalLifetimeComplete: true
     });
   });
 

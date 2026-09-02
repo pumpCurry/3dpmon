@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1662 (PR #440)
+ * @version 1.390.1664 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-09-02 18:41:09
+ * @lastModified 2026-09-02 19:18:30
  * -----------------------------------------------------------
  */
 
@@ -119,6 +119,31 @@ function _isHistoryAuthorityIncomplete(host) {
 }
 
 /**
+ * 総履歴complete proofを台帳authorityとして信頼してよいか判定する。
+ *
+ * 【詳細説明】
+ * - `totalLifetimeComplete:true` というboolean単体は、古いbuildやrestore由来の残留値でも作れるため、
+ *   productionの手動総量再計算ではissuer/scope/trustedを含むproof objectを同時に要求する。
+ * - 現時点では正式issuerは未activationのため、テストfixtureまたは将来のissuerだけがこの条件を満たす。
+ *
+ * @private
+ * @function _isTrustedTotalLifetimeCoverage
+ * @param {?Object} coverage - printStore.historyCoverage。
+ * @returns {boolean} 総履歴complete proofを信頼してよい場合true。
+ */
+function _isTrustedTotalLifetimeCoverage(coverage) {
+  const proof = coverage?.totalLifetimeProof;
+  return Boolean(
+    coverage?.totalLifetimeComplete === true &&
+    proof &&
+    typeof proof === "object" &&
+    proof.issuer === "3dpmon-total-lifetime-coverage:v1" &&
+    proof.scope === "spool-lifetime" &&
+    proof.trusted === true
+  );
+}
+
+/**
  * active anchor区間の履歴被覆が明示的に証明されているか判定する。
  *
  * 【詳細説明】
@@ -135,8 +160,11 @@ function _isHistoryAuthorityIncomplete(host) {
  */
 function _isActiveAnchorCoverageProven(host, sinceJobId) {
   const since = Number(sinceJobId);
-  if (!(since > 0)) return true;
   const coverage = monitorData.machines?.[host]?.printStore?.historyCoverage;
+  if (!(since > 0)) {
+    return coverage?.activeAnchorComplete === true &&
+      _isTrustedTotalLifetimeCoverage(coverage);
+  }
   const anchorSinceJobIds = Array.isArray(coverage?.anchorSinceJobIds)
     ? coverage.anchorSinceJobIds.map((id) => Number(id)).filter(Number.isFinite)
     : [];
@@ -159,11 +187,13 @@ function _isActiveAnchorCoverageProven(host, sinceJobId) {
  *
  * @private
  * @function _hasAnyIncompleteHistoryAuthority
+ * @param {?Set<string>} [relevantHosts=null] - 検査対象host集合。nullなら全host。
  * @returns {boolean} 不完全履歴が存在する場合true。
  */
-function _hasAnyIncompleteHistoryAuthority() {
+function _hasAnyIncompleteHistoryAuthority(relevantHosts = null) {
   return Object.entries(monitorData.machines || {}).some(([host, machine]) => {
     if (host === PLACEHOLDER_HOSTNAME) return false;
+    if (relevantHosts instanceof Set && !relevantHosts.has(host)) return false;
     const printStore = machine?.printStore;
     return Boolean(printStore) && (
       printStore.historyAuthorityIncomplete === true ||
@@ -182,15 +212,17 @@ function _hasAnyIncompleteHistoryAuthority() {
  *
  * @private
  * @function _hasAnyIncompleteTotalHistoryAuthority
+ * @param {?Set<string>} [relevantHosts=null] - 検査対象host集合。nullなら全host。
  * @returns {boolean} 総量再計算に使えない履歴が存在する場合true。
  */
-function _hasAnyIncompleteTotalHistoryAuthority() {
+function _hasAnyIncompleteTotalHistoryAuthority(relevantHosts = null) {
   return Object.entries(monitorData.machines || {}).some(([host, machine]) => {
     if (host === PLACEHOLDER_HOSTNAME) return false;
+    if (relevantHosts instanceof Set && !relevantHosts.has(host)) return false;
     const printStore = machine?.printStore;
     return Boolean(printStore) && (
       printStore.historyAuthorityIncomplete === true ||
-      printStore.historyCoverage?.totalLifetimeComplete !== true
+      !_isTrustedTotalLifetimeCoverage(printStore.historyCoverage)
     );
   });
 }
@@ -904,6 +936,42 @@ function _isExplicitlyAttributed(job, spoolId) {
 }
 
 /**
+ * 手動総量再計算でcompletenessを要求するhost集合を収集する。
+ *
+ * 【詳細説明】
+ * - 手動総量再計算は当該spoolに関係する履歴だけを合算するため、無関係な実機hostの
+ *   一時的な未証明coverageで対象spoolの編集を過剰に止めない。
+ * - 関係hostは、mount interval、legacy hostSpoolMap、または履歴内の明示帰属から収集する。
+ *
+ * @private
+ * @function _collectManualRecomputeAuthorityHosts
+ * @param {string} spoolId - 対象スプールID。
+ * @returns {Set<string>} 対象spoolに関係するhost集合。
+ */
+function _collectManualRecomputeAuthorityHosts(spoolId) {
+  const hosts = new Set();
+  for (const interval of getSpoolIntervals(spoolId)) {
+    if (interval?.host && interval.host !== PLACEHOLDER_HOSTNAME) {
+      hosts.add(interval.host);
+    }
+  }
+  for (const [host, mountedSpoolId] of Object.entries(monitorData.hostSpoolMap || {})) {
+    if (mountedSpoolId === spoolId && host !== PLACEHOLDER_HOSTNAME) {
+      hosts.add(host);
+    }
+  }
+  for (const [host, machine] of Object.entries(monitorData.machines || {})) {
+    if (!host || host === PLACEHOLDER_HOSTNAME) continue;
+    const history = machine?.printStore?.history;
+    if (!Array.isArray(history)) continue;
+    if (history.some((job) => _isExplicitlyAttributed(job, spoolId))) {
+      hosts.add(host);
+    }
+  }
+  return hosts;
+}
+
+/**
  * (host, spoolId) の最新オープン mount イベントのアンカーをその場で貼り直す。
  *
  * 手動編集（総量基準の権威再計算）後に、以後の自動 reconcile（印刷完了時の
@@ -1037,7 +1105,8 @@ export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
     // 総量不明 → 総量基準が不能。アンカー方式へフォールバック。
     return reconcileSpool(spoolId, { ts });
   }
-  if (_hasAnyIncompleteHistoryAuthority()) {
+  const authorityHosts = _collectManualRecomputeAuthorityHosts(spoolId);
+  if (_hasAnyIncompleteHistoryAuthority(authorityHosts)) {
     return {
       before,
       after: before,
@@ -1046,7 +1115,7 @@ export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
       skipped: true
     };
   }
-  if (_hasAnyIncompleteTotalHistoryAuthority()) {
+  if (_hasAnyIncompleteTotalHistoryAuthority(authorityHosts)) {
     return {
       before,
       after: before,

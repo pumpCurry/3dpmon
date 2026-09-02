@@ -31,9 +31,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1663 (PR #440)
+ * @version 1.390.1664 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 18:52:20
+ * @lastModified 2026-09-02 19:18:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -3030,6 +3030,31 @@ function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
 }
 
 /**
+ * 復元されたtotal lifetime proofを再利用してよいか判定する。
+ *
+ * 【詳細説明】
+ * - 現在のproductionには総履歴完全性を発行する正式issuerがまだ無いため、通常の復元値は
+ *   安全側で未証明へ戻す。
+ * - 将来issuerを追加する場合は、ここでproof objectのscope/issuer/digestを検証してから
+ *   trueの持ち越しを許可する。
+ *
+ * @private
+ * @function _isTrustedRestoredTotalLifetimeCoverage
+ * @param {Object} coverage - 復元されたhistoryCoverage。
+ * @returns {boolean} 復元後もtotalLifetimeComplete:trueを信頼してよい場合true。
+ */
+function _isTrustedRestoredTotalLifetimeCoverage(coverage) {
+  const proof = coverage?.totalLifetimeProof;
+  return Boolean(
+    proof &&
+    typeof proof === "object" &&
+    proof.issuer === "3dpmon-total-lifetime-coverage:v1" &&
+    proof.scope === "spool-lifetime" &&
+    proof.trusted === true
+  );
+}
+
+/**
  * 復元されたprint history coverageを再probe待ちへ戻す。
  *
  * 【詳細説明】
@@ -3047,23 +3072,34 @@ function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
  */
 function _markRestoredFetchCoverageRequiresReprobe(machineData) {
   const coverage = machineData?.printStore?.historyCoverage;
+  const shouldDemoteActiveCoverage = coverage?.activeAnchorComplete === true;
+  const shouldDemoteTotalLifetime = coverage?.totalLifetimeComplete === true &&
+    !_isTrustedRestoredTotalLifetimeCoverage(coverage);
   if (
     !machineData ||
     typeof machineData !== "object" ||
     !coverage ||
     typeof coverage !== "object" ||
-    coverage.activeAnchorComplete !== true
+    (!shouldDemoteActiveCoverage && !shouldDemoteTotalLifetime)
   ) {
     return machineData;
   }
+  const restoredAt = getCurrentTimestamp();
   machineData.printStore = {
     ...machineData.printStore,
     historyCoverage: {
       ...coverage,
-      activeAnchorComplete: false,
+      ...(shouldDemoteActiveCoverage ? {
+        activeAnchorComplete: false,
+        staleActiveAnchorComplete: true
+      } : {}),
+      ...(shouldDemoteTotalLifetime ? {
+        totalLifetimeComplete: false,
+        staleTotalLifetimeComplete: true
+      } : {}),
       source: "print-history-restore-reprobe-required",
       staleSource: coverage.source || "unknown",
-      restoredAt: getCurrentTimestamp()
+      restoredAt
     }
   };
   return machineData;

@@ -16,9 +16,9 @@
  * - {@link resolveK2MaterialUsedCompletionEvidenceCsv}：履歴rawとsegment完了rawを同じ規則で照合
  * - {@link parseK2MaterialUsedSourceCsv}：K2 materialUsed CSVをsource別使用量へ変換
  *
- * @version 1.390.1659 (PR #440)
+ * @version 1.390.1664 (PR #440)
  * @since   1.390.1632 (PR #440)
- * @lastModified 2026-09-02 18:09:00
+ * @lastModified 2026-09-02 19:18:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -146,12 +146,16 @@ function collectSegmentCompletionMaterialUsedEvidenceReasons(segments, options =
       reasons.push("completion-evidence-source-ordering-profile-mismatch");
     }
     const sourceCount = toFiniteNumberOrNull(evidence.sourceCount);
-    if (expectedSourceCount !== null && sourceCount !== null && sourceCount !== expectedSourceCount) {
+    if (sourceCount === null) {
+      reasons.push("completion-evidence-source-count-missing");
+    } else if (expectedSourceCount !== null && sourceCount !== expectedSourceCount) {
       reasons.push("completion-evidence-source-count-mismatch");
     }
     const partCount = toFiniteNumberOrNull(evidence.partCount);
     const observedPartCount = rawMaterialUsed.split(",").map((part) => part.trim()).length;
-    if (partCount !== null && partCount !== observedPartCount) {
+    if (partCount === null) {
+      reasons.push("completion-evidence-part-count-missing");
+    } else if (partCount !== observedPartCount) {
       reasons.push("completion-evidence-part-count-mismatch");
     }
   }
