@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1627 (PR #440)
+ * @version 1.390.1634 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 07:55:51
+ * @lastModified 2026-09-02 09:58:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -40,6 +40,13 @@ import {
  * @constant {string}
  */
 const ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY = "module-owned-live-certification-registry";
+
+/**
+ * ItemKeeper source usage live fixture receiptのauthority名。
+ *
+ * @constant {string}
+ */
+const ITEMKEEPER_SOURCE_USAGE_LIVE_FIXTURE_AUTHORITY = "itemkeeper-source-usage-live-fixture-evidence";
 
 /**
  * CLI usage text。
@@ -521,38 +528,47 @@ function createItemKeeperProjectionCertificationDigest(segment) {
 }
 
 /**
- * export上のItemKeeper source-aware projection証跡が整合しているか判定する。
+ * export上のItemKeeper source-aware projection証跡種別を判定する。
  *
  * @private
- * @function hasConsistentItemKeeperProjectionCertification
+ * @function getItemKeeperProjectionEvidenceStatus
  * @param {Object|null|undefined} segment - JobMaterialSegment候補。
- * @returns {boolean} authority/digestがsegment内容と整合していればtrue。
+ * @returns {string} `digest-consistent` / `fixture-accepted` / `none` のいずれか。
  */
-function hasConsistentItemKeeperProjectionCertification(segment) {
+function getItemKeeperProjectionEvidenceStatus(segment) {
   const projection = segment?.itemKeeperProjection || {};
+  if (
+    toText(projection.status) === "fixture-accepted" &&
+    toText(projection.authority) === ITEMKEEPER_SOURCE_USAGE_LIVE_FIXTURE_AUTHORITY
+  ) {
+    return "fixture-accepted";
+  }
   const expectedDigest = createItemKeeperProjectionCertificationDigest(segment);
-  return (
+  if (
     toText(projection.status) === "certified" &&
     toText(projection.authority) === ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY &&
     toText(projection.digest) === expectedDigest
-  );
+  ) {
+    return "digest-consistent";
+  }
+  return "none";
 }
 
 /**
- * segmentがItemKeeper projectionへ渡せる条件を満たすか判定する。
+ * segmentがItemKeeper projection digest-consistent evidence条件を満たすか判定する。
  *
  * 【詳細説明】
- * - 実際のItemKeeper連携はspoolId、deviceId一致、usageState、非負usedLengthMm、
- *   およびdebit eligible証跡を要求する。
- * - analyzerも同じ条件へ寄せ、pending/unknown/invalid/blocked segmentをready証跡として数えない。
+ * - export analyzerはread-only JSONだけを読むため、process-local registry membershipは証明できない。
+ * - そのためここではruntime projection可能とは言わず、authority/digestがsegment内容と整合する
+ *   read-only evidenceだけを数える。
  *
  * @private
- * @function isItemKeeperEligibleSegment
+ * @function isItemKeeperDigestConsistentSegment
  * @param {Object|null|undefined} segment - JobMaterialSegment候補。
  * @param {string} deviceId - Printer Core v3 device ID。
- * @returns {boolean} ItemKeeper projectionへ使えるsegmentならtrue。
+ * @returns {boolean} digest-consistent evidenceとして数えられるsegmentならtrue。
  */
-function isItemKeeperEligibleSegment(segment, deviceId) {
+function isItemKeeperDigestConsistentSegment(segment, deviceId) {
   const segmentDeviceId = toText(segment?.deviceId);
   const usageState = toText(segment?.usageState);
   const usedLengthMm = toFiniteNumberOrNull(segment?.usedLengthMm);
@@ -568,28 +584,57 @@ function isItemKeeperEligibleSegment(segment, deviceId) {
     toText(segment.spoolId) &&
     ["observed-used", "confirmed-unused"].includes(usageState) &&
     debitStatus === "eligible" &&
-    hasConsistentItemKeeperProjectionCertification(segment) &&
+    getItemKeeperProjectionEvidenceStatus(segment) === "digest-consistent" &&
     usedLengthMm !== null &&
     usedLengthMm >= 0
   );
 }
 
 /**
- * source-specific segmentをItemKeeper eligible条件で抽出する。
+ * source-specific segmentをItemKeeper fixture receipt条件で抽出する。
  *
  * 【詳細説明】
- * - print-start snapshotと同じPrintJob IDを持つsegmentだけをready証跡にする。
+ * - fixture receiptはreview可能な証拠だがruntime registry membershipではない。
+ * - 誤って`segment.itemKeeperProjection`へコピーされたfixture receiptを、production投影可能な
+ *   certificationとして数えないため、digest-consistent/runtime-certifiedとは別枠で出す。
+ *
+ * @private
+ * @function isItemKeeperFixtureAcceptedSegment
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @param {string} deviceId - Printer Core v3 device ID。
+ * @returns {boolean} fixture-accepted evidenceとして数えられるsegmentならtrue。
+ */
+function isItemKeeperFixtureAcceptedSegment(segment, deviceId) {
+  const segmentDeviceId = toText(segment?.deviceId);
+  if (!segment || typeof segment !== "object") {
+    return false;
+  }
+  if (!deviceId || !segmentDeviceId || segmentDeviceId !== deviceId) {
+    return false;
+  }
+  return Boolean(
+    resolvePrintJobId(segment) &&
+    getItemKeeperProjectionEvidenceStatus(segment) === "fixture-accepted"
+  );
+}
+
+/**
+ * source-specific segmentをItemKeeper evidence条件で抽出する。
+ *
+ * 【詳細説明】
+ * - print-start snapshotと同じPrintJob IDを持つsegmentだけをread-only証跡にする。
  * - snapshotが存在しないsegmentは、後から履歴だけで偶然混ざった可能性があるためGate18.9I readyには使わない。
  *
  * @private
- * @function findItemKeeperEligibleSegmentsForSource
+ * @function findItemKeeperEvidenceSegmentsForSource
  * @param {Object} source - MaterialSource観測record。
  * @param {Array<Object>} segments - JobMaterialSegment配列。
  * @param {string} deviceId - Printer Core v3 device ID。
  * @param {Array<Object>} snapshots - print-start snapshot配列。
- * @returns {Array<Object>} ItemKeeper projectionへ使えるsource-specific segment配列。
+ * @param {Function} predicate - evidence種別ごとの判定関数。
+ * @returns {Array<Object>} source-specific evidence segment配列。
  */
-function findItemKeeperEligibleSegmentsForSource(source, segments, deviceId, snapshots) {
+function findItemKeeperEvidenceSegmentsForSource(source, segments, deviceId, snapshots, predicate) {
   const snapshotJobIds = new Set(
     snapshots
       .filter((snapshot) => {
@@ -603,7 +648,7 @@ function findItemKeeperEligibleSegmentsForSource(source, segments, deviceId, sna
     return [];
   }
   return findSegmentsForSource(source, segments, deviceId)
-    .filter((segment) => isItemKeeperEligibleSegment(segment, deviceId))
+    .filter((segment) => predicate(segment, deviceId))
     .filter((segment) => snapshotJobIds.has(resolvePrintJobId(segment)));
 }
 
@@ -653,7 +698,21 @@ function isMultiSourceTarget(target) {
 function summarizeSource(source, openMounts, segments, deviceId, snapshots) {
   const matchingMounts = findOpenMountsForSource(source, openMounts, deviceId);
   const matchingSegments = findSegmentsForSource(source, segments, deviceId);
-  const itemKeeperEligibleSegments = findItemKeeperEligibleSegmentsForSource(source, segments, deviceId, snapshots);
+  const itemKeeperDigestConsistentSegments = findItemKeeperEvidenceSegmentsForSource(
+    source,
+    segments,
+    deviceId,
+    snapshots,
+    isItemKeeperDigestConsistentSegment
+  );
+  const itemKeeperFixtureAcceptedSegments = findItemKeeperEvidenceSegmentsForSource(
+    source,
+    segments,
+    deviceId,
+    snapshots,
+    isItemKeeperFixtureAcceptedSegment
+  );
+  const itemKeeperRuntimeCertifiedSegments = [];
   const reportedRemainingPercent = toFiniteNumberOrNull(
     source.remaining?.percent ??
     source.remaining?.normalizedPercent ??
@@ -692,11 +751,16 @@ function summarizeSource(source, openMounts, segments, deviceId, snapshots) {
       const used = toFiniteNumberOrNull(segment.usedLengthMm);
       return sum + (used ?? 0);
     }, 0),
-    itemKeeperEligibleUsageCount: itemKeeperEligibleSegments.length,
-    itemKeeperEligibleUsedLengthMm: itemKeeperEligibleSegments.reduce((sum, segment) => {
+    itemKeeperDigestConsistentUsageCount: itemKeeperDigestConsistentSegments.length,
+    itemKeeperDigestConsistentUsedLengthMm: itemKeeperDigestConsistentSegments.reduce((sum, segment) => {
       const used = toFiniteNumberOrNull(segment.usedLengthMm);
       return sum + (used ?? 0);
     }, 0),
+    itemKeeperFixtureAcceptedUsageCount: itemKeeperFixtureAcceptedSegments.length,
+    itemKeeperRuntimeCertifiedUsageCount: itemKeeperRuntimeCertifiedSegments.length,
+    itemKeeperRuntimeCertifiedUsedLengthMm: 0,
+    itemKeeperEligibleUsageCount: itemKeeperRuntimeCertifiedSegments.length,
+    itemKeeperEligibleUsedLengthMm: 0,
     latestUsageSegments: matchingSegments.slice(-5).map((segment) => ({
       segmentId: toText(segment.segmentId),
       printJobId: toText(segment.printJobId),
@@ -830,12 +894,24 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
       jobMaterialSegmentCount: scopedSegments.length,
       sourceSpecificUsageCount: sources.reduce((sum, source) => sum + source.sourceSpecificUsageCount, 0),
       sourceSpecificUsedLengthMm: sources.reduce((sum, source) => sum + source.sourceSpecificUsedLengthMm, 0),
+      itemKeeperDigestConsistentSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperDigestConsistentUsageCount, 0),
+      itemKeeperDigestConsistentUsedLengthMm: sources.reduce((sum, source) => sum + source.itemKeeperDigestConsistentUsedLengthMm, 0),
+      itemKeeperFixtureAcceptedSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperFixtureAcceptedUsageCount, 0),
+      itemKeeperRuntimeCertifiedSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperRuntimeCertifiedUsageCount, 0),
+      itemKeeperRuntimeCertifiedUsedLengthMm: sources.reduce((sum, source) => sum + source.itemKeeperRuntimeCertifiedUsedLengthMm, 0),
       itemKeeperEligibleSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperEligibleUsageCount, 0),
       itemKeeperEligibleUsedLengthMm: sources.reduce((sum, source) => sum + source.itemKeeperEligibleUsedLengthMm, 0),
     },
     certificationReadiness: {
       canRunGate18_9IShadowAccounting: multiSourceExpected && sources.length > 0 && loadedWithoutManagedMountCount === 0 && sourceAwareMountedCount > 0,
-      canProjectItemKeeperSourceUsage: sources.some((source) => source.itemKeeperEligibleUsageCount > 0),
+      canProjectItemKeeperSourceUsage: sources.some((source) => source.itemKeeperRuntimeCertifiedUsageCount > 0),
+      itemKeeperProjectionEvidenceStatus: sources.some((source) => source.itemKeeperRuntimeCertifiedUsageCount > 0)
+        ? "runtime-registry-certified"
+        : sources.some((source) => source.itemKeeperDigestConsistentUsageCount > 0)
+          ? "digest-consistent-only"
+          : sources.some((source) => source.itemKeeperFixtureAcceptedUsageCount > 0)
+            ? "fixture-accepted-only"
+            : "none",
       managedRemainingDebitAllowed: false,
       reasons,
     },
@@ -892,7 +968,7 @@ export function analyzeMaterialAccountingExport(exportPayload, options = {}) {
   const hasGate18_9IEvidence = deviceSummaries.some((device) => (
     device.multiSourceExpected &&
     device.printBinding.printStartSnapshotCount > 0 &&
-    device.printBinding.itemKeeperEligibleSegmentCount > 0
+    device.printBinding.itemKeeperDigestConsistentSegmentCount > 0
   ));
   if (hasMultiSourceAccountingTarget && !data.materialAccountingSpoolMountStore) {
     warnings.push({

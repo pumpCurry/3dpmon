@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1632 (PR #440)
+ * @version 1.390.1634 (PR #440)
  * @since   1.390.1632 (PR #440)
- * @lastModified 2026-09-02 10:22:00
+ * @lastModified 2026-09-02 09:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -29,6 +29,7 @@ import {
 } from "../../3dp_lib/printer_core/dashboard_itemkeeper_source_usage_projection_certification.js";
 import {
   parseK2MaterialUsedSourceCsv,
+  resolveK2MaterialUsedSourceCsv,
 } from "../../3dp_lib/printer_core/dashboard_material_used_csv_parser.js";
 
 /**
@@ -244,6 +245,38 @@ describe("parseK2MaterialUsedSourceCsv", () => {
       reasons: [],
     });
   });
+
+  it("CSV parserは空fieldを0mmへ詰めずinvalidとして返す", () => {
+    const parsed = parseK2MaterialUsedSourceCsv("3210,,6543", { expectedCount: 3 });
+
+    expect(parsed).toMatchObject({
+      ok: false,
+      parts: ["3210", "", "6543"],
+      usedLengthMm: [3210, 6543],
+    });
+    expect(parsed.reasons).toContain("material-used-source-empty-field");
+  });
+
+  it("CSV parserは先頭/末尾empty fieldと非decimal表現をinvalidとして返す", () => {
+    const leading = parseK2MaterialUsedSourceCsv(",3210", { expectedCount: 2 });
+    const trailing = parseK2MaterialUsedSourceCsv("3210,", { expectedCount: 2 });
+    const hexadecimal = parseK2MaterialUsedSourceCsv("0x10,3210", { expectedCount: 2 });
+
+    expect(leading.reasons).toContain("material-used-source-empty-field");
+    expect(trailing.reasons).toContain("material-used-source-empty-field");
+    expect(hexadecimal.reasons).toContain("usage-length-invalid");
+    expect(hexadecimal.usedLengthMm).toEqual([3210]);
+  });
+
+  it("materialUsed CSV resolverはruntime/fixture共通のfield precedenceで抽出する", () => {
+    const raw = resolveK2MaterialUsedSourceCsv({
+      materialUsed: "111,222",
+      materialUsedSourceCsv: "333,444",
+      raw: { materialUsed: "555,666" },
+    });
+
+    expect(raw).toBe("111,222");
+  });
 });
 
 describe("evaluateItemKeeperSourceUsageLiveFixture", () => {
@@ -308,6 +341,83 @@ describe("evaluateItemKeeperSourceUsageLiveFixture", () => {
       canRegisterProjection: false,
       canProjectItemKeeper: false,
     });
+  });
+
+  it("expectedSourceOrderの空使用量をconfirmed-unused 0mmとして受理しない", () => {
+    const expectedSourceOrder = createFixtureEvidence().expectedSourceOrder.map((entry, index) => (
+      index === 1 ? { ...entry, usedLengthMm: "" } : { ...entry }
+    ));
+    const result = evaluateItemKeeperSourceUsageLiveFixture({
+      fixtureEvidence: createFixtureEvidence({ expectedSourceOrder }),
+      printStartSnapshots: createPrintStartSnapshots(),
+      jobMaterialSegments: createJobMaterialSegments(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("fixture-rejected");
+    expect(result.errors).toContain("expected-source-order-mismatch");
+    expect(result.errors).toContain("confirmed-unused-zero-length-required");
+  });
+
+  it("segment側のnull/空使用量をconfirmed-unused 0mmとして受理しない", () => {
+    const segments = createJobMaterialSegments().map((entry, index) => (
+      index === 1 ? { ...entry, usedLengthMm: null } : { ...entry }
+    ));
+    const result = evaluateItemKeeperSourceUsageLiveFixture({
+      fixtureEvidence: createFixtureEvidence(),
+      printStartSnapshots: createPrintStartSnapshots(),
+      jobMaterialSegments: segments,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain("expected-source-order-mismatch");
+  });
+
+  it("order/toolIdの欠損や重複があるsource orderをrejectする", () => {
+    const missingOrder = createFixtureEvidence().expectedSourceOrder.map((entry, index) => (
+      index === 0 ? { ...entry, order: null } : { ...entry }
+    ));
+    const duplicateOrder = createFixtureEvidence().expectedSourceOrder.map((entry, index) => (
+      index === 1 ? { ...entry, order: 0 } : { ...entry }
+    ));
+    const duplicateAlias = createFixtureEvidence().expectedSourceOrder.map((entry, index) => (
+      index === 1 ? { ...entry, protocolToolAlias: "T1A" } : { ...entry }
+    ));
+
+    const missingResult = evaluateItemKeeperSourceUsageLiveFixture({
+      fixtureEvidence: createFixtureEvidence({ expectedSourceOrder: missingOrder }),
+      printStartSnapshots: createPrintStartSnapshots(),
+      jobMaterialSegments: createJobMaterialSegments(),
+    });
+    const duplicateOrderResult = evaluateItemKeeperSourceUsageLiveFixture({
+      fixtureEvidence: createFixtureEvidence({ expectedSourceOrder: duplicateOrder }),
+      printStartSnapshots: createPrintStartSnapshots(),
+      jobMaterialSegments: createJobMaterialSegments(),
+    });
+    const duplicateAliasResult = evaluateItemKeeperSourceUsageLiveFixture({
+      fixtureEvidence: createFixtureEvidence({ expectedSourceOrder: duplicateAlias }),
+      printStartSnapshots: createPrintStartSnapshots(),
+      jobMaterialSegments: createJobMaterialSegments(),
+    });
+
+    expect(missingResult.errors).toContain("expected-source-order-explicit-values-required");
+    expect(duplicateOrderResult.errors).toContain("duplicate-expected-source-order");
+    expect(duplicateAliasResult.errors).toContain("duplicate-expected-tool-alias");
+  });
+
+  it("fixture raw evidenceとhistory resolverのrawが一致しない場合はrejectする", () => {
+    const result = evaluateItemKeeperSourceUsageLiveFixture({
+      fixtureEvidence: createFixtureEvidence(),
+      printStartSnapshots: createPrintStartSnapshots(),
+      jobMaterialSegments: createJobMaterialSegments(),
+      rawHistoryEntry: {
+        materialUsed: "999,0,6543",
+        materialUsedSourceCsv: "3210,0,6543",
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain("fixture-raw-material-used-mismatch");
   });
 
   it("reviewedCommitがfull SHAでないlive fixtureはrejectする", () => {

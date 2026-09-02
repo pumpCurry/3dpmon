@@ -12,11 +12,12 @@
  * - CSV解析versionとsource順序profileを分離してfixture/runtime双方へ提供する
  *
  * 【公開関数一覧】
+ * - {@link resolveK2MaterialUsedSourceCsv}：K2履歴entryからmaterialUsed CSV候補を抽出
  * - {@link parseK2MaterialUsedSourceCsv}：K2 materialUsed CSVをsource別使用量へ変換
  *
- * @version 1.390.1632 (PR #440)
+ * @version 1.390.1634 (PR #440)
  * @since   1.390.1632 (PR #440)
- * @lastModified 2026-09-02 10:26:00
+ * @lastModified 2026-09-02 09:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -39,6 +40,38 @@ export const K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE = "print-start-binding-aut
  */
 function toTrimmedString(value) {
   return String(value ?? "").trim();
+}
+
+/**
+ * K2/Creality履歴entryからsource-specific materialUsed CSVを抽出する。
+ *
+ * 【詳細説明】
+ * - runtimeとfixture validatorでraw field precedenceがずれると、fixtureで検証した文字列と
+ *   本番runtimeが解析する文字列が変わってしまう。
+ * - そのため、既存runtimeのprecedenceをこのpure helperへ集約し、両経路から同じ順序で参照する。
+ *
+ * @function resolveK2MaterialUsedSourceCsv
+ * @param {Object|null|undefined} historyEntry - K2/Crealityのprint history entry候補。
+ * @returns {string} 最初に見つかった空でないmaterialUsed CSV文字列。
+ * @example
+ * const raw = resolveK2MaterialUsedSourceCsv(historyEntry);
+ */
+export function resolveK2MaterialUsedSourceCsv(historyEntry) {
+  const candidates = [
+    historyEntry?.materialUsed,
+    historyEntry?.materialUsedSourceCsv,
+    historyEntry?.sourceMaterialUsedCsv,
+    historyEntry?.raw?.materialUsed,
+    historyEntry?.materialUsedCsv,
+    historyEntry?.sourceMaterialUsed,
+  ];
+  for (const candidate of candidates) {
+    const value = toTrimmedString(candidate);
+    if (value) {
+      return value;
+    }
+  }
+  return "";
 }
 
 /**
@@ -83,13 +116,20 @@ export function parseK2MaterialUsedSourceCsv(rawValue, options = {}) {
 
   const parts = rawMaterialUsed
     .split(",")
-    .map((part) => part.trim())
-    .filter((part) => part !== "");
+    .map((part) => part.trim());
   if (expectedCount !== null && parts.length !== expectedCount) {
     reasons.push("material-used-source-count-mismatch");
   }
   const usedLengthMm = [];
   for (const part of parts) {
+    if (part === "") {
+      reasons.push("material-used-source-empty-field");
+      continue;
+    }
+    if (!/^\d+(?:\.\d+)?$/.test(part)) {
+      reasons.push("usage-length-invalid");
+      continue;
+    }
     const numeric = Number(part);
     if (!Number.isFinite(numeric) || numeric < 0) {
       reasons.push("usage-length-invalid");

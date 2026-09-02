@@ -343,6 +343,14 @@ Gate 18.9J-1 では、ItemKeeper source-aware projection を本番送信へ解�
 - `fixtureEvidence.reviewedCommit` はfull 40-hex SHAを必須とする。
 - `expectedSourceOrder.length`、CSV part数、print-start snapshot数、
   `JobMaterialSegment`数は一致しなければならない。
+- CSV parserはruntime/fixture共通の `resolveK2MaterialUsedSourceCsv()` でraw値を選び、
+  fixture rawと履歴rawが両方ある場合は同一文字列でなければならない。
+- CSVのempty field、指数表記、hex表記はsource位置の詰め替えを防ぐためrejectする。
+- `expectedSourceOrder.order` / `toolId` は明示された非負整数を必須とし、
+  `null` / `""` を0へ補正しない。
+- `expectedSourceOrder.usedLengthMm` と `JobMaterialSegment.usedLengthMm` は明示された
+  非負有限数を必須とし、`null` / `""` / `undefined` を0mmへ補正しない。
+- `expectedSourceOrder` 内の `order` / `protocolToolAlias` / `snapshotId` は重複不可。
 - `observed-used` sourceは `usedLengthMm > 0`、`confirmed-unused` sourceは
   `usedLengthMm === 0` を要求する。
 - `debit.status:"eligible"` はsource-aware projection fixtureの必須条件だが、

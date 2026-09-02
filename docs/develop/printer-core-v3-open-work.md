@@ -46,12 +46,15 @@ printer idle観測を更新しない。
 Gate 18.9Iの実機export確認には `scripts/analyze_material_accounting_export.mjs` を使う。
 このanalyzerはread-onlyで、K2/CFSのMaterialSource観測、legacy `hostSpoolMap` 1本割当、
 Universal `SpoolMount`、print-start snapshot、`JobMaterialSegment`、ItemKeeper source usage
-projection可能性を分けてreportする。`sourceSpecificUsageCount` はsource参照があるsegment数、
-`itemKeeperEligibleSegmentCount` は同一device + printJobIdのprint-start snapshot、resolved
-`spoolId`、`observed-used` / `confirmed-unused`、有限かつ0以上のused lengthを満たすsegment数として
-別々に読む。Gate 18.9Iの `evidence-present` は対象multi-source deviceにscopeした
-print-start snapshotとeligible segmentが揃った場合だけで、別deviceのsegmentやglobalな
-source alias一致では成立しない。K2/CFSでloaded sourceがあるのにsource別mountが無い場合は
+projection evidenceを分けてreportする。`sourceSpecificUsageCount` はsource参照があるsegment数、
+`itemKeeperDigestConsistentSegmentCount` は同一device + printJobIdのprint-start snapshot、
+resolved `spoolId`、`observed-used` / `confirmed-unused`、有限かつ0以上のused length、
+debit eligible、かつexport内projection digest整合を満たすsegment数として別々に読む。
+export analyzerはprocess-local runtime registry membershipを証明できないため、
+`canProjectItemKeeperSourceUsage` と旧互換の `itemKeeperEligibleSegmentCount` は
+runtime-certified evidenceがない限りfalse/0にする。Gate 18.9Iの `evidence-present` は
+対象multi-source deviceにscopeしたprint-start snapshotとdigest-consistent segmentが揃った場合だけで、
+別deviceのsegmentやglobalなsource alias一致では成立しない。K2/CFSでloaded sourceがあるのにsource別mountが無い場合は
 `loaded-source-managed-mount-missing`、multi-source機にlegacy 1本割当だけが残る場合は
 `legacy-single-spool-map-present-for-multi-source-device` として警告し、legacy 1本割当を
 source-aware mountとして扱わない。
@@ -62,7 +65,9 @@ Gate 18.9J-1では、ItemKeeper source-aware projectionを本番送信へ解禁�
 `print-start-binding-authority-order:v1` として保存済みprint-start snapshotの
 `bindingAuthority.tool.order` へ対応付ける。fixture evaluatorは
 `expectedSourceOrder`、print-start snapshots、`JobMaterialSegment`、raw CSVの件数と順序を
-print result set全体で照合し、`fixture-accepted` receiptを返す。ただしreceiptの
+print result set全体で照合し、`fixture-accepted` receiptを返す。CSVのempty fieldや
+`null` / `""` used lengthは0mmへ補正せずrejectし、fixture rawと履歴rawが両方ある場合は
+runtime共通resolverで選ばれるraw文字列との一致を要求する。ただしreceiptの
 `capability.canRegisterProjection` と `capability.canProjectItemKeeper` は常にfalseであり、
 runtime `module-owned-live-certification-registry` へdigestを登録しない。production issuerと
 ItemKeeper source-aware `jobs[].filaments[]` 送信解禁は、review済みfixture registryを

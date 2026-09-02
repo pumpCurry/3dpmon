@@ -123,11 +123,15 @@ compatibility, Universal `SpoolMount` coverage, print-start snapshots, and
 `JobMaterialSegment` counts, but it must not migrate mounts, debit spools, or
 enable physical CFS commands.
 For review, `sourceSpecificUsageCount` only proves that a segment references the
-source; ItemKeeper projection and Gate evidence require the stricter
-`itemKeeperEligibleUsageCount` / `itemKeeperEligibleSegmentCount` values. Those
-eligible counts are scoped to the target multi-source device and require a
-matching print-start snapshot, same `printJobId`, same `deviceId`, a resolved
-`spoolId`, and finite non-negative usage.
+source. Gate evidence uses the stricter
+`itemKeeperDigestConsistentUsageCount` / `itemKeeperDigestConsistentSegmentCount`
+values. Those digest-consistent counts are scoped to the target multi-source
+device and require a matching print-start snapshot, same `printJobId`, same
+`deviceId`, a resolved `spoolId`, debit eligibility, finite non-negative usage,
+and a digest-consistent projection receipt in the export. The read-only analyzer
+cannot prove process-local runtime registry membership, so
+`canProjectItemKeeperSourceUsage` remains false unless a later production issuer
+exports runtime-certified evidence.
 
 Required sequence:
 

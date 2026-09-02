@@ -17,9 +17,9 @@
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  * - {@link createMaterialAccountingPrintBindingRuntimeForTest}：test-only DI runtimeを生成
  *
- * @version 1.390.1632 (PR #440)
+ * @version 1.390.1634 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-02 10:38:00
+ * @lastModified 2026-09-02 09:58:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -35,6 +35,7 @@ import {
 } from "./dashboard_data_schema_v3.js";
 import {
   parseK2MaterialUsedSourceCsv,
+  resolveK2MaterialUsedSourceCsv,
 } from "./dashboard_material_used_csv_parser.js";
 import {
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
@@ -496,14 +497,7 @@ function getSnapshotAuthoritySource(snapshot) {
  * @returns {{ok:boolean,materialUsages:Object[],rawMaterialUsed:string,parserVersion:string,sourceOrderingProfile:string,reasons:string[]}} source-specific usage候補。
  */
 function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
-  const raw = toTrimmedString(
-    historyEntry?.materialUsed ||
-    historyEntry?.materialUsedSourceCsv ||
-    historyEntry?.sourceMaterialUsedCsv ||
-    historyEntry?.raw?.materialUsed ||
-    historyEntry?.materialUsedCsv ||
-    historyEntry?.sourceMaterialUsed
-  );
+  const raw = resolveK2MaterialUsedSourceCsv(historyEntry);
   const snapshots = Array.isArray(orderedSnapshots) ? orderedSnapshots : [];
   const parsed = parseK2MaterialUsedSourceCsv(raw, {
     expectedCount: snapshots.length,

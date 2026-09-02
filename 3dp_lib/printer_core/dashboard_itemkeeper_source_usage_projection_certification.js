@@ -23,9 +23,9 @@
  * - {@link isItemKeeperProjectionCertified}：segmentがregistry認証済みか判定
  * - {@link evaluateItemKeeperSourceUsageLiveFixture}：live fixture result setをreceipt化
  *
- * @version 1.390.1632 (PR #440)
+ * @version 1.390.1634 (PR #440)
  * @since   1.390.1631 (PR #440)
- * @lastModified 2026-09-02 10:33:00
+ * @lastModified 2026-09-02 09:58:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2でreviewed fixture registryとproduction issuer enableを追加する
@@ -43,6 +43,7 @@ import {
   K2_MATERIAL_USED_CSV_PARSER_VERSION,
   K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE,
   parseK2MaterialUsedSourceCsv,
+  resolveK2MaterialUsedSourceCsv,
 } from "./dashboard_material_used_csv_parser.js";
 
 /** ItemKeeper source-aware projectionのmodule-owned認証authority名 */
@@ -150,6 +151,70 @@ function createFixtureCapability() {
 }
 
 /**
+ * fixture numeric fieldを明示的な非負整数として読む。
+ *
+ * 【詳細説明】
+ * - `Number(null)`や`Number("")`が0になる暗黙変換を避ける。
+ * - source orderやtool IDは順序対応のauthorityなので、未観測値をfallback 0として扱わない。
+ *
+ * @private
+ * @function toStrictNonNegativeIntegerOrNull
+ * @param {*} value - 数値候補。
+ * @returns {number|null} 明示的な非負整数、またはnull。
+ */
+function toStrictNonNegativeIntegerOrNull(value) {
+  const text = toTrimmedString(value);
+  if (!/^\d+$/.test(text)) {
+    return null;
+  }
+  const numeric = Number(text);
+  return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+/**
+ * fixture numeric fieldを明示的な非負有限数として読む。
+ *
+ * 【詳細説明】
+ * - 0mmはconfirmed-unusedとして意味を持つが、null/undefined/空文字は未知値なので0へ補正しない。
+ *
+ * @private
+ * @function toStrictNonNegativeNumberOrNull
+ * @param {*} value - 数値候補。
+ * @returns {number|null} 明示的な非負有限数、またはnull。
+ */
+function toStrictNonNegativeNumberOrNull(value) {
+  const text = toTrimmedString(value);
+  if (!/^\d+(?:\.\d+)?$/.test(text)) {
+    return null;
+  }
+  const numeric = Number(text);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+
+/**
+ * 配列内に重複する非空値があるか判定する。
+ *
+ * @private
+ * @function hasDuplicateObservedValue
+ * @param {Array<*>} values - 重複確認する値配列。
+ * @returns {boolean} 重複があればtrue。
+ */
+function hasDuplicateObservedValue(values) {
+  const seen = new Set();
+  for (const value of values) {
+    const key = toTrimmedString(value);
+    if (!key) {
+      continue;
+    }
+    if (seen.has(key)) {
+      return true;
+    }
+    seen.add(key);
+  }
+  return false;
+}
+
+/**
  * snapshotのauthority orderを取得する。
  *
  * @private
@@ -159,8 +224,20 @@ function createFixtureCapability() {
  * @returns {number} source order。
  */
 function resolveFixtureSnapshotOrder(snapshot, fallbackOrder) {
-  const order = Number(snapshot?.bindingAuthority?.tool?.order ?? snapshot?.order);
-  return Number.isFinite(order) ? order : fallbackOrder;
+  const order = toStrictNonNegativeIntegerOrNull(snapshot?.bindingAuthority?.tool?.order ?? snapshot?.order);
+  return order !== null ? order : fallbackOrder;
+}
+
+/**
+ * snapshotのauthority orderをfallbackなしで取得する。
+ *
+ * @private
+ * @function resolveFixtureSnapshotStrictOrder
+ * @param {Object|null|undefined} snapshot - print-start snapshot候補。
+ * @returns {number|null} 明示的なsource order。
+ */
+function resolveFixtureSnapshotStrictOrder(snapshot) {
+  return toStrictNonNegativeIntegerOrNull(snapshot?.bindingAuthority?.tool?.order ?? snapshot?.order);
 }
 
 /**
@@ -188,8 +265,7 @@ function resolveFixtureSnapshotToolAlias(snapshot) {
  * @returns {number|null} tool ID。
  */
 function resolveFixtureSnapshotToolId(snapshot) {
-  const toolId = Number(snapshot?.bindingAuthority?.tool?.toolId ?? snapshot?.toolId);
-  return Number.isFinite(toolId) ? toolId : null;
+  return toStrictNonNegativeIntegerOrNull(snapshot?.bindingAuthority?.tool?.toolId ?? snapshot?.toolId);
 }
 
 /**
@@ -247,15 +323,15 @@ function resolveFixtureSnapshotSpoolId(snapshot) {
  */
 function normalizeFixtureExpectedSourceOrderEntry(entry) {
   return {
-    order: Number.isFinite(Number(entry?.order)) ? Number(entry.order) : null,
-    toolId: Number.isFinite(Number(entry?.toolId)) ? Number(entry.toolId) : null,
+    order: toStrictNonNegativeIntegerOrNull(entry?.order),
+    toolId: toStrictNonNegativeIntegerOrNull(entry?.toolId),
     protocolToolAlias: toTrimmedString(entry?.protocolToolAlias || entry?.toolAlias),
     materialSourceId: toTrimmedString(entry?.materialSourceId),
     mountId: toTrimmedString(entry?.mountId),
     spoolId: toTrimmedString(entry?.spoolId),
     snapshotId: toTrimmedString(entry?.snapshotId),
     bindingAuthorityDigest: toTrimmedString(entry?.bindingAuthorityDigest),
-    usedLengthMm: Number.isFinite(Number(entry?.usedLengthMm)) ? Number(entry.usedLengthMm) : null,
+    usedLengthMm: toStrictNonNegativeNumberOrNull(entry?.usedLengthMm),
     usageState: toTrimmedString(entry?.usageState),
     locator: entry?.locator && typeof entry.locator === "object" && !Array.isArray(entry.locator)
       ? cloneJsonValue(entry.locator)
@@ -467,8 +543,8 @@ function validateLiveFixtureSourceOrder(input) {
   const segments = (Array.isArray(input.jobMaterialSegments) ? input.jobMaterialSegments : [])
     .slice()
     .sort((a, b) => {
-      const orderA = Number.isFinite(Number(a?.order)) ? Number(a.order) : 0;
-      const orderB = Number.isFinite(Number(b?.order)) ? Number(b.order) : 0;
+      const orderA = toStrictNonNegativeIntegerOrNull(a?.order) ?? 0;
+      const orderB = toStrictNonNegativeIntegerOrNull(b?.order) ?? 0;
       if (orderA !== orderB) return orderA - orderB;
       return toTrimmedString(a?.segmentId).localeCompare(toTrimmedString(b?.segmentId));
     });
@@ -476,6 +552,18 @@ function validateLiveFixtureSourceOrder(input) {
   const counts = [expectedOrder.length, snapshots.length, segments.length, input.parsedUsage.usedLengthMm.length];
   if (!counts.every((count) => count === expectedOrder.length)) {
     errors.push("source-result-set-count-mismatch");
+  }
+  if (expectedOrder.some((entry) => entry.order === null || entry.toolId === null || entry.usedLengthMm === null)) {
+    errors.push("expected-source-order-explicit-values-required");
+  }
+  if (hasDuplicateObservedValue(expectedOrder.map((entry) => entry.order))) {
+    errors.push("duplicate-expected-source-order");
+  }
+  if (hasDuplicateObservedValue(expectedOrder.map((entry) => entry.protocolToolAlias))) {
+    errors.push("duplicate-expected-tool-alias");
+  }
+  if (hasDuplicateObservedValue(expectedOrder.map((entry) => entry.snapshotId))) {
+    errors.push("duplicate-expected-snapshot-id");
   }
   const deviceId = toTrimmedString(fixtureEvidence.device?.deviceId);
   const printJobId = toTrimmedString(fixtureEvidence.print?.printJobId);
@@ -486,12 +574,15 @@ function validateLiveFixtureSourceOrder(input) {
     const snapshot = snapshots[index];
     const segment = segments[index];
     const parsedUsedLengthMm = input.parsedUsage.usedLengthMm[index];
+    const segmentToolId = toStrictNonNegativeIntegerOrNull(segment?.toolId);
+    const segmentOrder = toStrictNonNegativeIntegerOrNull(segment?.order);
+    const segmentUsedLengthMm = toStrictNonNegativeNumberOrNull(segment?.usedLengthMm);
     const snapshotMatches = snapshot &&
       toTrimmedString(snapshot.snapshotId) === expected.snapshotId &&
       toTrimmedString(snapshot.deviceId) === deviceId &&
       toTrimmedString(snapshot.printJobId) === printJobId &&
       toTrimmedString(snapshot.printPlanId) === printPlanId &&
-      resolveFixtureSnapshotOrder(snapshot, index) === expected.order &&
+      resolveFixtureSnapshotStrictOrder(snapshot) === expected.order &&
       resolveFixtureSnapshotToolId(snapshot) === expected.toolId &&
       resolveFixtureSnapshotToolAlias(snapshot) === expected.protocolToolAlias &&
       resolveFixtureSnapshotMaterialSourceId(snapshot) === expected.materialSourceId &&
@@ -502,13 +593,13 @@ function validateLiveFixtureSourceOrder(input) {
       toTrimmedString(segment.deviceId) === deviceId &&
       toTrimmedString(segment.printJobId) === printJobId &&
       toTrimmedString(segment.printPlanId) === printPlanId &&
-      Number(segment.toolId) === expected.toolId &&
+      segmentToolId === expected.toolId &&
       toTrimmedString(segment.protocolToolAlias || segment.toolAlias) === expected.protocolToolAlias &&
-      Number(segment.order) === expected.order &&
+      segmentOrder === expected.order &&
       toTrimmedString(segment.materialSourceId) === expected.materialSourceId &&
       toTrimmedString(segment.mountId) === expected.mountId &&
       toTrimmedString(segment.spoolId) === expected.spoolId &&
-      Number(segment.usedLengthMm) === expected.usedLengthMm &&
+      segmentUsedLengthMm === expected.usedLengthMm &&
       Number(parsedUsedLengthMm) === expected.usedLengthMm &&
       toTrimmedString(segment.usageState) === expected.usageState;
     if (!snapshotMatches || !segmentMatches) {
@@ -555,13 +646,18 @@ function validateLiveFixtureSourceOrder(input) {
 export function evaluateItemKeeperSourceUsageLiveFixture(input = {}) {
   const fixtureEvidence = input.fixtureEvidence;
   const envelopeErrors = validateLiveFixtureEvidenceEnvelope(fixtureEvidence);
-  const rawMaterialUsed = toTrimmedString(
-    fixtureEvidence?.raw?.materialUsedSourceCsv ||
-    input.rawHistoryEntry?.materialUsedSourceCsv ||
-    input.rawHistoryEntry?.materialUsed ||
-    input.rawHistoryEntry?.materialUsedCsv ||
-    input.rawHistoryEntry?.sourceMaterialUsed
-  );
+  const fixtureRawMaterialUsed = toTrimmedString(fixtureEvidence?.raw?.materialUsedSourceCsv);
+  const historyRawMaterialUsed = resolveK2MaterialUsedSourceCsv(input.rawHistoryEntry);
+  const rawMaterialUsed = fixtureRawMaterialUsed || historyRawMaterialUsed;
+  const rawMaterialUsedErrors = [];
+  if (
+    input.rawHistoryEntry &&
+    fixtureRawMaterialUsed &&
+    historyRawMaterialUsed &&
+    fixtureRawMaterialUsed !== historyRawMaterialUsed
+  ) {
+    rawMaterialUsedErrors.push("fixture-raw-material-used-mismatch");
+  }
   const expectedCount = Array.isArray(fixtureEvidence?.expectedSourceOrder)
     ? fixtureEvidence.expectedSourceOrder.length
     : null;
@@ -581,6 +677,7 @@ export function evaluateItemKeeperSourceUsageLiveFixture(input = {}) {
     observedSourceOrder: sourceOrderValidation.observedSourceOrder,
     errors: [
       ...envelopeErrors,
+      ...rawMaterialUsedErrors,
       ...parsedUsage.reasons,
       ...sourceOrderValidation.errors,
     ],

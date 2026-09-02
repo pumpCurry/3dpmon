@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1627 (PR #440)
+ * @version 1.390.1634 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 07:55:51
+ * @lastModified 2026-09-02 09:58:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -353,28 +353,37 @@ describe("analyze_material_accounting_export", () => {
     });
     expect(device.certificationReadiness).toMatchObject({
       canRunGate18_9IShadowAccounting: true,
-      canProjectItemKeeperSourceUsage: true,
+      canProjectItemKeeperSourceUsage: false,
+      itemKeeperProjectionEvidenceStatus: "digest-consistent-only",
       managedRemainingDebitAllowed: false,
       reasons: [],
     });
     expect(device.printBinding).toMatchObject({
       printStartSnapshotCount: 1,
       jobMaterialSegmentCount: 2,
-      itemKeeperEligibleSegmentCount: 2,
-      itemKeeperEligibleUsedLengthMm: 9753,
+      itemKeeperDigestConsistentSegmentCount: 2,
+      itemKeeperDigestConsistentUsedLengthMm: 9753,
+      itemKeeperRuntimeCertifiedSegmentCount: 0,
+      itemKeeperRuntimeCertifiedUsedLengthMm: 0,
+      itemKeeperEligibleSegmentCount: 0,
+      itemKeeperEligibleUsedLengthMm: 0,
     });
     expect(device.sources.map((source) => [
       source.displayLabel,
       source.managedMountCount,
       source.sourceSpecificUsageCount,
       source.sourceSpecificUsedLengthMm,
+      source.itemKeeperDigestConsistentUsageCount,
+      source.itemKeeperDigestConsistentUsedLengthMm,
+      source.itemKeeperRuntimeCertifiedUsageCount,
+      source.itemKeeperRuntimeCertifiedUsedLengthMm,
       source.itemKeeperEligibleUsageCount,
       source.itemKeeperEligibleUsedLengthMm,
       source.deviceReportedRemainingPercent,
     ])).toEqual([
-      ["1A", 1, 1, 3210, 1, 3210, 70],
-      ["1B", 1, 1, 6543, 1, 6543, 88],
-      ["external", 0, 0, 0, 0, 0, null],
+      ["1A", 1, 1, 3210, 1, 3210, 0, 0, 0, 0, 70],
+      ["1B", 1, 1, 6543, 1, 6543, 0, 0, 0, 0, 88],
+      ["external", 0, 0, 0, 0, 0, 0, 0, 0, 0, null],
     ]);
   });
 
@@ -460,14 +469,16 @@ describe("analyze_material_accounting_export", () => {
       managedMountCount: 1,
       sourceSpecificUsageCount: 1,
       sourceSpecificUsedLengthMm: 3210,
-      itemKeeperEligibleUsageCount: 1,
-      itemKeeperEligibleUsedLengthMm: 3210,
+      itemKeeperDigestConsistentUsageCount: 1,
+      itemKeeperDigestConsistentUsedLengthMm: 3210,
+      itemKeeperEligibleUsageCount: 0,
+      itemKeeperEligibleUsedLengthMm: 0,
     });
     expect(sourceSummary.managedMounts.map((mount) => mount.spoolId)).toEqual(["spool:a"]);
     expect(device.certificationReadiness.reasons).toEqual([]);
   });
 
-  it("pendingやinvalidなJobMaterialSegmentはItemKeeper projection readyとして扱わない", () => {
+  it("pendingやinvalidなJobMaterialSegmentはItemKeeper projection evidenceとして扱わない", () => {
     const payload = createExportPayload({
       includeMountStore: true,
       includeSegments: true,
@@ -507,6 +518,8 @@ describe("analyze_material_accounting_export", () => {
     expect(device.printBinding).toMatchObject({
       jobMaterialSegmentCount: 3,
       sourceSpecificUsageCount: 3,
+      itemKeeperDigestConsistentSegmentCount: 0,
+      itemKeeperRuntimeCertifiedSegmentCount: 0,
       itemKeeperEligibleSegmentCount: 0,
       itemKeeperEligibleUsedLengthMm: 0,
     });
@@ -514,7 +527,7 @@ describe("analyze_material_accounting_export", () => {
     expect(report.gate18_9I.status).toBe("waiting-live-shadow-accounting");
   });
 
-  it("confirmed-unusedかつ0mmのJobMaterialSegmentはItemKeeper projection readyとして扱う", () => {
+  it("confirmed-unusedかつ0mmのJobMaterialSegmentはdigest-consistent evidenceとして扱うがruntime projection可とは扱わない", () => {
     const payload = createExportPayload({
       includeMountStore: true,
       includeSegments: true,
@@ -532,10 +545,51 @@ describe("analyze_material_accounting_export", () => {
     expect(sourceSummary).toMatchObject({
       sourceSpecificUsageCount: 1,
       sourceSpecificUsedLengthMm: 0,
-      itemKeeperEligibleUsageCount: 1,
-      itemKeeperEligibleUsedLengthMm: 0,
+      itemKeeperDigestConsistentUsageCount: 1,
+      itemKeeperDigestConsistentUsedLengthMm: 0,
+      itemKeeperRuntimeCertifiedUsageCount: 0,
+      itemKeeperEligibleUsageCount: 0,
+    });
+    expect(report.devices[0].certificationReadiness).toMatchObject({
+      canProjectItemKeeperSourceUsage: false,
+      itemKeeperProjectionEvidenceStatus: "digest-consistent-only",
     });
     expect(report.gate18_9I.status).toBe("evidence-present");
+  });
+
+  it("fixture-accepted receiptをsegment projectionへ誤用してもruntime projection可能とは扱わない", () => {
+    const payload = createExportPayload({
+      includeMountStore: true,
+      includeSegments: true,
+    });
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0] = {
+      ...payload.materialAccountingPrintBindingStore.jobMaterialSegments[0],
+      itemKeeperProjection: {
+        status: "fixture-accepted",
+        authority: "itemkeeper-source-usage-live-fixture-evidence",
+        fixtureDigest: "fnv1a128:fixture",
+      },
+    };
+
+    const report = analyzeMaterialAccountingExport(payload);
+    const sourceSummary = report.devices[0].sources.find((entry) => entry.displayLabel === "1A");
+
+    expect(sourceSummary).toMatchObject({
+      sourceSpecificUsageCount: 1,
+      itemKeeperFixtureAcceptedUsageCount: 1,
+      itemKeeperDigestConsistentUsageCount: 0,
+      itemKeeperRuntimeCertifiedUsageCount: 0,
+      itemKeeperEligibleUsageCount: 0,
+    });
+    expect(report.devices[0].certificationReadiness).toMatchObject({
+      canProjectItemKeeperSourceUsage: false,
+      itemKeeperProjectionEvidenceStatus: "digest-consistent-only",
+    });
+    expect(report.devices[0].printBinding).toMatchObject({
+      itemKeeperFixtureAcceptedSegmentCount: 1,
+      itemKeeperRuntimeCertifiedSegmentCount: 0,
+      itemKeeperEligibleSegmentCount: 0,
+    });
   });
 
   it("別deviceのeligible segmentだけではGate18.9I evidence-presentにしない", () => {
@@ -583,6 +637,7 @@ describe("analyze_material_accounting_export", () => {
 
     expect(sourceSummary).toMatchObject({
       sourceSpecificUsageCount: 1,
+      itemKeeperDigestConsistentUsageCount: 0,
       itemKeeperEligibleUsageCount: 0,
       itemKeeperEligibleUsedLengthMm: 0,
     });
