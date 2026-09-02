@@ -58,7 +58,15 @@ function histJob(host, id) { return mockMonitorData.machines[host].printStore.hi
 /** 残量0で印刷開始した OLD（startLen=0, expected=50000）＋一時停止中の切れ文脈をセットアップ */
 function setupEmptyStartPaused({ usedAtSwap = 2000 } = {}) {
   mockMonitorData.machines['h'] = {
-    printStore: { current: { id: '300' }, history: [job(100, 5000), job(200, 6000)] },
+    printStore: {
+      current: { id: '300' },
+      history: [job(100, 5000), job(200, 6000)],
+      historyCoverage: {
+        activeAnchorComplete: true,
+        totalLifetimeComplete: true,
+        source: 'test-complete-history',
+      },
+    },
     storedData: { usedMaterialLength: { rawValue: usedAtSwap }, state: { rawValue: 5 } },
     runtimeData: { state: 5 },
     historyData: [],
@@ -125,7 +133,15 @@ describe('対照: 残量ありの genuine split は従来どおり（回帰防�
 
   it('OLD残量あり(startLen=300000)の paused 交換は per-reel 分割を維持し OLD→0', () => {
     mockMonitorData.machines['h'] = {
-      printStore: { current: { id: '300' }, history: [job(100, 5000), job(200, 6000)] },
+      printStore: {
+        current: { id: '300' },
+        history: [job(100, 5000), job(200, 6000)],
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: true,
+          source: 'test-complete-history',
+        },
+      },
       storedData: { usedMaterialLength: { rawValue: 15000 }, state: { rawValue: 5 } },
       runtimeData: { state: 5 },
       historyData: [],

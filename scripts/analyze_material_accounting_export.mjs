@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1658 (PR #440)
+ * @version 1.390.1659 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 18:32:30
+ * @lastModified 2026-09-02 18:09:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -908,7 +908,11 @@ function createPrintBindingCandidateJobs(snapshots, segments, deviceId, historie
         ...group.histories.map(resolveRecordSessionId),
       ].filter(Boolean))];
       const rawHistoryEntry = group.histories.find((history) => Boolean(resolveK2MaterialUsedSourceCsv(history))) || null;
-      const materialUsedCompletionEvidence = resolveK2MaterialUsedCompletionEvidenceCsv(rawHistoryEntry, group.segments);
+      const materialUsedCompletionEvidence = resolveK2MaterialUsedCompletionEvidenceCsv(
+        rawHistoryEntry,
+        group.segments,
+        { expectedSourceCount: group.snapshots.length }
+      );
       const parsedMaterialUsed = parseK2MaterialUsedSourceCsv(
         materialUsedCompletionEvidence.rawMaterialUsed,
         {

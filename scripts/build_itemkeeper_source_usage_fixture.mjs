@@ -18,9 +18,9 @@
  * - {@link buildItemKeeperSourceUsageFixture}：export payloadからfixture artifactを生成
  * - {@link runItemKeeperSourceUsageFixtureBuilder}：CLI指定ファイルを読み書きする
  *
- * @version 1.390.1658 (PR #440)
+ * @version 1.390.1659 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 18:32:30
+ * @lastModified 2026-09-02 18:09:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2 registry entry追加時にreviewed registry entry skeleton出力を追加する
@@ -916,7 +916,11 @@ export function buildItemKeeperSourceUsageFixture({
   );
   const printPlanId = toText(expectedSourceOrder[0]?.printPlanId || historyEntry?.printPlanId || "");
   const sessionEvidence = createFixtureSessionEvidence({ snapshots, segments, historyEntry });
-  const materialUsedCompletionEvidence = resolveK2MaterialUsedCompletionEvidenceCsv(historyEntry, segments);
+  const materialUsedCompletionEvidence = resolveK2MaterialUsedCompletionEvidenceCsv(
+    historyEntry,
+    segments,
+    { expectedSourceCount: snapshots.length }
+  );
   const rawMaterialUsedSourceCsv = materialUsedCompletionEvidence.rawMaterialUsed;
   const captureBundle = {
     schemaVersion: 1,

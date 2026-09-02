@@ -30,9 +30,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1658 (PR #440)
+ * @version 1.390.1659 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 18:32:30
+ * @lastModified 2026-09-02 18:09:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1976,6 +1976,7 @@ export function recordPrintHistoryFetchCoverage(host, historyWindow) {
   printStore.historyCoverage = {
     ...(printStore.historyCoverage && typeof printStore.historyCoverage === "object" ? printStore.historyCoverage : {}),
     activeAnchorComplete: printStore.historyAuthorityIncomplete === true ? false : activeAnchorComplete,
+    totalLifetimeComplete: printStore.historyCoverage?.totalLifetimeComplete === false ? false : true,
     source: "print-history-fetch",
     observedAt: getCurrentTimestamp(),
     newestPrintJobId,

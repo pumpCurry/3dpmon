@@ -16,9 +16,9 @@
  * - {@link resolveK2MaterialUsedCompletionEvidenceCsv}：履歴rawとsegment完了rawを同じ規則で照合
  * - {@link parseK2MaterialUsedSourceCsv}：K2 materialUsed CSVをsource別使用量へ変換
  *
- * @version 1.390.1658 (PR #440)
+ * @version 1.390.1659 (PR #440)
  * @since   1.390.1632 (PR #440)
- * @lastModified 2026-09-02 18:32:30
+ * @lastModified 2026-09-02 18:09:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -41,6 +41,25 @@ export const K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE = "print-start-binding-aut
  */
 function toTrimmedString(value) {
   return String(value ?? "").trim();
+}
+
+/**
+ * 値を有限数へ変換し、不明値はnullへ正規化する。
+ *
+ * 【詳細説明】
+ * - completionEvidenceに保存されたsourceCount/partCountはdurable fallbackの信頼境界であり、
+ *   数値として解釈できる場合だけ現在のparser結果と照合する。
+ * - 空文字やnullは「古い証跡でfield自体が無い」可能性があるため、ここでは0へ補正せずnullにする。
+ *
+ * @private
+ * @function toFiniteNumberOrNull
+ * @param {*} value - 数値候補。
+ * @returns {number|null} 有限数、または不明を示すnull。
+ */
+function toFiniteNumberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 /**
@@ -96,6 +115,50 @@ function collectSegmentCompletionMaterialUsedCsvValues(segments) {
 }
 
 /**
+ * segment側completionEvidenceのmetadataを現在のparser contractと照合する。
+ *
+ * 【詳細説明】
+ * - retention後にsegment completionEvidenceだけでfixtureを再構築する場合、raw CSVだけでなく、
+ *   そのrawを作ったparser version/source order/source数/part数も同じcontractでなければならない。
+ * - ここで返したreasonはcanonical raw CSVが履歴由来の場合も残す。履歴とdurable証跡が並存している
+ *   ときの不一致は、あとで履歴がretentionされた瞬間にfallbackが別解釈へ変わる兆候だからである。
+ *
+ * @private
+ * @function collectSegmentCompletionMaterialUsedEvidenceReasons
+ * @param {Array<Object>} segments - JobMaterialSegment候補配列。
+ * @param {Object=} options - 照合オプション。
+ * @param {number=} options.expectedSourceCount - print-start snapshot等から得たsource数。
+ * @returns {string[]} completionEvidence metadataに関するfail-closed理由配列。
+ */
+function collectSegmentCompletionMaterialUsedEvidenceReasons(segments, options = {}) {
+  const reasons = [];
+  const expectedSourceCount = Number.isFinite(Number(options.expectedSourceCount))
+    ? Number(options.expectedSourceCount)
+    : null;
+  for (const segment of Array.isArray(segments) ? segments : []) {
+    const evidence = segment?.evidence?.completionEvidence;
+    const rawMaterialUsed = toTrimmedString(evidence?.rawMaterialUsed);
+    if (!evidence || typeof evidence !== "object" || !rawMaterialUsed) continue;
+    if (toTrimmedString(evidence.parserVersion) !== K2_MATERIAL_USED_CSV_PARSER_VERSION) {
+      reasons.push("completion-evidence-parser-version-mismatch");
+    }
+    if (toTrimmedString(evidence.sourceOrderingProfile) !== K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE) {
+      reasons.push("completion-evidence-source-ordering-profile-mismatch");
+    }
+    const sourceCount = toFiniteNumberOrNull(evidence.sourceCount);
+    if (expectedSourceCount !== null && sourceCount !== null && sourceCount !== expectedSourceCount) {
+      reasons.push("completion-evidence-source-count-mismatch");
+    }
+    const partCount = toFiniteNumberOrNull(evidence.partCount);
+    const observedPartCount = rawMaterialUsed.split(",").map((part) => part.trim()).length;
+    if (partCount !== null && partCount !== observedPartCount) {
+      reasons.push("completion-evidence-part-count-mismatch");
+    }
+  }
+  return [...new Set(reasons)];
+}
+
+/**
  * 履歴rawとJobMaterialSegment completion rawからcanonical materialUsed CSVを解決する。
  *
  * 【詳細説明】
@@ -108,14 +171,18 @@ function collectSegmentCompletionMaterialUsedCsvValues(segments) {
  * @function resolveK2MaterialUsedCompletionEvidenceCsv
  * @param {Object|null|undefined} historyEntry - K2/Crealityのprint history entry候補。
  * @param {Array<Object>} segments - 同一jobのJobMaterialSegment候補配列。
+ * @param {Object=} options - durable completionEvidence照合オプション。
+ * @param {number=} options.expectedSourceCount - print-start snapshot等から得たsource数。
  * @returns {{rawMaterialUsed:string,source:string,reasons:string[]}} canonical raw CSVと検証理由。
  * @example
- * const evidence = resolveK2MaterialUsedCompletionEvidenceCsv(historyEntry, segments);
+ * const evidence = resolveK2MaterialUsedCompletionEvidenceCsv(historyEntry, segments, {
+ *   expectedSourceCount: snapshots.length
+ * });
  */
-export function resolveK2MaterialUsedCompletionEvidenceCsv(historyEntry, segments) {
+export function resolveK2MaterialUsedCompletionEvidenceCsv(historyEntry, segments, options = {}) {
   const historyRaw = resolveK2MaterialUsedSourceCsv(historyEntry);
   const segmentRawValues = collectSegmentCompletionMaterialUsedCsvValues(segments);
-  const reasons = [];
+  const reasons = collectSegmentCompletionMaterialUsedEvidenceReasons(segments, options);
   if (segmentRawValues.length > 1) {
     reasons.push("raw-material-used-completion-evidence-conflict");
   }
@@ -133,7 +200,7 @@ export function resolveK2MaterialUsedCompletionEvidenceCsv(historyEntry, segment
     return Object.freeze({
       rawMaterialUsed: segmentRawValues[0],
       source: "job-material-segment-completion-evidence",
-      reasons: Object.freeze([]),
+      reasons: Object.freeze([...new Set(reasons)]),
     });
   }
   return Object.freeze({

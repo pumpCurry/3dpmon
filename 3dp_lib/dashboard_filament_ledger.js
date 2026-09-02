@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1657 (PR #440)
+ * @version 1.390.1659 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-09-02 17:44:30
+ * @lastModified 2026-09-02 18:09:00
  * -----------------------------------------------------------
  */
 
@@ -113,8 +113,9 @@ function _historyForHost(host) {
  */
 function _isHistoryAuthorityIncomplete(host) {
   const printStore = monitorData.machines?.[host]?.printStore;
-  return printStore?.historyAuthorityIncomplete === true ||
-    printStore?.historyCoverage?.activeAnchorComplete === false;
+  if (!printStore) return false;
+  return printStore.historyAuthorityIncomplete === true ||
+    printStore.historyCoverage?.activeAnchorComplete !== true;
 }
 
 /**
@@ -150,10 +151,13 @@ function _isActiveAnchorCoverageProven(host, sinceJobId) {
  * @returns {boolean} 不完全履歴が存在する場合true。
  */
 function _hasAnyIncompleteHistoryAuthority() {
-  return Object.values(monitorData.machines || {}).some((machine) => (
-    machine?.printStore?.historyAuthorityIncomplete === true ||
-    machine?.printStore?.historyCoverage?.activeAnchorComplete === false
-  ));
+  return Object.values(monitorData.machines || {}).some((machine) => {
+    const printStore = machine?.printStore;
+    return Boolean(printStore) && (
+      printStore.historyAuthorityIncomplete === true ||
+      printStore.historyCoverage?.activeAnchorComplete !== true
+    );
+  });
 }
 
 /**
@@ -169,10 +173,13 @@ function _hasAnyIncompleteHistoryAuthority() {
  * @returns {boolean} 総量再計算に使えない履歴が存在する場合true。
  */
 function _hasAnyIncompleteTotalHistoryAuthority() {
-  return Object.values(monitorData.machines || {}).some((machine) => (
-    machine?.printStore?.historyAuthorityIncomplete === true ||
-    machine?.printStore?.historyCoverage?.totalLifetimeComplete === false
-  ));
+  return Object.values(monitorData.machines || {}).some((machine) => {
+    const printStore = machine?.printStore;
+    return Boolean(printStore) && (
+      printStore.historyAuthorityIncomplete === true ||
+      printStore.historyCoverage?.totalLifetimeComplete !== true
+    );
+  });
 }
 
 /**

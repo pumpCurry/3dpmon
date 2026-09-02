@@ -72,7 +72,15 @@ function job(id, usedMm, extra = {}) {
 
 function setupHost(host, { history = [], currentId = '', used = NaN, state = 1 } = {}) {
   mockMonitorData.machines[host] = {
-    printStore: { current: currentId ? { id: currentId } : null, history },
+    printStore: {
+      current: currentId ? { id: currentId } : null,
+      history,
+      historyCoverage: {
+        activeAnchorComplete: true,
+        totalLifetimeComplete: true,
+        source: 'test-complete-history',
+      },
+    },
     storedData: {
       usedMaterialLength: Number.isFinite(used) ? { rawValue: used } : undefined,
       state: { rawValue: state },
