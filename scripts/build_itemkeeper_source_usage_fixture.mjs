@@ -18,9 +18,9 @@
  * - {@link buildItemKeeperSourceUsageFixture}：export payloadからfixture artifactを生成
  * - {@link runItemKeeperSourceUsageFixtureBuilder}：CLI指定ファイルを読み書きする
  *
- * @version 1.390.1641 (PR #440)
+ * @version 1.390.1643 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 13:56:31
+ * @lastModified 2026-09-02 15:11:47
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2 registry entry追加時にreviewed registry entry skeleton出力を追加する
@@ -171,6 +171,29 @@ function resolvePrintJobId(record) {
  */
 function resolvePrintPlanId(record) {
   return toText(record?.printPlanId || record?.planId);
+}
+
+/**
+ * snapshot/segment/historyに残るsession IDを取得する。
+ *
+ * 【詳細説明】
+ * - live captureでは同一deviceでも再接続を跨ぐと別sessionになり得るため、fixture単体で
+ *   certification exportとの同一session性を説明できる観測値を同一keyへ寄せる。
+ *
+ * @private
+ * @function resolveRecordSessionId
+ * @param {Object|null|undefined} record - snapshot / segment / history候補。
+ * @returns {string} session ID。
+ */
+function resolveRecordSessionId(record) {
+  return toText(
+    record?.sessionId ||
+    record?.printerSessionId ||
+    record?.commandSessionId ||
+    record?.startContext?.sessionId ||
+    record?.issuanceEvidence?.sessionId ||
+    record?.uploadReceipt?.sessionId
+  );
 }
 
 /**
@@ -507,9 +530,10 @@ function isConcreteIdentityText(value) {
  * @param {Object} input.device - fixture device metadata。
  * @param {Object|null|undefined} input.certificationPayload - certification payload。
  * @param {Object} input.options - CLI/build options。
+ * @param {Object|null|undefined} input.sessionEvidence - 対象jobのsession evidence。
  * @returns {string[]} identity review blocker配列。
  */
-function createIdentityReviewBlockers({ device, certificationPayload, options }) {
+function createIdentityReviewBlockers({ device, certificationPayload, options, sessionEvidence = null }) {
   const blockers = [];
   const certificationPrinter = resolveCertificationPrinter(certificationPayload);
   if (
@@ -539,7 +563,44 @@ function createIdentityReviewBlockers({ device, certificationPayload, options })
   if (toText(options.firmwareVersion) && device.firmwareVersion && options.firmwareVersion !== device.firmwareVersion) {
     blockers.push("cli-firmware-version-override-conflicts-with-export");
   }
+  const certificationSessionId = toText(certificationPrinter.sessionId);
+  const sessionIds = Array.isArray(sessionEvidence?.sessionIds) ? sessionEvidence.sessionIds : [];
+  if (certificationSessionId && sessionIds.length <= 0) {
+    blockers.push("certification-session-id-missing");
+  } else if (certificationSessionId && sessionIds.length > 1) {
+    blockers.push("candidate-session-id-ambiguous");
+  } else if (certificationSessionId && sessionIds[0] !== certificationSessionId) {
+    blockers.push("certification-session-id-mismatch");
+  }
   return blockers;
+}
+
+/**
+ * 対象jobに紐づくsession evidenceを生成する。
+ *
+ * 【詳細説明】
+ * - print-start snapshot、JobMaterialSegment、print historyの順でsession IDを収集する。
+ * - 1件だけならfixtureの代表sessionIdとして採用し、0件または複数件はreview blocker側で
+ *   certification sessionとの照合理由として扱う。
+ *
+ * @private
+ * @function createFixtureSessionEvidence
+ * @param {Object} input - 入力context。
+ * @param {Object[]} input.snapshots - 対象print-start snapshot配列。
+ * @param {Object[]} input.segments - 対象JobMaterialSegment配列。
+ * @param {Object|null} input.historyEntry - 対象print history entry。
+ * @returns {Object} session evidence。
+ */
+function createFixtureSessionEvidence({ snapshots, segments, historyEntry }) {
+  const sessionIds = [...new Set([
+    ...snapshots.map(resolveRecordSessionId),
+    ...segments.map(resolveRecordSessionId),
+    resolveRecordSessionId(historyEntry),
+  ].filter(Boolean))];
+  return {
+    sessionId: sessionIds.length === 1 ? sessionIds[0] : "",
+    sessionIds,
+  };
 }
 
 /**
@@ -669,6 +730,7 @@ function createExpectedSourceOrder(snapshots, segments) {
  * @param {Object[]} input.expectedSourceOrder - expected source order配列。
  * @param {string} input.captureSha256 - capture artifact SHA-256。
  * @param {Object|null} input.certificationPayload - certification payload。
+ * @param {Object} input.sessionEvidence - 対象jobのsession evidence。
  * @returns {Object} fixture evidence。
  */
 function createFixtureEvidence({
@@ -678,6 +740,7 @@ function createFixtureEvidence({
   expectedSourceOrder,
   captureSha256,
   certificationPayload,
+  sessionEvidence,
 }) {
   const capturedAt = toText(
     options.capturedAt ||
@@ -705,6 +768,8 @@ function createFixtureEvidence({
     print: {
       printJobId: toText(options.printJobId),
       printPlanId: toText(expectedSourceOrder[0]?.printPlanId || historyEntry?.printPlanId || ""),
+      sessionId: toText(sessionEvidence?.sessionId),
+      sessionIds: Array.isArray(sessionEvidence?.sessionIds) ? [...sessionEvidence.sessionIds] : [],
     },
     raw: {
       materialUsedSourceCsv: resolveK2MaterialUsedSourceCsv(historyEntry),
@@ -791,6 +856,7 @@ export function buildItemKeeperSourceUsageFixture({
     snapshots
   );
   const printPlanId = toText(expectedSourceOrder[0]?.printPlanId || historyEntry?.printPlanId || "");
+  const sessionEvidence = createFixtureSessionEvidence({ snapshots, segments, historyEntry });
   const captureBundle = {
     schemaVersion: 1,
     authority: "itemkeeper-source-usage-capture-bundle",
@@ -800,6 +866,8 @@ export function buildItemKeeperSourceUsageFixture({
     print: {
       printJobId: toText(options.printJobId),
       printPlanId,
+      sessionId: sessionEvidence.sessionId,
+      sessionIds: [...sessionEvidence.sessionIds],
     },
     inputHashes,
     snapshotIds: snapshots.map((snapshot) => toText(snapshot.snapshotId)),
@@ -814,6 +882,7 @@ export function buildItemKeeperSourceUsageFixture({
     expectedSourceOrder,
     captureSha256,
     certificationPayload,
+    sessionEvidence,
   });
   fixtureEvidence.print.printPlanId = printPlanId;
   const fixtureReceipt = evaluateItemKeeperSourceUsageLiveFixture({
@@ -834,7 +903,7 @@ export function buildItemKeeperSourceUsageFixture({
     projectionDigest: createItemKeeperSourceUsageProjectionCertificationDigest(segment),
   }));
   const warnings = createBuildWarnings({ device, snapshots, segments, historyEntry, certificationPayload });
-  const reviewBlockers = createIdentityReviewBlockers({ device, certificationPayload, options });
+  const reviewBlockers = createIdentityReviewBlockers({ device, certificationPayload, options, sessionEvidence });
   return {
     schemaVersion: 1,
     builder: "itemkeeper-source-usage-fixture-builder",

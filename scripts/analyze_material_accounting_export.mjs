@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1642 (PR #440)
+ * @version 1.390.1643 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 14:26:40
+ * @lastModified 2026-09-02 15:11:47
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -1356,11 +1356,11 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
       if (job.reviewableProjectionCandidateSegmentCount !== job.jobMaterialSegmentCount) {
         jobReasons.push("reviewable-projection-candidate-result-set-incomplete");
       }
-      if (
-        certificationSessionId &&
-        job.sessionIds.length > 0 &&
-        !job.sessionIds.includes(certificationSessionId)
-      ) {
+      if (certificationSessionId && job.sessionIds.length <= 0) {
+        jobReasons.push("certification-session-id-missing");
+      } else if (certificationSessionId && job.sessionIds.length > 1) {
+        jobReasons.push("candidate-session-id-ambiguous");
+      } else if (certificationSessionId && !job.sessionIds.includes(certificationSessionId)) {
         jobReasons.push("certification-session-id-mismatch");
       }
       return {
@@ -1382,10 +1382,17 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
         itemKeeperDigestConsistentSegmentCount: job.itemKeeperDigestConsistentSegmentCount,
       };
     });
-    if (!jobReports.some((job) => job.readyForFixtureReview)) {
+    const hasReadyJob = jobReports.some((job) => job.readyForFixtureReview);
+    if (!hasReadyJob) {
       reasons.push("ready-candidate-print-result-set-missing");
     }
-    if (jobReports.some((job) => job.reasons.includes("certification-session-id-mismatch"))) {
+    if (!hasReadyJob && jobReports.some((job) => job.reasons.includes("certification-session-id-missing"))) {
+      reasons.push("certification-session-id-missing");
+    }
+    if (!hasReadyJob && jobReports.some((job) => job.reasons.includes("candidate-session-id-ambiguous"))) {
+      reasons.push("candidate-session-id-ambiguous");
+    }
+    if (!hasReadyJob && jobReports.some((job) => job.reasons.includes("certification-session-id-mismatch"))) {
       reasons.push("certification-session-id-mismatch");
     }
     return {

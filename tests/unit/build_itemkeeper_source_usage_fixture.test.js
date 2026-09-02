@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1641 (PR #440)
+ * @version 1.390.1643 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 13:56:31
+ * @lastModified 2026-09-02 15:11:47
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -239,6 +239,87 @@ describe("build_itemkeeper_source_usage_fixture", () => {
     ]);
     expect(result.projectionDigests).toHaveLength(2);
     expect(result.projectionDigests[0].projectionDigest).toMatch(/^fnv1a128:/u);
+  });
+
+  it("certification sessionがあるfixtureは対象jobのsession provenanceをevidenceへ明示する", () => {
+    const payload = createExportPayload();
+    for (const snapshot of payload.materialAccountingPrintBindingStore.printStartSnapshots) {
+      snapshot.issuanceEvidence = { sessionId: "session:k2-a" };
+    }
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          generatedAt: "2026-09-02T01:29:00.000Z",
+          printer: {
+            model: "F012",
+            firmwareVersion: "1.1.6.7",
+            sessionId: "session:k2-a",
+          },
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-accepted");
+    expect(result.fixtureEvidence.print).toMatchObject({
+      printJobId: "job:k2-source-aware-001",
+      printPlanId: "plan:k2-source-aware-001",
+      sessionId: "session:k2-a",
+    });
+    expect(result.fixtureEvidence.print.sessionIds).toEqual(["session:k2-a"]);
+    expect(result.captureBundle.print.sessionId).toBe("session:k2-a");
+    expect(result.reviewBlockers).toEqual([]);
+  });
+
+  it("certification sessionがあるfixtureは対象jobのsession provenance欠落をreview不可にする", () => {
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: createExportPayload(),
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          printer: {
+            model: "F012",
+            firmwareVersion: "1.1.6.7",
+            sessionId: "session:k2-a",
+          },
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-review-not-ready");
+    expect(result.fixtureEvidence.print.sessionIds).toEqual([]);
+    expect(result.reviewBlockers).toContain("certification-session-id-missing");
+  });
+
+  it("certification sessionがあるfixtureは対象jobのmixed session provenanceをreview不可にする", () => {
+    const payload = createExportPayload();
+    payload.materialAccountingPrintBindingStore.printStartSnapshots[0].issuanceEvidence = { sessionId: "session:k2-a" };
+    payload.materialAccountingPrintBindingStore.printStartSnapshots[1].issuanceEvidence = { sessionId: "session:old" };
+
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          printer: {
+            model: "F012",
+            firmwareVersion: "1.1.6.7",
+            sessionId: "session:k2-a",
+          },
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-review-not-ready");
+    expect(result.fixtureEvidence.print.sessionIds).toEqual(["session:k2-a", "session:old"]);
+    expect(result.reviewBlockers).toContain("candidate-session-id-ambiguous");
   });
 
   it("CLIからartifact一式を書き出す", async () => {

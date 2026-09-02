@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1642 (PR #440)
+ * @version 1.390.1643 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 14:26:40
+ * @lastModified 2026-09-02 15:11:47
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1001,9 +1001,7 @@ describe("analyze_material_accounting_export", () => {
     const payload = createGate18_9J2ReadyPayload();
     for (const snapshot of payload.materialAccountingPrintBindingStore.printStartSnapshots) {
       delete snapshot.sessionId;
-    }
-    for (const segment of payload.materialAccountingPrintBindingStore.jobMaterialSegments) {
-      segment.issuanceEvidence = { sessionId: "session:k2-a" };
+      snapshot.issuanceEvidence = { sessionId: "session:k2-a" };
     }
 
     const report = analyzeMaterialAccountingExport(payload, {
@@ -1020,6 +1018,41 @@ describe("analyze_material_accounting_export", () => {
 
     expect(report.gate18_9J2.readyForFixtureReview).toBe(true);
     expect(job.sessionIds).toEqual(["session:k2-a"]);
+  });
+
+  it("J-2 readinessはcertification sessionがある場合に同一jobのsession証跡欠落をreadyにしない", () => {
+    const payload = createGate18_9J2ReadyPayload();
+    for (const snapshot of payload.materialAccountingPrintBindingStore.printStartSnapshots) {
+      delete snapshot.sessionId;
+    }
+    for (const segment of payload.materialAccountingPrintBindingStore.jobMaterialSegments) {
+      delete segment.sessionId;
+      delete segment.issuanceEvidence;
+      delete segment.startContext;
+      delete segment.uploadReceipt;
+    }
+    for (const history of payload.machines["K2Pro-69E7"].printStore.history) {
+      delete history.sessionId;
+      delete history.startContext;
+      delete history.uploadReceipt;
+      delete history.issuanceEvidence;
+    }
+
+    const report = analyzeMaterialAccountingExport(payload, {
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          liveSendEnabled: false,
+          printer: { model: "F012", deviceId: "serial:k2", sessionId: "session:k2-a" },
+        },
+        summary: { material: { summary: { loadedSourceCount: 3 } } },
+      },
+    });
+    const job = report.gate18_9J2.devices[0].candidateJobs[0];
+
+    expect(report.gate18_9J2.readyForFixtureReview).toBe(false);
+    expect(job.sessionIds).toEqual([]);
+    expect(job.reasons).toContain("certification-session-id-missing");
   });
 
   it("J-2 readinessはcertification sessionをready候補job単位で照合する", () => {
@@ -1058,6 +1091,78 @@ describe("analyze_material_accounting_export", () => {
     expect(report.gate18_9J2.readyForFixtureReview).toBe(false);
     expect(job.reasons).toContain("certification-session-id-mismatch");
     expect(report.gate18_9J2.reasons).toContain("K2Pro-69E7:ready-candidate-print-result-set-missing");
+  });
+
+  it("J-2 readinessは同一jobに複数sessionが混在する場合にambiguousとしてreadyにしない", () => {
+    const payload = createGate18_9J2ReadyPayload();
+    payload.materialAccountingPrintBindingStore.printStartSnapshots[0].sessionId = "session:k2-a";
+    payload.materialAccountingPrintBindingStore.printStartSnapshots[1].sessionId = "session:old";
+
+    const report = analyzeMaterialAccountingExport(payload, {
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          liveSendEnabled: false,
+          printer: { model: "F012", deviceId: "serial:k2", sessionId: "session:k2-a" },
+        },
+        summary: { material: { summary: { loadedSourceCount: 3 } } },
+      },
+    });
+    const job = report.gate18_9J2.devices[0].candidateJobs.find((entry) => entry.printJobId === "job:1");
+
+    expect(report.gate18_9J2.readyForFixtureReview).toBe(false);
+    expect(job.sessionIds).toEqual(["session:k2-a", "session:old"]);
+    expect(job.reasons).toContain("candidate-session-id-ambiguous");
+    expect(report.gate18_9J2.reasons).toContain("K2Pro-69E7:candidate-session-id-ambiguous");
+  });
+
+  it("J-2 readinessは別jobのsession mismatchで同一deviceの正しいready jobを落とさない", () => {
+    const payload = createGate18_9J2ReadyPayload();
+    payload.machines["K2Pro-69E7"].printStore.history.push({
+      printJobId: "job:old",
+      printPlanId: "plan:old",
+      materialUsed: "3210,6543,0",
+      sessionId: "session:old",
+    });
+    const originalSnapshots = [...payload.materialAccountingPrintBindingStore.printStartSnapshots];
+    for (const snapshot of originalSnapshots) {
+      payload.materialAccountingPrintBindingStore.printStartSnapshots.push({
+        ...snapshot,
+        snapshotId: `${snapshot.snapshotId}:old`,
+        printJobId: "job:old",
+        printPlanId: "plan:old",
+        sessionId: "session:old",
+      });
+    }
+    const originalSegments = [...payload.materialAccountingPrintBindingStore.jobMaterialSegments];
+    for (const segment of originalSegments) {
+      payload.materialAccountingPrintBindingStore.jobMaterialSegments.push({
+        ...segment,
+        segmentId: `${segment.segmentId}:old`,
+        printJobId: "job:old",
+        printPlanId: "plan:old",
+        issuanceEvidence: { sessionId: "session:old" },
+      });
+    }
+
+    const report = analyzeMaterialAccountingExport(payload, {
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          liveSendEnabled: false,
+          printer: { model: "F012", deviceId: "serial:k2", sessionId: "session:k2-a" },
+        },
+        summary: { material: { summary: { loadedSourceCount: 3 } } },
+      },
+    });
+    const readyJob = report.gate18_9J2.devices[0].candidateJobs.find((entry) => entry.printJobId === "job:1");
+    const oldJob = report.gate18_9J2.devices[0].candidateJobs.find((entry) => entry.printJobId === "job:old");
+
+    expect(readyJob.readyForFixtureReview).toBe(true);
+    expect(oldJob.readyForFixtureReview).toBe(false);
+    expect(oldJob.reasons).toContain("certification-session-id-mismatch");
+    expect(report.gate18_9J2.readyForFixtureReview).toBe(true);
+    expect(report.gate18_9J2.devices[0].reasons).not.toContain("certification-session-id-mismatch");
   });
 
   it("J-2 readinessは外部loaded + CFS 1本を2 loaded CFSとして扱わない", () => {
