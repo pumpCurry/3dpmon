@@ -142,8 +142,8 @@ Gate 18.9I evidence check: it requires a K2/CFS target, at least two loaded CFS
 sources, source-aware managed mounts for every loaded source in the fixture,
 trusted print-start snapshots, source-specific `JobMaterialSegment` records,
 at least one observed-used segment, at least one explicit `confirmed-unused`
-0mm segment, digest-consistent ItemKeeper projection evidence, and a matching
-CFS Debug / Certification panel export. Even when
+0mm segment, reviewable source-aware projection digest candidates, and a
+matching CFS Debug / Certification panel export. Even when
 `gate18_9J2.readyForFixtureReview` is true, it does not enable production
 ItemKeeper projection or reviewed registry registration by itself.
 

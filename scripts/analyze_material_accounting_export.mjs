@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1638 (PR #440)
+ * @version 1.390.1640 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 11:55:00
+ * @lastModified 2026-09-02 12:08:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -619,6 +619,207 @@ function isItemKeeperFixtureAcceptedSegment(segment, deviceId) {
 }
 
 /**
+ * segmentのprintPlan IDを取得する。
+ *
+ * @private
+ * @function resolvePrintPlanId
+ * @param {Object|null|undefined} record - snapshotまたはsegment候補。
+ * @returns {string} PrintPlan ID。
+ */
+function resolvePrintPlanId(record) {
+  return toText(record?.printPlanId || record?.planId);
+}
+
+/**
+ * snapshotまたはsegmentのsource orderを取得する。
+ *
+ * @private
+ * @function resolveSourceOrder
+ * @param {Object|null|undefined} record - snapshotまたはsegment候補。
+ * @returns {number|null} source order。
+ */
+function resolveSourceOrder(record) {
+  const value = record?.bindingAuthority?.tool?.order ?? record?.order;
+  const numeric = Number(value);
+  return Number.isInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+/**
+ * snapshotまたはsegmentのMaterialSource IDを取得する。
+ *
+ * @private
+ * @function resolveBindingMaterialSourceId
+ * @param {Object|null|undefined} record - snapshotまたはsegment候補。
+ * @returns {string} MaterialSource ID。
+ */
+function resolveBindingMaterialSourceId(record) {
+  return toText(record?.bindingAuthority?.source?.materialSourceId || record?.materialSourceId);
+}
+
+/**
+ * snapshotまたはsegmentのmount IDを取得する。
+ *
+ * @private
+ * @function resolveBindingMountId
+ * @param {Object|null|undefined} record - snapshotまたはsegment候補。
+ * @returns {string} mount ID。
+ */
+function resolveBindingMountId(record) {
+  return toText(record?.bindingAuthority?.mount?.mountId || record?.mountId);
+}
+
+/**
+ * snapshotまたはsegmentのspool IDを取得する。
+ *
+ * @private
+ * @function resolveBindingSpoolId
+ * @param {Object|null|undefined} record - snapshotまたはsegment候補。
+ * @returns {string} spool ID。
+ */
+function resolveBindingSpoolId(record) {
+  return toText(record?.bindingAuthority?.mount?.spoolId || record?.spoolId);
+}
+
+/**
+ * segmentに対応するtrusted print-start snapshotが同一result setにあるか判定する。
+ *
+ * 【詳細説明】
+ * - J-2 capture readinessは別jobのsnapshot/segmentを寄せ集めない。
+ * - device、print job、print plan、source、mount、spool、orderが一致するsnapshotだけを対応証跡として扱う。
+ *
+ * @private
+ * @function hasMatchingPrintStartSnapshotForSegment
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @param {Object[]} snapshots - print-start snapshot配列。
+ * @returns {boolean} 対応snapshotがある場合true。
+ */
+function hasMatchingPrintStartSnapshotForSegment(segment, snapshots) {
+  return snapshots.some((snapshot) => (
+    toText(snapshot.deviceId) === toText(segment?.deviceId) &&
+    resolvePrintJobId(snapshot) === resolvePrintJobId(segment) &&
+    resolvePrintPlanId(snapshot) === resolvePrintPlanId(segment) &&
+    resolveBindingMaterialSourceId(snapshot) === resolveBindingMaterialSourceId(segment) &&
+    resolveBindingMountId(snapshot) === resolveBindingMountId(segment) &&
+    resolveBindingSpoolId(snapshot) === resolveBindingSpoolId(segment) &&
+    resolveSourceOrder(snapshot) === resolveSourceOrder(segment)
+  ));
+}
+
+/**
+ * segmentがpre-issuer fixture reviewへ提出できるprojection候補か判定する。
+ *
+ * 【詳細説明】
+ * - production ItemKeeper registryが空のcapture前段階では、`itemKeeperProjection.status:"certified"`を要求しない。
+ * - 代わりにsource-aware projection digestを生成できるだけのsource/spool/usage/print-start対応を確認する。
+ *
+ * @private
+ * @function isReviewableProjectionCandidateSegment
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @param {string} deviceId - Printer Core v3 device ID。
+ * @param {Object[]} snapshots - 同一deviceのprint-start snapshot配列。
+ * @returns {boolean} reviewable projection候補ならtrue。
+ */
+function isReviewableProjectionCandidateSegment(segment, deviceId, snapshots) {
+  const segmentDeviceId = toText(segment?.deviceId);
+  const usageState = toText(segment?.usageState);
+  const usedLengthMm = toFiniteNumberOrNull(segment?.usedLengthMm);
+  const debitStatus = toText(segment?.debit?.status);
+  if (!segment || typeof segment !== "object") {
+    return false;
+  }
+  if (!deviceId || !segmentDeviceId || segmentDeviceId !== deviceId) {
+    return false;
+  }
+  return Boolean(
+    resolvePrintJobId(segment) &&
+    resolvePrintPlanId(segment) &&
+    toText(segment.spoolId) &&
+    toText(segment.mountId) &&
+    toText(segment.materialSourceId) &&
+    ["observed-used", "confirmed-unused"].includes(usageState) &&
+    debitStatus === "eligible" &&
+    usedLengthMm !== null &&
+    usedLengthMm >= 0 &&
+    hasMatchingPrintStartSnapshotForSegment(segment, snapshots)
+  );
+}
+
+/**
+ * print binding job keyを作成する。
+ *
+ * @private
+ * @function createPrintBindingJobKey
+ * @param {Object|null|undefined} record - snapshotまたはsegment候補。
+ * @returns {string} device + job + plan key。
+ */
+function createPrintBindingJobKey(record) {
+  return [
+    toText(record?.deviceId),
+    resolvePrintJobId(record),
+    resolvePrintPlanId(record),
+  ].join("\u0000");
+}
+
+/**
+ * print binding evidenceを同一print result set単位へ集約する。
+ *
+ * @private
+ * @function createPrintBindingCandidateJobs
+ * @param {Object[]} snapshots - 対象device snapshot配列。
+ * @param {Object[]} segments - 対象device segment配列。
+ * @param {string} deviceId - Printer Core v3 device ID。
+ * @returns {Object[]} candidate job summary配列。
+ */
+function createPrintBindingCandidateJobs(snapshots, segments, deviceId) {
+  const groups = new Map();
+  const ensureGroup = (record) => {
+    const key = createPrintBindingJobKey(record);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        deviceId: toText(record?.deviceId),
+        printJobId: resolvePrintJobId(record),
+        printPlanId: resolvePrintPlanId(record),
+        snapshots: [],
+        segments: [],
+      });
+    }
+    return groups.get(key);
+  };
+  snapshots.forEach((snapshot) => ensureGroup(snapshot).snapshots.push(snapshot));
+  segments.forEach((segment) => ensureGroup(segment).segments.push(segment));
+  return [...groups.values()]
+    .filter((group) => group.deviceId === deviceId && group.printJobId && group.printPlanId)
+    .map((group) => {
+      const observedUsedSegments = group.segments.filter((segment) => (
+        toText(segment.usageState) === "observed-used" &&
+        toFiniteNumberOrNull(segment.usedLengthMm) !== null &&
+        toFiniteNumberOrNull(segment.usedLengthMm) > 0
+      ));
+      const confirmedUnusedSegments = group.segments.filter((segment) => (
+        toText(segment.usageState) === "confirmed-unused" &&
+        toFiniteNumberOrNull(segment.usedLengthMm) === 0
+      ));
+      const reviewableProjectionCandidateSegments = group.segments.filter((segment) => (
+        isReviewableProjectionCandidateSegment(segment, deviceId, group.snapshots)
+      ));
+      return {
+        deviceId: group.deviceId,
+        printJobId: group.printJobId,
+        printPlanId: group.printPlanId,
+        printStartSnapshotCount: group.snapshots.length,
+        jobMaterialSegmentCount: group.segments.length,
+        observedUsedSegmentCount: observedUsedSegments.length,
+        confirmedUnusedSegmentCount: confirmedUnusedSegments.length,
+        reviewableProjectionCandidateSegmentCount: reviewableProjectionCandidateSegments.length,
+        itemKeeperDigestConsistentSegmentCount: group.segments.filter((segment) => (
+          isItemKeeperDigestConsistentSegment(segment, deviceId) &&
+          hasMatchingPrintStartSnapshotForSegment(segment, group.snapshots)
+        )).length,
+      };
+    });
+}
+
+/**
  * source-specific segmentをItemKeeper evidence条件で抽出する。
  *
  * 【詳細説明】
@@ -774,6 +975,30 @@ function summarizeSource(source, openMounts, segments, deviceId, snapshots) {
 }
 
 /**
+ * sourceがCFS系sourceか判定する。
+ *
+ * @private
+ * @function isCfsSourceSummary
+ * @param {Object} source - source summary。
+ * @returns {boolean} CFS sourceならtrue。
+ */
+function isCfsSourceSummary(source) {
+  return source.kind === "cfs-slot";
+}
+
+/**
+ * sourceがloadedか判定する。
+ *
+ * @private
+ * @function isLoadedSourceSummary
+ * @param {Object} source - source summary。
+ * @returns {boolean} loaded sourceならtrue。
+ */
+function isLoadedSourceSummary(source) {
+  return source.presence === "loaded";
+}
+
+/**
  * certification panel exportをsummaryへ変換する。
  *
  * 【詳細説明】
@@ -795,6 +1020,9 @@ function summarizeCertification(payload) {
     panel: toText(payload.manifest?.panel),
     generatedAt: toText(payload.manifest?.generatedAt),
     printerModel: toText(payload.manifest?.printer?.model),
+    printerDeviceId: toText(payload.manifest?.printer?.deviceId),
+    printerFirmwareVersion: toText(payload.manifest?.printer?.firmwareVersion),
+    printerSessionId: toText(payload.manifest?.printer?.sessionId),
     sourceId: toText(payload.manifest?.sourceId),
     displaySlot: toText(payload.manifest?.displaySlot),
     commandKind: toText(payload.manifest?.commandKind),
@@ -840,6 +1068,7 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
     .map((source) => summarizeSource(source, openMounts, segments, deviceId, snapshots))
     .sort((a, b) => a.displayLabel.localeCompare(b.displayLabel, "en", { numeric: true }));
   const loadedSources = sources.filter((source) => source.presence === "loaded");
+  const loadedCfsSources = sources.filter((source) => isCfsSourceSummary(source) && isLoadedSourceSummary(source));
   const legacySpoolId = toText(data.hostSpoolMap?.[hostname]);
   const sourceAwareMountedCount = sources.filter((source) => source.managedMountCount > 0).length;
   const loadedWithoutManagedMountCount = loadedSources.filter((source) => source.managedMountCount === 0).length;
@@ -851,6 +1080,7 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
     const segmentDeviceId = toText(segment.deviceId);
     return !segmentDeviceId || !deviceId || segmentDeviceId === deviceId;
   });
+  const candidateJobs = createPrintBindingCandidateJobs(scopedSnapshots, scopedSegments, deviceId);
   const observedUsedSegments = scopedSegments.filter((segment) => (
     toText(segment.usageState) === "observed-used" &&
     toFiniteNumberOrNull(segment.usedLengthMm) !== null &&
@@ -876,6 +1106,13 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
     printerType: toText(target.printerType),
     deviceId,
     model: toText(target.printerCoreV3Identity?.reportedModel || machine?.storedData?.model?.rawValue),
+    firmwareVersion: toText(
+      target.printerCoreV3Identity?.firmwareVersion ||
+      machine?.printerCoreV3Identity?.firmwareVersion ||
+      machine?.storedData?.firmwareVersion?.rawValue ||
+      machine?.storedData?.modelver?.rawValue ||
+      machine?.storedData?.fwVersion?.rawValue
+    ),
     materialSystem: target.materialSystem || null,
     multiSourceExpected,
     sourceObservation: {
@@ -890,9 +1127,11 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
       external: sources.filter((source) => source.kind === "external-spool").length,
       cfs: sources.filter((source) => source.kind === "cfs-slot").length,
       loaded: loadedSources.length,
+      loadedCfs: loadedCfsSources.length,
       selected: sources.filter((source) => source.selected).length,
       managedMounted: sourceAwareMountedCount,
       loadedWithoutManagedMount: loadedWithoutManagedMountCount,
+      loadedCfsWithoutManagedMount: loadedCfsSources.filter((source) => source.managedMountCount === 0).length,
     },
     legacyCompatibility: {
       hostSpoolMapSpoolId: legacySpoolId,
@@ -905,6 +1144,7 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
       sourceSpecificUsedLengthMm: sources.reduce((sum, source) => sum + source.sourceSpecificUsedLengthMm, 0),
       observedUsedSegmentCount: observedUsedSegments.length,
       confirmedUnusedSegmentCount: confirmedUnusedSegments.length,
+      reviewableProjectionCandidateSegmentCount: candidateJobs.reduce((sum, job) => sum + job.reviewableProjectionCandidateSegmentCount, 0),
       itemKeeperDigestConsistentSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperDigestConsistentUsageCount, 0),
       itemKeeperDigestConsistentUsedLengthMm: sources.reduce((sum, source) => sum + source.itemKeeperDigestConsistentUsedLengthMm, 0),
       itemKeeperFixtureAcceptedSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperFixtureAcceptedUsageCount, 0),
@@ -912,6 +1152,7 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
       itemKeeperRuntimeCertifiedUsedLengthMm: sources.reduce((sum, source) => sum + source.itemKeeperRuntimeCertifiedUsedLengthMm, 0),
       itemKeeperEligibleSegmentCount: sources.reduce((sum, source) => sum + source.itemKeeperEligibleUsageCount, 0),
       itemKeeperEligibleUsedLengthMm: sources.reduce((sum, source) => sum + source.itemKeeperEligibleUsedLengthMm, 0),
+      candidateJobs,
     },
     certificationReadiness: {
       canRunGate18_9IShadowAccounting: multiSourceExpected && sources.length > 0 && loadedWithoutManagedMountCount === 0 && sourceAwareMountedCount > 0,
@@ -952,36 +1193,59 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
   ));
   const deviceReports = candidateDevices.map((device) => {
     const reasons = [];
-    if (device.sourceCounts.cfs < 2) {
-      reasons.push("cfs-source-count-less-than-two");
+    if (device.sourceCounts.loadedCfs < 2) {
+      reasons.push("loaded-cfs-source-count-less-than-two");
     }
-    if (device.sourceCounts.loaded < 2) {
-      reasons.push("loaded-source-count-less-than-two");
+    if (device.sourceCounts.loadedCfsWithoutManagedMount > 0) {
+      reasons.push("loaded-cfs-source-managed-mount-missing");
     }
-    if (device.sourceCounts.loadedWithoutManagedMount > 0) {
-      reasons.push("loaded-source-managed-mount-missing");
+    if (device.printBinding.candidateJobs.length === 0) {
+      reasons.push("candidate-print-result-set-missing");
     }
-    if (device.printBinding.printStartSnapshotCount <= 0) {
-      reasons.push("print-start-snapshot-missing");
-    }
-    if (device.printBinding.jobMaterialSegmentCount <= 0) {
-      reasons.push("job-material-segment-missing");
-    }
-    if (device.printBinding.observedUsedSegmentCount <= 0) {
-      reasons.push("observed-used-segment-missing");
-    }
-    if (device.printBinding.confirmedUnusedSegmentCount <= 0) {
-      reasons.push("confirmed-unused-zero-segment-missing");
-    }
-    if (device.printBinding.itemKeeperDigestConsistentSegmentCount <= 0) {
-      reasons.push("itemkeeper-projection-digest-consistent-segment-missing");
+    const jobReports = device.printBinding.candidateJobs.map((job) => {
+      const jobReasons = [];
+      if (job.printStartSnapshotCount <= 0) {
+        jobReasons.push("print-start-snapshot-missing");
+      }
+      if (job.jobMaterialSegmentCount <= 0) {
+        jobReasons.push("job-material-segment-missing");
+      }
+      if (job.observedUsedSegmentCount <= 0) {
+        jobReasons.push("observed-used-segment-missing");
+      }
+      if (job.confirmedUnusedSegmentCount <= 0) {
+        jobReasons.push("confirmed-unused-zero-segment-missing");
+      }
+      if (job.reviewableProjectionCandidateSegmentCount <= 0) {
+        jobReasons.push("reviewable-projection-candidate-segment-missing");
+      }
+      if (job.reviewableProjectionCandidateSegmentCount !== job.jobMaterialSegmentCount) {
+        jobReasons.push("reviewable-projection-candidate-result-set-incomplete");
+      }
+      return {
+        printJobId: job.printJobId,
+        printPlanId: job.printPlanId,
+        readyForFixtureReview: jobReasons.length === 0,
+        reasons: jobReasons,
+        printStartSnapshotCount: job.printStartSnapshotCount,
+        jobMaterialSegmentCount: job.jobMaterialSegmentCount,
+        observedUsedSegmentCount: job.observedUsedSegmentCount,
+        confirmedUnusedSegmentCount: job.confirmedUnusedSegmentCount,
+        reviewableProjectionCandidateSegmentCount: job.reviewableProjectionCandidateSegmentCount,
+        itemKeeperDigestConsistentSegmentCount: job.itemKeeperDigestConsistentSegmentCount,
+      };
+    });
+    if (!jobReports.some((job) => job.readyForFixtureReview)) {
+      reasons.push("ready-candidate-print-result-set-missing");
     }
     return {
       hostname: device.hostname,
       deviceId: device.deviceId,
       model: device.model,
+      firmwareVersion: device.firmwareVersion,
       sourceCounts: device.sourceCounts,
       printBinding: device.printBinding,
+      candidateJobs: jobReports,
       readyForFixtureReview: reasons.length === 0,
       reasons,
     };
@@ -993,11 +1257,36 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
   if (!certificationSummary) {
     reasons.push("cfs-certification-panel-export-missing");
   } else {
+    if (certificationSummary.panel !== "cfs-debug-certification") {
+      reasons.push("certification-panel-kind-mismatch");
+    }
     if (certificationSummary.liveSendEnabled) {
       reasons.push("certification-panel-live-send-enabled");
     }
     if (certificationSummary.loadedSourceCount !== null && certificationSummary.loadedSourceCount < 2) {
       reasons.push("certification-panel-loaded-source-count-less-than-two");
+    }
+    for (const device of candidateDevices) {
+      const certificationDeviceId = certificationSummary.printerDeviceId;
+      if (
+        certificationDeviceId &&
+        !certificationDeviceId.startsWith("<") &&
+        device.deviceId &&
+        certificationDeviceId !== device.deviceId
+      ) {
+        reasons.push(`${device.hostname}:certification-device-id-mismatch`);
+      }
+      if (certificationSummary.printerModel && device.model && certificationSummary.printerModel !== device.model) {
+        reasons.push(`${device.hostname}:certification-model-mismatch`);
+      }
+      if (
+        certificationSummary.printerFirmwareVersion &&
+        !certificationSummary.printerFirmwareVersion.startsWith("<") &&
+        device.firmwareVersion &&
+        certificationSummary.printerFirmwareVersion !== device.firmwareVersion
+      ) {
+        reasons.push(`${device.hostname}:certification-firmware-version-mismatch`);
+      }
     }
   }
   for (const device of deviceReports) {

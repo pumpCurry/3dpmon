@@ -62,7 +62,7 @@ Gate 18.9J-2のcapture準備として、同analyzerは `gate18_9J2` readinessも
 これはGate 18.9Iより厳しく、K2/CFS target、2本以上のloaded CFS source、fixtureに含める
 loaded sourceすべてのsource-aware managed mount、trusted print-start snapshot、source別
 `JobMaterialSegment`、1件以上の `observed-used`、1件以上の明示 `confirmed-unused` 0mm、
-digest-consistent ItemKeeper projection evidence、同一runのCFS Debug / Certification panel exportを要求する。
+reviewable source-aware projection digest candidate、同一runのCFS Debug / Certification panel exportを要求する。
 このreadinessがtrueでも、reviewed registry entry追加とproduction issuer activationは別GateまでHOLDする。
 
 Gate 18.9J-1では、ItemKeeper source-aware projectionを本番送信へ解禁せず、
