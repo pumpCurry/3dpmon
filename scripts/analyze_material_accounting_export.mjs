@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1641 (PR #440)
+ * @version 1.390.1642 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 13:56:31
+ * @lastModified 2026-09-02 14:26:40
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -652,6 +652,7 @@ function resolveRecordSessionId(record) {
     record?.printerSessionId ||
     record?.commandSessionId ||
     record?.startContext?.sessionId ||
+    record?.issuanceEvidence?.sessionId ||
     record?.uploadReceipt?.sessionId
   );
 }
@@ -756,16 +757,17 @@ function isReviewableProjectionCandidateSegment(segment, deviceId, snapshots) {
   if (!deviceId || !segmentDeviceId || segmentDeviceId !== deviceId) {
     return false;
   }
+  const usageLengthAllowed =
+    (usageState === "observed-used" && usedLengthMm !== null && usedLengthMm > 0) ||
+    (usageState === "confirmed-unused" && usedLengthMm === 0);
   return Boolean(
     resolvePrintJobId(segment) &&
     resolvePrintPlanId(segment) &&
     toText(segment.spoolId) &&
     toText(segment.mountId) &&
     toText(segment.materialSourceId) &&
-    ["observed-used", "confirmed-unused"].includes(usageState) &&
+    usageLengthAllowed &&
     debitStatus === "eligible" &&
-    usedLengthMm !== null &&
-    usedLengthMm >= 0 &&
     hasMatchingPrintStartSnapshotForSegment(segment, snapshots)
   );
 }
@@ -857,6 +859,10 @@ function createPrintBindingCandidateJobs(snapshots, segments, deviceId, historie
         toText(segment.usageState) === "confirmed-unused" &&
         toFiniteNumberOrNull(segment.usedLengthMm) === 0
       ));
+      const invalidConfirmedUnusedSegments = group.segments.filter((segment) => (
+        toText(segment.usageState) === "confirmed-unused" &&
+        toFiniteNumberOrNull(segment.usedLengthMm) !== 0
+      ));
       const reviewableProjectionCandidateSegments = group.segments.filter((segment) => (
         isReviewableProjectionCandidateSegment(segment, deviceId, group.snapshots)
       ));
@@ -873,6 +879,7 @@ function createPrintBindingCandidateJobs(snapshots, segments, deviceId, historie
         observedUsedSegmentCount: observedUsedSegments.length,
         invalidObservedUsedSegmentCount: invalidObservedUsedSegments.length,
         confirmedUnusedSegmentCount: confirmedUnusedSegments.length,
+        invalidConfirmedUnusedSegmentCount: invalidConfirmedUnusedSegments.length,
         reviewableProjectionCandidateSegmentCount: reviewableProjectionCandidateSegments.length,
         itemKeeperDigestConsistentSegmentCount: group.segments.filter((segment) => (
           isItemKeeperDigestConsistentSegment(segment, deviceId) &&
@@ -1307,6 +1314,9 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
     }
     const jobReports = device.printBinding.candidateJobs.map((job) => {
       const jobReasons = [];
+      const certificationSessionId = isConcreteIdentityText(certificationSummary?.printerSessionId)
+        ? certificationSummary.printerSessionId
+        : "";
       if (job.printStartSnapshotCount <= 0) {
         jobReasons.push("print-start-snapshot-missing");
       }
@@ -1316,8 +1326,8 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
       if (!job.rawMaterialUsedPresent) {
         jobReasons.push("raw-material-used-source-csv-missing");
       }
-      if (job.rawMaterialUsedParserReasons.includes("material-used-source-count-mismatch")) {
-        jobReasons.push("raw-material-used-source-count-mismatch");
+      if (job.rawMaterialUsedParserReasons.length > 0) {
+        jobReasons.push("raw-material-used-parser-reasons-present");
       }
       if (
         job.printStartSnapshotCount !== job.jobMaterialSegmentCount ||
@@ -1337,11 +1347,21 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
       if (job.confirmedUnusedSegmentCount <= 0) {
         jobReasons.push("confirmed-unused-zero-segment-missing");
       }
+      if (job.invalidConfirmedUnusedSegmentCount > 0) {
+        jobReasons.push("confirmed-unused-positive-usage-invalid");
+      }
       if (job.reviewableProjectionCandidateSegmentCount <= 0) {
         jobReasons.push("reviewable-projection-candidate-segment-missing");
       }
       if (job.reviewableProjectionCandidateSegmentCount !== job.jobMaterialSegmentCount) {
         jobReasons.push("reviewable-projection-candidate-result-set-incomplete");
+      }
+      if (
+        certificationSessionId &&
+        job.sessionIds.length > 0 &&
+        !job.sessionIds.includes(certificationSessionId)
+      ) {
+        jobReasons.push("certification-session-id-mismatch");
       }
       return {
         printJobId: job.printJobId,
@@ -1357,6 +1377,7 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
         observedUsedSegmentCount: job.observedUsedSegmentCount,
         invalidObservedUsedSegmentCount: job.invalidObservedUsedSegmentCount,
         confirmedUnusedSegmentCount: job.confirmedUnusedSegmentCount,
+        invalidConfirmedUnusedSegmentCount: job.invalidConfirmedUnusedSegmentCount,
         reviewableProjectionCandidateSegmentCount: job.reviewableProjectionCandidateSegmentCount,
         itemKeeperDigestConsistentSegmentCount: job.itemKeeperDigestConsistentSegmentCount,
       };
@@ -1364,13 +1385,8 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
     if (!jobReports.some((job) => job.readyForFixtureReview)) {
       reasons.push("ready-candidate-print-result-set-missing");
     }
-    if (isConcreteIdentityText(certificationSummary?.printerSessionId)) {
-      const candidateSessionIds = [...new Set(
-        device.printBinding.candidateJobs.flatMap((job) => job.sessionIds || []).filter(Boolean)
-      )];
-      if (candidateSessionIds.length > 0 && !candidateSessionIds.includes(certificationSummary.printerSessionId)) {
-        reasons.push("certification-session-id-mismatch");
-      }
+    if (jobReports.some((job) => job.reasons.includes("certification-session-id-mismatch"))) {
+      reasons.push("certification-session-id-mismatch");
     }
     return {
       hostname: device.hostname,
