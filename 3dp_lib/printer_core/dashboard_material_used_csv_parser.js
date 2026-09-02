@@ -1,0 +1,109 @@
+/**
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 K2 materialUsed CSV parser モジュール
+ * @file dashboard_material_used_csv_parser.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_material_used_csv_parser
+ *
+ * 【機能内容サマリ】
+ * - K2/Creality履歴のsource-specific materialUsed CSVをlosslessに解析する
+ * - CSV解析versionとsource順序profileを分離してfixture/runtime双方へ提供する
+ *
+ * 【公開関数一覧】
+ * - {@link parseK2MaterialUsedSourceCsv}：K2 materialUsed CSVをsource別使用量へ変換
+ *
+ * @version 1.390.1632 (PR #440)
+ * @since   1.390.1632 (PR #440)
+ * @lastModified 2026-09-02 10:26:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ */
+
+"use strict";
+
+/** K2 materialUsed CSV parserのversion。 */
+export const K2_MATERIAL_USED_CSV_PARSER_VERSION = "k2-material-used-csv:v1";
+/** CSV位置をprint-start binding authority orderへ割り当てるprofile。 */
+export const K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE = "print-start-binding-authority-order:v1";
+
+/**
+ * 値をtrim済み文字列へ変換する。
+ *
+ * @private
+ * @function toTrimmedString
+ * @param {*} value - 文字列候補。
+ * @returns {string} trim済み文字列。
+ */
+function toTrimmedString(value) {
+  return String(value ?? "").trim();
+}
+
+/**
+ * K2/Creality履歴のsource別materialUsed CSVを解析する。
+ *
+ * 【詳細説明】
+ * - `3210,0,6543` のようなCSVを、print-start時点で固定されたsource orderへ対応する
+ *   使用量配列へ変換する。
+ * - この関数はCSVの解析だけを担当し、どのsourceへ割り当てるかは呼び出し側の
+ *   `sourceOrderingProfile`で固定する。
+ * - 空値や不正値を0mmへ補正せず、fixture/runtimeの両方で同じ失敗理由を返す。
+ *
+ * @function parseK2MaterialUsedSourceCsv
+ * @param {*} rawValue - K2/Creality履歴のmaterialUsed CSV候補。
+ * @param {Object=} options - 解析オプション。
+ * @param {number=} options.expectedCount - print-start snapshotやexpectedSourceOrderから得たsource数。
+ * @param {boolean=} options.requireWhenMultiple - 複数source時にCSV欠落を失敗理由へする場合true。
+ * @returns {{ok:boolean,rawMaterialUsed:string,parts:string[],usedLengthMm:number[],parserVersion:string,sourceOrderingProfile:string,reasons:string[]}} 解析結果。
+ * @example
+ * const parsed = parseK2MaterialUsedSourceCsv("3210,0", { expectedCount: 2 });
+ */
+export function parseK2MaterialUsedSourceCsv(rawValue, options = {}) {
+  const rawMaterialUsed = toTrimmedString(rawValue);
+  const expectedCount = Number.isFinite(Number(options.expectedCount))
+    ? Number(options.expectedCount)
+    : null;
+  const reasons = [];
+  if (!rawMaterialUsed) {
+    if (options.requireWhenMultiple === true || (expectedCount !== null && expectedCount > 1)) {
+      reasons.push("observed-material-used-required");
+    }
+    return Object.freeze({
+      ok: reasons.length === 0,
+      rawMaterialUsed: "",
+      parts: Object.freeze([]),
+      usedLengthMm: Object.freeze([]),
+      parserVersion: K2_MATERIAL_USED_CSV_PARSER_VERSION,
+      sourceOrderingProfile: K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE,
+      reasons: Object.freeze([...new Set(reasons)]),
+    });
+  }
+
+  const parts = rawMaterialUsed
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part !== "");
+  if (expectedCount !== null && parts.length !== expectedCount) {
+    reasons.push("material-used-source-count-mismatch");
+  }
+  const usedLengthMm = [];
+  for (const part of parts) {
+    const numeric = Number(part);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      reasons.push("usage-length-invalid");
+      continue;
+    }
+    usedLengthMm.push(numeric);
+  }
+  return Object.freeze({
+    ok: reasons.length === 0,
+    rawMaterialUsed,
+    parts: Object.freeze([...parts]),
+    usedLengthMm: Object.freeze(usedLengthMm),
+    parserVersion: K2_MATERIAL_USED_CSV_PARSER_VERSION,
+    sourceOrderingProfile: K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE,
+    reasons: Object.freeze([...new Set(reasons)]),
+  });
+}

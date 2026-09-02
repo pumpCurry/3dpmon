@@ -17,9 +17,9 @@
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  * - {@link createMaterialAccountingPrintBindingRuntimeForTest}：test-only DI runtimeを生成
  *
- * @version 1.390.1630 (PR #440)
+ * @version 1.390.1632 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-02 09:01:01
+ * @lastModified 2026-09-02 10:38:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -33,6 +33,9 @@ import {
   createPrinterCoreV3DeterministicId,
   stableStringifyPrinterCoreV3Value,
 } from "./dashboard_data_schema_v3.js";
+import {
+  parseK2MaterialUsedSourceCsv,
+} from "./dashboard_material_used_csv_parser.js";
 import {
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
   createMaterialAccountingPrintBindingStoreDigest,
@@ -490,7 +493,7 @@ function getSnapshotAuthoritySource(snapshot) {
  * @function parseMaterialUsagesFromHistoryEntry
  * @param {Object|null|undefined} historyEntry - printStore.history entry。
  * @param {Object[]} orderedSnapshots - order昇順のprint-start snapshot配列。
- * @returns {{ok:boolean,materialUsages:Object[],rawMaterialUsed:string,parserVersion:string,reasons:string[]}} source-specific usage候補。
+ * @returns {{ok:boolean,materialUsages:Object[],rawMaterialUsed:string,parserVersion:string,sourceOrderingProfile:string,reasons:string[]}} source-specific usage候補。
  */
 function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
   const raw = toTrimmedString(
@@ -502,51 +505,31 @@ function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
     historyEntry?.sourceMaterialUsed
   );
   const snapshots = Array.isArray(orderedSnapshots) ? orderedSnapshots : [];
-  const parserVersion = "k2-material-used-csv:snapshot-order:v1";
-  if (!raw) {
-    return {
-      ok: false,
-      materialUsages: [],
-      rawMaterialUsed: "",
-      parserVersion,
-      reasons: snapshots.length > 1 ? ["observed-material-used-required"] : [],
-    };
-  }
-  const parts = raw
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => part !== "");
-  const reasons = [];
-  if (parts.length !== snapshots.length) {
-    reasons.push("material-used-source-count-mismatch");
-  }
-  const materialUsages = parts
-    .map((part, index) => ({ part, snapshot: snapshots[index] }))
+  const parsed = parseK2MaterialUsedSourceCsv(raw, {
+    expectedCount: snapshots.length,
+    requireWhenMultiple: snapshots.length > 1,
+  });
+  const materialUsages = parsed.usedLengthMm
+    .map((usedLengthMm, index) => ({ usedLengthMm, snapshot: snapshots[index] }))
     .filter(({ snapshot }) => snapshot)
-    .map(({ part, snapshot }, index) => {
+    .map(({ usedLengthMm, snapshot }, index) => {
       const tool = getSnapshotAuthorityTool(snapshot, index);
       const source = getSnapshotAuthoritySource(snapshot);
       return {
         toolId: tool.toolId,
         protocolToolAlias: tool.protocolToolAlias,
         materialSourceId: toTrimmedString(source.materialSourceId || snapshot.materialSourceId),
-        usedLengthMm: Number(part),
+        usedLengthMm,
         source: "firmware-source-specific",
       };
-    })
-    .filter((entry) => {
-      const valid = Number.isFinite(entry.usedLengthMm) && entry.usedLengthMm >= 0;
-      if (!valid) {
-        reasons.push("usage-length-invalid");
-      }
-      return valid;
     });
   return {
-    ok: reasons.length === 0,
+    ok: parsed.reasons.length === 0,
     materialUsages,
-    rawMaterialUsed: raw,
-    parserVersion,
-    reasons: [...new Set(reasons)],
+    rawMaterialUsed: parsed.rawMaterialUsed,
+    parserVersion: parsed.parserVersion,
+    sourceOrderingProfile: parsed.sourceOrderingProfile,
+    reasons: [...new Set(parsed.reasons)],
   };
 }
 
@@ -1501,6 +1484,7 @@ function createMaterialAccountingPrintBindingRuntimeInternal(input = {}) {
         observedPrintJobIds: completionResolution.observedPrintJobIds,
         rawMaterialUsed: usageSet.rawMaterialUsed,
         parserVersion: usageSet.parserVersion,
+        sourceOrderingProfile: usageSet.sourceOrderingProfile,
       });
     }
     const materialUsages = usageSet.materialUsages;

@@ -325,6 +325,44 @@ observed-usedまたはconfirmed-unused segmentが保存されていれば、Item
 未certifiedのK2 `materialUsed` CSV source順序や、debit不適格segmentは
 ItemKeeperへper-spool true usageとして送らない。
 
+### Gate 18.9J-1: ItemKeeper Source Usage Live Fixture Receipt
+
+Gate 18.9J-1 では、ItemKeeper source-aware projection を本番送信へ解禁しない。
+この段階の目的は、K2/Creality 履歴の `materialUsed` CSV と print-start snapshot order、
+`JobMaterialSegment` の対応を、実機fixtureとしてレビュー可能なreceiptへ固定することである。
+
+実装境界:
+
+- `dashboard_material_used_csv_parser.js` は K2 `materialUsed` CSV の解析を
+  `k2-material-used-csv:v1` として提供する。
+- CSV位置をMaterialSourceへ対応付ける規則は
+  `print-start-binding-authority-order:v1` としてparserVersionから分離する。
+- `evaluateItemKeeperSourceUsageLiveFixture()` は、`fixtureEvidence`、
+  `printStartSnapshots`、`jobMaterialSegments`、raw `materialUsedSourceCsv` を
+  print result set全体で検査し、`fixture-accepted` / `fixture-rejected` receiptを返す。
+- `fixtureEvidence.reviewedCommit` はfull 40-hex SHAを必須とする。
+- `expectedSourceOrder.length`、CSV part数、print-start snapshot数、
+  `JobMaterialSegment`数は一致しなければならない。
+- `observed-used` sourceは `usedLengthMm > 0`、`confirmed-unused` sourceは
+  `usedLengthMm === 0` を要求する。
+- `debit.status:"eligible"` はsource-aware projection fixtureの必須条件だが、
+  `confirmed-unused` の0mm sourceでは `debit.canDebit:false` でもよい。
+- fixture receiptのauthorityは
+  `itemkeeper-source-usage-live-fixture-evidence` とし、runtime projection registryの
+  `module-owned-live-certification-registry` とは別にする。
+- fixture receiptのcapabilityは常に
+  `canRegisterProjection:false` / `canProjectItemKeeper:false` とする。
+- fixture receiptを `segment.itemKeeperProjection` へ貼っても
+  `isItemKeeperProjectionCertified()` はtrueにならない。
+
+HOLD境界:
+
+- Gate 18.9J-1は runtime registryへdigestを登録しない。
+- ItemKeeper `jobs[].filaments[]` へのsource-aware実送信は解禁しない。
+- production issuerは、review済みfixture digestをmodule-owned immutable registryへ組み込み、
+  current model / firmware / parser / sourceOrderingProfile / result set と照合する
+  Gate 18.9J-2 までHOLDする。
+
 ## P0/P1 Tests
 
 H-1a/H-1b では最低限以下を固定する。
