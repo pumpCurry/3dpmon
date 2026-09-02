@@ -648,7 +648,9 @@ Gate 18.9 must cover:
   which is unavailable outside the test environment.
   ESLint enforces the trusted factory, issuer-injected repository, and test-only
   runtime helper import allowlist across all `3dp_lib/**/*.js` production
-  modules, not only inside `printer_core`.
+  modules, not only inside `printer_core`. The same production lint boundary
+  also rejects dynamic imports of these restricted authority modules, so callers
+  cannot bypass the static import allowlist by loading the whole module.
 - trusted print-start snapshots restored from same-process CAS store may regain
   debit eligibility only through module-owned attestation validation. Restart
   or import loses that process-local trust and must revalidate before debit.

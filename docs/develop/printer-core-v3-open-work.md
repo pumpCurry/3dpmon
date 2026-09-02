@@ -184,7 +184,9 @@ module-owned immutable entryとして組み込む後続Gate 18.9J-2までHOLDす
   さらにItemKeeper source-aware projectionのdigest/registry判定を
   `dashboard_itemkeeper_source_usage_projection_certification.js` へ分離し、
   `dashboard_integration_itemkeeper.js` からtest-only issuerをexportしない。production moduleが
-  test-only issuerをimportする経路もESLint allowlistで禁止する。
+  test-only issuerをimportする経路もESLint allowlistで禁止する。さらにP2-9
+  follow-upとして、同moduleをdynamic importで読み込む経路もproduction
+  moduleでは`no-restricted-syntax`で禁止する。
   ただしmanaged spool残量debit、legacy `usageHistory`、`filamentSpools.remainingLengthMm`
   への書き込みはまだ行わない。
   Gate 18.9I-4では、K2/CFS印刷開始UIで作ったPrinter Core command requestとは別に
@@ -221,6 +223,8 @@ module-owned immutable entryとして組み込む後続Gate 18.9J-2までHOLDす
   `createMaterialAccountingPrintBindingRuntimeForTest()` に分離し、test環境以外では使用できない。
   trusted factory / issuer-injected repository / test-only runtime factory のimport境界は
   `3dp_lib/**/*.js` のproduction module全体にESLint allowlistで固定する。
+  static importだけでなく、restricted authority moduleへのdynamic importも
+  release前lintで失敗させる。
   print-start local receiptと同一msのsource/provider breaking eventは、print interval内の
   physical discontinuityとして扱い、debit候補へ昇格しない。
   この接続もshadow attributionまでで、managed spool残量debitやlegacy usage writeは行わない。

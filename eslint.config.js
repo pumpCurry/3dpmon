@@ -34,6 +34,25 @@ const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_CONTRACT = TRUSTED_PRINT_BIN
 const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_RUNTIME = TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS
   .filter((restriction) => !restriction.importNames.includes('createTrustedPrintStartMaterialAccountingPrintBindingRepository'));
 
+const TRUSTED_PRINT_BINDING_DYNAMIC_IMPORT_RESTRICTIONS = [
+  {
+    selector: 'ImportExpression[source.value=/dashboard_material_accounting_contract\\.js$/]',
+    message: 'Trusted print binding contract module must not be dynamically imported by production modules; use the static allowlisted runtime path.',
+  },
+  {
+    selector: 'ImportExpression[source.value=/dashboard_material_accounting_print_binding_repository\\.js$/]',
+    message: 'Issuer-injected print binding repository module must not be dynamically imported by production modules; use the static allowlisted contract path.',
+  },
+  {
+    selector: 'ImportExpression[source.value=/dashboard_material_accounting_print_binding_runtime\\.js$/]',
+    message: 'Test-only print binding runtime module must not be dynamically imported by production modules.',
+  },
+  {
+    selector: 'ImportExpression[source.value=/dashboard_itemkeeper_source_usage_projection_certification\\.js$/]',
+    message: 'ItemKeeper source usage projection test issuer module must not be dynamically imported by production modules.',
+  },
+];
+
 export default [
   js.configs.recommended,
   jsdoc.configs['flat/recommended'],
@@ -119,6 +138,7 @@ export default [
       // --- 初期導入のため一部ルールを緩和 ---
       'no-prototype-builtins': 'off',
       'no-fallthrough': 'warn',
+      'no-restricted-syntax': ['error', ...TRUSTED_PRINT_BINDING_DYNAMIC_IMPORT_RESTRICTIONS],
       'no-restricted-imports': ['error', {
         patterns: TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS,
       }],
