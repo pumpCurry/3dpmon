@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.1641 (PR #441)
+ * @version 1.390.1645 (PR #441)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-09-02 13:38:32
+* @lastModified 2026-09-02 14:33:53
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1692,6 +1692,7 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
  * 生配列からフィルタ・ソート・制限をかけた履歴リストを返す
  * @param {Array<Object>} rawArray - 元データ配列
  * @param {string} baseUrl         - サムネイル取得用ベース URL
+ * @param {string} host            - 対象プリンタホスト名
  * @returns {Array<ReturnType<typeof parseRawHistoryEntry>>}
  * @description
  *  `filename` を持たない履歴エントリでも `filamentInfo` が存在する場合は
@@ -1709,7 +1710,7 @@ export function parseRawHistoryList(rawArray, baseUrl, host) {
     )
     .map(r => parseRawHistoryEntry(r, baseUrl, host))
     .sort((a, b) => b.id - a.id);
-  return applyPrintHistoryRetention(parsed);
+  return applyPrintHistoryRetention(parsed, undefined, { host });
 }
 
 // ---------------------- ストレージ操作 ----------------------
@@ -2164,7 +2165,9 @@ export async function refreshHistory(
     }
   });
   const jobs = applyPrintHistoryRetention(
-    Array.from(mergedMap.values()).sort((a, b) => Number(b.id) - Number(a.id))
+    Array.from(mergedMap.values()).sort((a, b) => Number(b.id) - Number(a.id)),
+    undefined,
+    { host }
   );
 
   let merged = false;
@@ -2233,7 +2236,9 @@ export async function refreshHistory(
     }
   });
   const mergedRaw = applyPrintHistoryRetention(
-    Array.from(rawMap.values()).sort((a, b) => b.id - a.id)
+    Array.from(rawMap.values()).sort((a, b) => b.id - a.id),
+    undefined,
+    { host }
   );
   renderHistoryTable(mergedRaw, baseUrl, host);
 }
@@ -2342,7 +2347,9 @@ export function updateHistoryList(
     }
   });
   const jobs = applyPrintHistoryRetention(
-    Array.from(mergedMap.values()).sort((a, b) => Number(b.id) - Number(a.id))
+    Array.from(mergedMap.values()).sort((a, b) => Number(b.id) - Number(a.id)),
+    undefined,
+    { host }
   );
 
   // ★ 未完了ジョブ(終了時刻なし)は成否を確定しない＝printfinish=null（誤計上防止・タイミング非依存）。

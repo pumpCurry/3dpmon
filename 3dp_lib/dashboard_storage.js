@@ -29,9 +29,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1644 (PR #441)
+ * @version 1.390.1645 (PR #441)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 14:10:41
+ * @lastModified 2026-09-02 14:38:14
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -2598,6 +2598,47 @@ function _createLocalStorageMachineSnapshot(machine, options = {}) {
 }
 
 /**
+ * localStorage回復バックアップ由来のmachine snapshotに履歴authority不完全フラグを付ける。
+ *
+ * 【詳細説明】
+ * - IndexedDBが正本の環境では、localStorage側の履歴はquota回避のためbounded backupになり得る。
+ * - そのbackupから復元した履歴を完全な台帳根拠として扱うと、欠落した古い消費が消えたぶんだけ
+ *   残量が巻き戻るため、復元時点でprintStoreへ明示フラグを残す。
+ * - 画面表示や履歴閲覧は維持しつつ、ledger側はこのフラグを見て自動derive/recomputeを停止する。
+ *
+ * @private
+ * @function _markLocalStorageRecoveryHistoryAuthority
+ * @param {Object|null|undefined} machineData - localStorageから読んだmachine snapshot。
+ * @param {Object} options - 復元オプション。
+ * @param {string=} options.source - 復元元名。
+ * @returns {Object|null|undefined} 必要ならprintStoreへauthority不完全metadataを付けたsnapshot。
+ */
+function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
+  if (
+    options.source !== "localStorage" ||
+    !machineData ||
+    typeof machineData !== "object" ||
+    machineData.printStore?.historyBackupTruncated !== true
+  ) {
+    return machineData;
+  }
+  const sourceLength = Number(machineData.printStore.historyBackupSourceLength);
+  const limit = Number(machineData.printStore.historyBackupLimit);
+  machineData.printStore = {
+    ...machineData.printStore,
+    historyAuthorityIncomplete: true,
+    historyAuthoritySource: "localStorage-bounded-recovery-backup",
+    historyAuthoritySourceLength: Number.isSafeInteger(sourceLength) && sourceLength >= 0
+      ? sourceLength
+      : null,
+    historyAuthorityLimit: Number.isSafeInteger(limit) && limit >= 0
+      ? limit
+      : null
+  };
+  return machineData;
+}
+
+/**
  * monitorData を per-host 分割形式で localStorage に書き込む。
  * グローバルデータは LS_KEY_GLOBAL に、per-host データは LS_KEY_HOST_PREFIX+hostname に書き込む。
  * 前回書き込みと同一ならスキップする。
@@ -2925,7 +2966,8 @@ function _restoreFromData(shared, machines, options = {}) {
       }
     }
     const hostnameKeys = new Set(Object.keys(machines));
-    for (const [host, machineData] of Object.entries(machines)) {
+    for (const [host, rawMachineData] of Object.entries(machines)) {
+      const machineData = _markLocalStorageRecoveryHistoryAuthority(rawMachineData, options);
       // IPキーで、かつ同一プリンタのホスト名キーが存在する場合はスキップ
       const resolvedHostname = ipToHostname.get(host);
       if (resolvedHostname && hostnameKeys.has(resolvedHostname) && host !== resolvedHostname) {

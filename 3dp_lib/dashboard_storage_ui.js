@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.1641 (PR #441)
+ * @version 1.390.1645 (PR #441)
  * @since   1.390.198 (PR #89)
- * @lastModified 2026-09-02 13:38:32
+ * @lastModified 2026-09-02 14:42:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -55,6 +55,28 @@ function panelToast(msg, isErr = false) {
   note.textContent = msg;
   panelBody.appendChild(note);
   setTimeout(() => note.remove(), 3000);
+}
+
+/**
+ * 現在の画面がリレー子ウィンドウとして動作しているかを判定する。
+ *
+ * 【詳細説明】
+ * - readonly / satellite の子ウィンドウは親から履歴・設定を受信する側であり、
+ *   印刷履歴保持設定をローカル確定すると親権威の履歴と子ローカル履歴が分岐する。
+ * - `window.getRelayMode()` を優先し、古い初期化経路で `_3dpmonRelayChild` だけが
+ *   立っている場合も子として扱う。ただし parent / standalone は明示的に除外する。
+ *
+ * @private
+ * @function isRelayChildStorageWindow
+ * @returns {boolean} リレー子なら true。
+ */
+function isRelayChildStorageWindow() {
+  const mode = typeof window !== "undefined" && typeof window.getRelayMode === "function"
+    ? window.getRelayMode()
+    : null;
+  if (mode === "readonly" || mode === "satellite") return true;
+  if (mode === "parent" || mode === "standalone") return false;
+  return typeof window !== "undefined" && window._3dpmonRelayChild === true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -143,17 +165,27 @@ export function initStorageUI() {
   /** 入力値を保存値で初期化する（モーダル展開時に呼ぶ） */
   const _syncRetentionInputs = () => {
     const printHistoryLimit = resolvePrintHistoryRetentionLimit(monitorData.appSettings);
+    const relayChild = isRelayChildStorageWindow();
     if (elLogMax) elLogMax.value = String(monitorData.appSettings.logMaxLines ?? 1000);
     if (elChartWin) elChartWin.value = String(monitorData.appSettings.chartWindowMin ?? 15);
-    if (elPrintHistoryRetention) elPrintHistoryRetention.checked = printHistoryLimit > 0;
+    if (elPrintHistoryRetention) {
+      elPrintHistoryRetention.checked = printHistoryLimit > 0;
+      elPrintHistoryRetention.disabled = relayChild;
+    }
     if (elPrintHistoryMax) {
       elPrintHistoryMax.value = String(printHistoryLimit > 0 ? printHistoryLimit : MAX_PRINT_HISTORY);
-      elPrintHistoryMax.disabled = printHistoryLimit <= 0;
+      elPrintHistoryMax.disabled = relayChild || printHistoryLimit <= 0;
     }
     if (elPrintHistoryStatus) {
-      elPrintHistoryStatus.textContent = printHistoryLimit > 0
-        ? `ON: ${printHistoryLimit}件を超えた古い印刷履歴を削除します。`
-        : "OFF: 印刷履歴は件数上限では自動削除しません。";
+      if (relayChild) {
+        elPrintHistoryStatus.textContent = printHistoryLimit > 0
+          ? `親ウィンドウ設定を表示中: ${printHistoryLimit}件を超えた古い印刷履歴を親側で削除します。`
+          : "親ウィンドウ設定を表示中: 印刷履歴は件数上限では自動削除しません。";
+      } else {
+        elPrintHistoryStatus.textContent = printHistoryLimit > 0
+          ? `ON: ${printHistoryLimit}件を超えた古い印刷履歴を削除します。`
+          : "OFF: 印刷履歴は件数上限では自動削除しません。";
+      }
     }
     if (elLogRaw) elLogRaw.checked = monitorData.appSettings.logReceivedRaw === true;
     if (elNegativeRemaining) {
@@ -165,6 +197,11 @@ export function initStorageUI() {
 
   const _savePrintHistoryRetention = () => {
     if (!elPrintHistoryRetention) return;
+    if (isRelayChildStorageWindow()) {
+      _syncRetentionInputs();
+      panelToast("リレー子では印刷履歴保持設定を変更できません。親ウィンドウで変更してください。", true);
+      return;
+    }
     if (elPrintHistoryRetention.checked) {
       const v = parseInt(elPrintHistoryMax?.value, 10);
       monitorData.appSettings.printHistoryMaxEntries =
@@ -245,6 +282,10 @@ export function initStorageUI() {
       }
     });
   }
+
+  // 初期表示時点でも親/子モードと保存値を反映する。モーダルが既に開いた状態で
+  // initStorageUI() された場合、MutationObserver だけでは同期されないため。
+  _syncRetentionInputs();
 
   /* ---------------- パネル開閉 / カスタムイベント ---------------- */
 

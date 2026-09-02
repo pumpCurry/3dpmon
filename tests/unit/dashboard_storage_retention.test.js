@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1644 (PR #441)
+ * @version 1.390.1645 (PR #441)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 14:10:41
+ * @lastModified 2026-09-02 14:33:53
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -117,6 +117,7 @@ const {
   initStorage,
   resolvePrintHistoryRetentionLimit,
   resolveUsageHistoryRetentionLimit,
+  restoreUnifiedStorage,
   savePrintHistory,
   saveUnifiedStorage,
   trimUsageHistory
@@ -246,6 +247,33 @@ describe("印刷履歴保持設定", () => {
     expect(globalBackup.usageHistory).toHaveLength(4500);
     expect(globalBackup.storageRecoveryBackup?.usageHistoryTruncated).toBe(true);
     expect(mocks.queueMachineWrite.mock.calls[0][1].printStore.history).toHaveLength(1502);
+  });
+
+  it("localStorage回復バックアップがtruncatedなら復元後の履歴を台帳authority不完全として印付けする", () => {
+    globalThis.localStorage.setItem("3dpmon-global", JSON.stringify({
+      appSettings: { printHistoryMaxEntries: 0 },
+      filamentSpools: [{ id: "spool-a", remainingLengthMm: 1000, totalLengthMm: 1000 }]
+    }));
+    globalThis.localStorage.setItem("3dpmon-host-K2Pro-69E7", JSON.stringify({
+      storedData: {},
+      printStore: {
+        history: makeHistory(1500),
+        current: null,
+        videos: {},
+        historyBackupTruncated: true,
+        historyBackupSourceLength: 1502,
+        historyBackupLimit: 1500
+      }
+    }));
+
+    restoreUnifiedStorage();
+
+    expect(mocks.monitorData.machines["K2Pro-69E7"].printStore).toMatchObject({
+      historyAuthorityIncomplete: true,
+      historyAuthoritySource: "localStorage-bounded-recovery-backup",
+      historyAuthoritySourceLength: 1502,
+      historyAuthorityLimit: 1500
+    });
   });
 });
 

@@ -54,7 +54,7 @@ vi.mock('../../3dp_lib/dashboard_ui_mapping.js', () => ({ PRINT_STATE_CODE: { pr
 vi.mock('../../3dp_lib/dashboard_aggregator.js', () => ({ getCurrentPrintID: vi.fn() }));
 
 const { registerGcodeMetaForHosts, resolveHistoryFinishStatus, _mergeFilamentInfo,
-  _applyFilamentToRaw, parseRawHistoryEntry, jobsToRaw, updateHistoryList } =
+  _applyFilamentToRaw, parseRawHistoryEntry, parseRawHistoryList, jobsToRaw, refreshHistory, updateHistoryList } =
   await import('../../3dp_lib/dashboard_printmanager.js');
 const _storageMock = await import('../../3dp_lib/dashboard_storage.js');
 const _dataMock = await import('../../3dp_lib/dashboard_data.js');
@@ -289,6 +289,20 @@ describe('printfinish 確定: 印刷中ジョブを成功/失敗へ誤確定し�
     expect(raw.printfinish).toBeNull();
   });
 
+  it('parseRawHistoryList: retentionへhost scopeを渡しledger保護対象を前段で落とさない', () => {
+    const HOST = 'K2Pro-RETENTION';
+    _storageMock.applyPrintHistoryRetention.mockClear();
+
+    parseRawHistoryList(
+      [{ id: 1700000000, filename: '/x/a.gcode', starttime: 1700000000, usagetime: 60, printfinish: 1 }],
+      'http://127.0.0.1',
+      HOST
+    );
+
+    expect(_storageMock.applyPrintHistoryRetention).toHaveBeenCalledTimes(1);
+    expect(_storageMock.applyPrintHistoryRetention.mock.calls[0][2]).toEqual({ host: HOST });
+  });
+
   it('★jobsToRaw: discontinued=true を描画用 raw へ引き継ぐ（中止表示の前提）', () => {
     const raw = jobsToRaw([{ id: 8, filename: 'a', startTime: new Date(1e12).toISOString(), finishTime: null, discontinued: true }])[0];
     expect(raw.discontinued).toBe(true);
@@ -360,6 +374,61 @@ describe('printfinish 確定: 印刷中ジョブを成功/失敗へ誤確定し�
     const byId = Object.fromEntries((j.filamentInfo || []).filter(e => e.spoolId).map(e => [e.spoolId, e]));
     expect(byId.OLD?.usedMm, 'OLD の usedMm は保持').toBe(300000);
     expect(byId.NEW?.usedMm, 'NEW の usedMm は保持').toBe(25000);
+  });
+
+  it('updateHistoryList: 全retention呼び出しへhost scopeを渡す', () => {
+    const HOST = 'K2Pro-UPDATE-RETENTION';
+    const JID = 1700010000;
+    _dataMock.monitorData.machines[HOST] = {
+      runtimeData: { state: 0 }, historyData: [], printStore: { history: [] }, storedData: {},
+    };
+    _storageMock.loadPrintHistory.mockReturnValue([
+      { id: JID - 1, filename: '/x/old.gcode', startTime: new Date((JID - 1) * 1000).toISOString(), finishTime: new Date(JID * 1000).toISOString(), printfinish: 1 },
+    ]);
+    _storageMock.loadPrintVideos.mockReturnValue([]);
+    _storageMock.loadPrintCurrent.mockReturnValue(null);
+    _storageMock.applyPrintHistoryRetention.mockClear();
+
+    updateHistoryList(
+      [{ id: JID, filename: '/x/new.gcode', starttime: JID, usagetime: 60, printfinish: 1 }],
+      'http://127.0.0.1',
+      'print-current-container',
+      HOST
+    );
+
+    expect(_storageMock.applyPrintHistoryRetention.mock.calls.length).toBeGreaterThan(1);
+    for (const call of _storageMock.applyPrintHistoryRetention.mock.calls) {
+      expect(call[2]).toEqual({ host: HOST });
+    }
+  });
+
+  it('refreshHistory: 全retention呼び出しへhost scopeを渡す', async () => {
+    const HOST = 'K2Pro-REFRESH-RETENTION';
+    const JID = 1700020000;
+    _dataMock.monitorData.machines[HOST] = {
+      runtimeData: { state: 0 }, historyData: [], printStore: { history: [] }, storedData: {},
+    };
+    _storageMock.loadPrintHistory.mockReturnValue([
+      { id: JID - 1, filename: '/x/old.gcode', startTime: new Date((JID - 1) * 1000).toISOString(), finishTime: new Date(JID * 1000).toISOString(), printfinish: 1 },
+    ]);
+    _storageMock.loadPrintVideos.mockReturnValue([]);
+    _storageMock.loadPrintCurrent.mockReturnValue(null);
+    _storageMock.applyPrintHistoryRetention.mockClear();
+
+    await refreshHistory(
+      async () => ({
+        historyList: [{ id: JID, filename: '/x/new.gcode', starttime: JID, usagetime: 60, printfinish: 1 }],
+      }),
+      'http://127.0.0.1',
+      'print-current-container',
+      'print-history-list',
+      HOST
+    );
+
+    expect(_storageMock.applyPrintHistoryRetention.mock.calls.length).toBeGreaterThan(1);
+    for (const call of _storageMock.applyPrintHistoryRetention.mock.calls) {
+      expect(call[2]).toEqual({ host: HOST });
+    }
   });
 });
 
