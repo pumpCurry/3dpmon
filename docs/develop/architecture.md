@@ -115,6 +115,8 @@ monitorData = {
     cameraToggle: false,      // カメラ ON/OFF (グローバルデフォルト)
     cameraPort: 8080,         // カメラポート (デフォルト)
     httpPort: 80,             // HTTP ポート (デフォルト)
+    printHistoryMaxEntries: 0, // 印刷履歴の自動削除上限。0=無制限
+    usageHistoryMaxEntries: 0, // フィラメント使用履歴の自動削除上限。0=無制限
     notificationSettings: {}  // 通知設定
   },
   machines: {
@@ -127,7 +129,7 @@ monitorData = {
   },
   filamentSpools: [],         // 全スプール配列
   filamentPresets: [],        // フィラメントプリセット
-  usageHistory: [],           // フィラメント使用履歴 (MAX_USAGE_HISTORY=4500)
+  usageHistory: [],           // フィラメント使用履歴（既定は件数無制限）
   filamentInventory: [],      // 在庫管理
   currentSpoolId: null,       // レガシー互換用 (deprecated)
   hostSpoolMap: {},           // per-host 装着スプール {hostname: spoolId}

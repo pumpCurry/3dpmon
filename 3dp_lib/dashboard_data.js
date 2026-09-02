@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
- * @version 1.390.1580 (PR #440)
+ * @version 1.390.1641 (PR #441)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-01 13:38:00
+ * @lastModified 2026-09-02 13:38:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -184,7 +184,9 @@ export function ensureMachineData(host) {
  *     wsDest: string,
  *     cameraToggle: boolean,
  *     notificationSettings: Record<string, any>,
- *     negativeRemainingDisplayMode: string
+ *     negativeRemainingDisplayMode: string,
+ *     printHistoryMaxEntries: number,
+ *     usageHistoryMaxEntries: number
  *   },
  *   machines: Record<string, MachineData>,
  *   filamentSpools: Array<Object>,
@@ -203,6 +205,8 @@ export const monitorData = {
     updateInterval: 500,
     logMaxLines: 1000,
     chartWindowMin: 15,   // 温度グラフの保持/表示時間枠（分）。古い点は破棄しメモリ無制限化を防ぐ
+    printHistoryMaxEntries: 0, // 印刷履歴の自動削除上限。0=無制限（Electron版の保存容量を前提に既定OFF）
+    usageHistoryMaxEntries: 0, // フィラメント使用履歴の自動削除上限。0=無制限（CFS/ItemKeeper用の蓄積を優先）
     logLevel: "info",
     logReceivedRaw: false, // 受信生ログをログパネルに流す（K1系のみ）。既定OFF=CPU/ログ汚染防止
 

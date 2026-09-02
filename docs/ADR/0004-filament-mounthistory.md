@@ -35,7 +35,7 @@
 `remaining -= x` を全廃する。残量は信頼ソースから**冪等に再計算**する。何回実行しても同じ値になるため、**二重減算が構造的に不可能**になる。これが本ADRの本質。
 
 ### データモデル：mountHistory
-追記専用。usageHistory のスナップショット(4500件上限)とは**別ストア**に置き、安易にロールオーバーしない（古い装着記録の消失が補正不能の原因だったため）。
+追記専用。usageHistory のスナップショットとは**別ストア**に置き、安易にロールオーバーしない（古い装着記録の消失が補正不能の原因だったため）。usageHistory 側も現在は既定で件数上限による自動削除を行わず、明示的に `usageHistoryMaxEntries` を1以上にした場合だけ古い記録から削除する。
 
 ```js
 // monitorData.mountHistory: MountEvent[]
@@ -76,7 +76,7 @@ deriveSpoolRemaining(spoolId):
 進行中ジョブはプリンタが `materialUsedMm` を確定するまで 0（`MERGE_IGNORE_ZERO_FIELDS` で保護）なので `used` に含まれない。表示用に **`_liveRemainingMm`（揮発フィールド）** へ「導出残量 − ライブ暫定消費(usedMaterialLength デルタ)」を入れる。完了時にプリンタ確定値が history に入り、次の導出で正規計上され、オーバーレイは消える。`usedMaterialLength` の印刷毎リセットは、ライブ暫定をジョブ単位の自前基点で計算するため自然に吸収。**ライブ値は権威 remaining へ一切書き戻さない**（二重計上の根を断つ）。
 
 ### オフライン・状態遷移の取りこぼしへの耐性（本設計の要）
-**新設計の正しさは「3dpmon が印刷の開始/終了の瞬間を見届けたか」に依存しない。** 完了ジョブが（再接続時の `reqHistory` で）`printStore.history` に入りさえすれば、残量は冪等に再計算される。`printStore.history` は id union で**累積マージ**され（新フェッチに無い旧ジョブも保持。上限 `MAX_PRINT_HISTORY=1500`、printmanager.js:1096-1103）、プリンタの履歴ウィンドウ（数十件）を超えて 3dpmon 側に長期保持される。
+**新設計の正しさは「3dpmon が印刷の開始/終了の瞬間を見届けたか」に依存しない。** 完了ジョブが（再接続時の `reqHistory` で）`printStore.history` に入りさえすれば、残量は冪等に再計算される。`printStore.history` は id union で**累積マージ**され（新フェッチに無い旧ジョブも保持）、プリンタの履歴ウィンドウ（数十件）を超えて 3dpmon 側に長期保持される。印刷履歴は既定で件数上限による自動削除を行わず、ユーザーがストレージ設定で `printHistoryMaxEntries` を1以上にした場合だけ古い履歴から削除する。
 
 #### 受信有無 × 状態遷移の全パターン
 | 開始 | 終了 | 新設計の挙動 |

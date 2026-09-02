@@ -29,9 +29,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1641 (PR #441)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 07:23:40
+ * @lastModified 2026-09-02 13:38:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1586,11 +1586,11 @@ function _discoverHostKeysInLocalStorage() {
   return hosts;
 }
 /**
- * 印刷履歴の最大保持件数
+ * 印刷履歴のレガシー最大保持件数
  *
- * localStorage に保存する印刷履歴配列の上限を定める。
- * これまでは 250 件までの保持であったが、過去の履歴を
- * より多く参照できるよう 1500 件まで保存できるようにする。
+ * 旧バージョンで固定上限として使っていた値。現在の既定動作は
+ * `monitorData.appSettings.printHistoryMaxEntries === 0` による無制限保持で、
+ * この値はユーザーが明示的に自動削除をONにする際の初期候補として扱う。
  *
  * @constant {number}
  */
@@ -1599,12 +1599,105 @@ export const MAX_PRINT_HISTORY = 1500;
 /**
  * フィラメント使用履歴の最大保持件数
  *
- * 1 印刷で最大 2 リールまで使用する想定のため、
- * 4500 件を上限として保持する。
+ * 旧バージョンで固定上限として使っていた値。現在の既定動作は
+ * `monitorData.appSettings.usageHistoryMaxEntries === 0` による無制限保持で、
+ * 明示的に上限を指定する場合の初期候補として扱う。
  *
  * @constant {number}
  */
 export const MAX_USAGE_HISTORY = 4500;
+
+/**
+ * 印刷履歴の自動削除上限を正規化する。
+ *
+ * 【詳細説明】
+ * - 0は「自動削除しない」を表す明示値として扱う。
+ * - 未設定、null、負数、不正値も安全側で0へ倒し、Electron版では容量由来の履歴欠落を起こさない。
+ * - 1以上の有限数だけを件数上限として採用し、小数は切り捨てる。
+ *
+ * @function resolvePrintHistoryRetentionLimit
+ * @param  {Object|null|undefined} settings - monitorData.appSettings相当の設定オブジェクト。
+ * @returns {number} 0または1以上の整数。0は無制限を示す。
+ */
+export function resolvePrintHistoryRetentionLimit(settings = monitorData.appSettings) {
+  const raw = settings?.printHistoryMaxEntries;
+  const limit = Number(raw);
+  if (!Number.isFinite(limit) || limit <= 0) return 0;
+  return Math.floor(limit);
+}
+
+/**
+ * 印刷履歴配列へ設定済みの自動削除上限を適用する。
+ *
+ * 【詳細説明】
+ * - 履歴配列は既存のprintmanager契約どおり「新しい順」に並んでいる前提で扱う。
+ * - 上限0の場合は配列をコピーして返すだけで、古い履歴を削除しない。
+ * - 上限1以上の場合は先頭側の新しい履歴だけを保持し、末尾側の古い履歴を削除する。
+ *
+ * @function applyPrintHistoryRetention
+ * @param  {Array<Object>} history - 新しい順に並んだ印刷履歴配列。
+ * @param  {Object|null|undefined} settings - monitorData.appSettings相当の設定オブジェクト。
+ * @returns {Array<Object>} 保持設定を反映した新しい配列。
+ */
+export function applyPrintHistoryRetention(history, settings = monitorData.appSettings) {
+  const list = Array.isArray(history) ? history : [];
+  const limit = resolvePrintHistoryRetentionLimit(settings);
+  if (limit <= 0) return list.slice();
+  return list.slice(0, limit);
+}
+
+/**
+ * 現在の保持設定を全ホストの保存済み印刷履歴へ即時適用する。
+ *
+ * 【詳細説明】
+ * - ストレージ設定UIで自動削除をON/OFFした直後、既存履歴にも同じ契約を反映するための
+ *   明示的なチョークポイント。
+ * - 上限0の場合は削除を行わず、結果だけを返す。
+ * - 1件以上の削除があったホストでは `_historyRev` を加算し、relay差分検出が履歴短縮を
+ *   見落とさないようにする。保存自体は呼び出し元が行う。
+ *
+ * @function applyConfiguredPrintHistoryRetentionToAllMachines
+ * @returns {{changedHosts:Array<string>, removedJobs:number, limit:number}} 適用結果。
+ */
+export function applyConfiguredPrintHistoryRetentionToAllMachines() {
+  const limit = resolvePrintHistoryRetentionLimit(monitorData.appSettings);
+  const changedHosts = [];
+  let removedJobs = 0;
+  if (limit <= 0) return { changedHosts, removedJobs, limit };
+
+  for (const [host, machine] of Object.entries(monitorData.machines || {})) {
+    if (host === PLACEHOLDER_HOSTNAME) continue;
+    const history = machine?.printStore?.history;
+    if (!Array.isArray(history) || history.length <= limit) continue;
+    const retained = applyPrintHistoryRetention(history);
+    machine.printStore.history = retained;
+    machine.printStore._historyRev = (Number(machine.printStore._historyRev) || 0) + 1;
+    changedHosts.push(host);
+    removedJobs += history.length - retained.length;
+  }
+
+  return { changedHosts, removedJobs, limit };
+}
+
+/**
+ * フィラメント使用履歴の自動削除上限を正規化する。
+ *
+ * 【詳細説明】
+ * - 0は「自動削除しない」を表す。
+ * - 未設定、null、負数、不正値も0へ倒し、CFS/ItemKeeper連携で必要な過去履歴を
+ *   既定では失わない。
+ * - 1以上の有限数だけを件数上限として採用する。
+ *
+ * @function resolveUsageHistoryRetentionLimit
+ * @param  {Object|null|undefined} settings - monitorData.appSettings相当の設定オブジェクト。
+ * @returns {number} 0または1以上の整数。0は無制限を示す。
+ */
+export function resolveUsageHistoryRetentionLimit(settings = monitorData.appSettings) {
+  const raw = settings?.usageHistoryMaxEntries;
+  const limit = Number(raw);
+  if (!Number.isFinite(limit) || limit <= 0) return 0;
+  return Math.floor(limit);
+}
 
 /**
  * フィラメント使用履歴配列が上限を超えた場合に古い記録を削除する。
@@ -1613,7 +1706,8 @@ export const MAX_USAGE_HISTORY = 4500;
  */
 export function trimUsageHistory() {
   const logs = monitorData.usageHistory;
-  if (logs.length <= MAX_USAGE_HISTORY) return;
+  const limit = resolveUsageHistoryRetentionLimit(monitorData.appSettings);
+  if (limit <= 0 || logs.length <= limit) return;
 
   // 各スプールの最新の startLength エントリ（装着記録）を保護
   // これが失われると autoCorrectCurrentSpool が残量を再計算できなくなる
@@ -1626,7 +1720,7 @@ export function trimUsageHistory() {
     }
   }
 
-  const cutoff = logs.length - MAX_USAGE_HISTORY;
+  const cutoff = logs.length - limit;
   const trimmed = logs.filter((_, i) => i >= cutoff || protectedIdx.has(i));
   // ★ レビュー指摘#8: トリム（先頭側の中間削除）でも rev を加算し変更検出を確実にする。
   if (trimmed.length !== logs.length) {
@@ -3206,7 +3300,12 @@ export function loadPrintHistory(hostname) {
 }
 
 /**
- * 印刷履歴を保存する（過去データは古いものから削除）。
+ * 印刷履歴を保存する。
+ *
+ * 【詳細説明】
+ * - 既定では印刷履歴を自動削除しない。
+ * - `appSettings.printHistoryMaxEntries` が1以上の場合だけ、既存契約どおり新しい順の
+ *   配列先頭を保持し、末尾側の古い履歴を削除する。
  *
  * @param {Array<Object>} history - 保存対象の履歴配列
  */
@@ -3215,7 +3314,7 @@ export function savePrintHistory(history, hostname) {
   if (!host) return;
   ensureMachineData(host);
   const ps = monitorData.machines[host].printStore;
-  ps.history = history.slice(0, MAX_PRINT_HISTORY);
+  ps.history = applyPrintHistoryRetention(history);
   // ★ 監査§6: 履歴 revision を単調インクリメント。relay delta の変更検出署名は
   //   O(1) の軽量サンプル（末尾ジョブ＋現在ジョブ）で、履歴中間の filamentInfo 編集・
   //   分割 upsert・reconcile 等（件数・末尾不変）を取りこぼしうる。履歴を実際に書き換える

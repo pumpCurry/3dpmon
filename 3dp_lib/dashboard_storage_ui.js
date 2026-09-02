@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1641 (PR #441)
  * @since   1.390.198 (PR #89)
- * @lastModified 2026-08-28 01:50:17
+ * @lastModified 2026-09-02 13:38:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -33,7 +33,10 @@ import {
   exportAllData,
   importAllData,
   importHistoryOnly,
-  saveUnifiedStorage
+  saveUnifiedStorage,
+  resolvePrintHistoryRetentionLimit,
+  applyConfiguredPrintHistoryRetentionToAllMachines,
+  MAX_PRINT_HISTORY
 } from "./dashboard_storage.js";
 import { monitorData } from "./dashboard_data.js";
 import { setChartWindowMinutes } from "./dashboard_chart.js";
@@ -131,13 +134,27 @@ export function initStorageUI() {
   // ※ これまで setting-log-max-lines は未配線（飾りだけ）だった。両者を即時保存で配線する。
   const elLogMax = document.getElementById("setting-log-max-lines");
   const elChartWin = document.getElementById("setting-chart-window-min");
+  const elPrintHistoryRetention = document.getElementById("setting-print-history-retention-enabled");
+  const elPrintHistoryMax = document.getElementById("setting-print-history-max-entries");
+  const elPrintHistoryStatus = document.getElementById("setting-print-history-retention-status");
   const elLogRaw = document.getElementById("setting-log-received-raw");
   const elNegativeRemaining = document.getElementById("setting-negative-remaining-display");
 
   /** 入力値を保存値で初期化する（モーダル展開時に呼ぶ） */
   const _syncRetentionInputs = () => {
+    const printHistoryLimit = resolvePrintHistoryRetentionLimit(monitorData.appSettings);
     if (elLogMax) elLogMax.value = String(monitorData.appSettings.logMaxLines ?? 1000);
     if (elChartWin) elChartWin.value = String(monitorData.appSettings.chartWindowMin ?? 15);
+    if (elPrintHistoryRetention) elPrintHistoryRetention.checked = printHistoryLimit > 0;
+    if (elPrintHistoryMax) {
+      elPrintHistoryMax.value = String(printHistoryLimit > 0 ? printHistoryLimit : MAX_PRINT_HISTORY);
+      elPrintHistoryMax.disabled = printHistoryLimit <= 0;
+    }
+    if (elPrintHistoryStatus) {
+      elPrintHistoryStatus.textContent = printHistoryLimit > 0
+        ? `ON: ${printHistoryLimit}件を超えた古い印刷履歴を削除します。`
+        : "OFF: 印刷履歴は件数上限では自動削除しません。";
+    }
     if (elLogRaw) elLogRaw.checked = monitorData.appSettings.logReceivedRaw === true;
     if (elNegativeRemaining) {
       elNegativeRemaining.value = monitorData.appSettings.negativeRemainingDisplayMode === "clamp-zero"
@@ -145,6 +162,40 @@ export function initStorageUI() {
         : "show-negative";
     }
   };
+
+  const _savePrintHistoryRetention = () => {
+    if (!elPrintHistoryRetention) return;
+    if (elPrintHistoryRetention.checked) {
+      const v = parseInt(elPrintHistoryMax?.value, 10);
+      monitorData.appSettings.printHistoryMaxEntries =
+        Number.isFinite(v) && v >= 1 ? v : MAX_PRINT_HISTORY;
+    } else {
+      monitorData.appSettings.printHistoryMaxEntries = 0;
+    }
+    _syncRetentionInputs();
+    const result = applyConfiguredPrintHistoryRetentionToAllMachines();
+    saveUnifiedStorage(true);
+    const limit = resolvePrintHistoryRetentionLimit(monitorData.appSettings);
+    panelToast(
+      limit > 0
+        ? `印刷履歴自動削除: ${limit}件（削除 ${result.removedJobs}件）`
+        : "印刷履歴自動削除: OFF"
+    );
+  };
+
+  if (elPrintHistoryRetention) {
+    elPrintHistoryRetention.addEventListener("change", _savePrintHistoryRetention);
+  }
+
+  if (elPrintHistoryMax) {
+    elPrintHistoryMax.addEventListener("change", () => {
+      if (!elPrintHistoryRetention?.checked) {
+        _syncRetentionInputs();
+        return;
+      }
+      _savePrintHistoryRetention();
+    });
+  }
 
   if (elLogRaw) {
     elLogRaw.addEventListener("change", () => {

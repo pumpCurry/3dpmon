@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1599 (PR #440)
+ * @version 1.390.1641 (PR #441)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-09-01 21:16:00
+* @lastModified 2026-09-02 13:38:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -39,7 +39,7 @@ import {
   loadPrintVideos,
   savePrintVideos,
   saveUnifiedStorage,
-  MAX_PRINT_HISTORY
+  applyPrintHistoryRetention
 } from "./dashboard_storage.js";
 
 import { formatEpochToDateTime, formatDuration, normalizeJobId } from "./dashboard_utils.js";
@@ -1698,7 +1698,7 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
  *  フィルタを通過させ、スプール情報のみの更新を反映できるようにする。
  */
 export function parseRawHistoryList(rawArray, baseUrl, host) {
-  return rawArray
+  const parsed = rawArray
     // ★ ID:0/null 正規化: 無効ID（0/null/負数）のエントリは履歴として扱わない。
     //   電源投入直後の stale push 由来のゴースト（id=0 = epoch 1970）を
     //   パース境界で遮断する（過去バージョンで保存済みのゴーストも再パース時に消える）。
@@ -1708,8 +1708,8 @@ export function parseRawHistoryList(rawArray, baseUrl, host) {
       (Array.isArray(r.filamentInfo) && r.filamentInfo.length > 0)
     )
     .map(r => parseRawHistoryEntry(r, baseUrl, host))
-    .sort((a, b) => b.id - a.id)
-    .slice(0, MAX_PRINT_HISTORY);
+    .sort((a, b) => b.id - a.id);
+  return applyPrintHistoryRetention(parsed);
 }
 
 // ---------------------- ストレージ操作 ----------------------
@@ -2163,9 +2163,9 @@ export async function refreshHistory(
       mergedMap.set(String(j.id), j);
     }
   });
-  const jobs = Array.from(mergedMap.values())
-    .sort((a, b) => Number(b.id) - Number(a.id))
-    .slice(0, MAX_PRINT_HISTORY);
+  const jobs = applyPrintHistoryRetention(
+    Array.from(mergedMap.values()).sort((a, b) => Number(b.id) - Number(a.id))
+  );
 
   let merged = false;
   const state = Number(machine?.runtimeData?.state ?? 0);
@@ -2232,9 +2232,9 @@ export async function refreshHistory(
       rawMap.set(j.id, jobsToRaw([j])[0]);
     }
   });
-  const mergedRaw = Array.from(rawMap.values())
-    .sort((a, b) => b.id - a.id)
-    .slice(0, MAX_PRINT_HISTORY);
+  const mergedRaw = applyPrintHistoryRetention(
+    Array.from(rawMap.values()).sort((a, b) => b.id - a.id)
+  );
   renderHistoryTable(mergedRaw, baseUrl, host);
 }
 
@@ -2341,9 +2341,9 @@ export function updateHistoryList(
       merged = true;
     }
   });
-  const jobs = Array.from(mergedMap.values())
-    .sort((a, b) => Number(b.id) - Number(a.id))
-    .slice(0, MAX_PRINT_HISTORY);
+  const jobs = applyPrintHistoryRetention(
+    Array.from(mergedMap.values()).sort((a, b) => Number(b.id) - Number(a.id))
+  );
 
   // ★ 未完了ジョブ(終了時刻なし)は成否を確定しない＝printfinish=null（誤計上防止・タイミング非依存）。
   //   K1 は履歴再取得で印刷中エントリへ早すぎる printfinish=0 を付け(usagetime=0/finishTime=null)、

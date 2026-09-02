@@ -142,6 +142,15 @@
           <label for="setting-log-max-lines"><strong>ログ最大行数:</strong></label>
           <input type="number" id="setting-log-max-lines" min="100" step="100" value="1000" style="width:6em;font-size:12px;padding:3px;border:1px solid #ccc;border-radius:3px;margin-left:6px;" />
         </div>
+        <div class="storage-setting-block">
+          <label>
+            <input type="checkbox" id="setting-print-history-retention-enabled" />
+            <strong>印刷履歴の自動削除</strong>
+          </label>
+          <input type="number" id="setting-print-history-max-entries" min="1" step="100" value="1500" class="storage-number-input" />
+          <span>件を超えたら古い順に削除</span>
+          <div id="setting-print-history-retention-status" class="storage-setting-help">OFF: 印刷履歴は件数上限では自動削除しません。</div>
+        </div>
         <div style="margin-top:6px;">
           <label for="setting-chart-window-min"><strong>温度グラフ保持時間:</strong></label>
           <input type="number" id="setting-chart-window-min" min="1" max="720" step="1" value="15" style="width:5em;font-size:12px;padding:3px;border:1px solid #ccc;border-radius:3px;margin-left:6px;" /> 分
