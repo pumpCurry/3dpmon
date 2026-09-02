@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1640 (PR #440)
+ * @version 1.390.1641 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 12:08:00
+ * @lastModified 2026-09-02 13:56:31
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -33,6 +33,10 @@ import {
   createPrinterCoreV3DeterministicId,
   stableStringifyPrinterCoreV3Value,
 } from "../3dp_lib/printer_core/dashboard_data_schema_v3.js";
+import {
+  parseK2MaterialUsedSourceCsv,
+  resolveK2MaterialUsedSourceCsv,
+} from "../3dp_lib/printer_core/dashboard_material_used_csv_parser.js";
 
 /**
  * ItemKeeper source-aware projectionのmodule-owned認証authority名。
@@ -631,6 +635,28 @@ function resolvePrintPlanId(record) {
 }
 
 /**
+ * snapshot/segment/historyに残るsession IDを取得する。
+ *
+ * 【詳細説明】
+ * - live captureでは同一deviceでも再接続を跨ぐと別sessionになり得るため、certification exportとの
+ *   突き合わせに使える観測値を同一keyへ寄せる。
+ *
+ * @private
+ * @function resolveRecordSessionId
+ * @param {Object|null|undefined} record - snapshot / segment / history候補。
+ * @returns {string} session ID。
+ */
+function resolveRecordSessionId(record) {
+  return toText(
+    record?.sessionId ||
+    record?.printerSessionId ||
+    record?.commandSessionId ||
+    record?.startContext?.sessionId ||
+    record?.uploadReceipt?.sessionId
+  );
+}
+
+/**
  * snapshotまたはsegmentのsource orderを取得する。
  *
  * @private
@@ -768,9 +794,10 @@ function createPrintBindingJobKey(record) {
  * @param {Object[]} snapshots - 対象device snapshot配列。
  * @param {Object[]} segments - 対象device segment配列。
  * @param {string} deviceId - Printer Core v3 device ID。
+ * @param {Object[]=} histories - 対象machineのprint history配列。
  * @returns {Object[]} candidate job summary配列。
  */
-function createPrintBindingCandidateJobs(snapshots, segments, deviceId) {
+function createPrintBindingCandidateJobs(snapshots, segments, deviceId, histories = []) {
   const groups = new Map();
   const ensureGroup = (record) => {
     const key = createPrintBindingJobKey(record);
@@ -781,19 +808,50 @@ function createPrintBindingCandidateJobs(snapshots, segments, deviceId) {
         printPlanId: resolvePrintPlanId(record),
         snapshots: [],
         segments: [],
+        histories: [],
       });
     }
     return groups.get(key);
   };
   snapshots.forEach((snapshot) => ensureGroup(snapshot).snapshots.push(snapshot));
   segments.forEach((segment) => ensureGroup(segment).segments.push(segment));
+  for (const history of histories) {
+    const historyPrintJobId = resolvePrintJobId(history);
+    const historyPrintPlanId = resolvePrintPlanId(history);
+    for (const group of groups.values()) {
+      if (historyPrintJobId !== group.printJobId) {
+        continue;
+      }
+      if (historyPrintPlanId && group.printPlanId && historyPrintPlanId !== group.printPlanId) {
+        continue;
+      }
+      group.histories.push(history);
+    }
+  }
   return [...groups.values()]
     .filter((group) => group.deviceId === deviceId && group.printJobId && group.printPlanId)
     .map((group) => {
+      const sessionIds = [...new Set([
+        ...group.snapshots.map(resolveRecordSessionId),
+        ...group.segments.map(resolveRecordSessionId),
+        ...group.histories.map(resolveRecordSessionId),
+      ].filter(Boolean))];
+      const rawHistoryEntry = group.histories.find((history) => Boolean(resolveK2MaterialUsedSourceCsv(history))) || null;
+      const parsedMaterialUsed = parseK2MaterialUsedSourceCsv(resolveK2MaterialUsedSourceCsv(rawHistoryEntry), {
+        expectedCount: group.snapshots.length,
+        requireWhenMultiple: group.snapshots.length > 1 || group.segments.length > 1,
+      });
       const observedUsedSegments = group.segments.filter((segment) => (
         toText(segment.usageState) === "observed-used" &&
         toFiniteNumberOrNull(segment.usedLengthMm) !== null &&
         toFiniteNumberOrNull(segment.usedLengthMm) > 0
+      ));
+      const invalidObservedUsedSegments = group.segments.filter((segment) => (
+        toText(segment.usageState) === "observed-used" &&
+        (
+          toFiniteNumberOrNull(segment.usedLengthMm) === null ||
+          toFiniteNumberOrNull(segment.usedLengthMm) <= 0
+        )
       ));
       const confirmedUnusedSegments = group.segments.filter((segment) => (
         toText(segment.usageState) === "confirmed-unused" &&
@@ -806,9 +864,14 @@ function createPrintBindingCandidateJobs(snapshots, segments, deviceId) {
         deviceId: group.deviceId,
         printJobId: group.printJobId,
         printPlanId: group.printPlanId,
+        sessionIds,
         printStartSnapshotCount: group.snapshots.length,
         jobMaterialSegmentCount: group.segments.length,
+        rawMaterialUsedPresent: Boolean(parsedMaterialUsed.rawMaterialUsed),
+        rawMaterialUsedSourceCount: parsedMaterialUsed.parts.length,
+        rawMaterialUsedParserReasons: [...parsedMaterialUsed.reasons],
         observedUsedSegmentCount: observedUsedSegments.length,
+        invalidObservedUsedSegmentCount: invalidObservedUsedSegments.length,
         confirmedUnusedSegmentCount: confirmedUnusedSegments.length,
         reviewableProjectionCandidateSegmentCount: reviewableProjectionCandidateSegments.length,
         itemKeeperDigestConsistentSegmentCount: group.segments.filter((segment) => (
@@ -1041,6 +1104,44 @@ function summarizeCertification(payload) {
 }
 
 /**
+ * redaction placeholderではないidentity文字列か判定する。
+ *
+ * 【詳細説明】
+ * - certification exportはprivacy保護のため`<redacted>`風の値を持つ場合がある。
+ * - 実identityがある場合だけtarget絞り込みやmismatch判定へ使う。
+ *
+ * @private
+ * @function isConcreteIdentityText
+ * @param {*} value - identity候補。
+ * @returns {boolean} 実identityとして比較できる場合true。
+ */
+function isConcreteIdentityText(value) {
+  const text = toText(value);
+  return Boolean(text && !text.startsWith("<"));
+}
+
+/**
+ * certification exportに対応する対象deviceだけを選ぶ。
+ *
+ * 【詳細説明】
+ * - multi-printer exportでは、同時に監視している別K2の不足理由をtarget fixtureのoverall readinessへ
+ *   混ぜない。
+ * - certification側にdevice IDがない場合は従来どおりK2候補全体をreview対象に残す。
+ *
+ * @private
+ * @function selectGate18_9J2TargetDevices
+ * @param {Object[]} candidateDevices - K2/CFS候補device summary配列。
+ * @param {Object|null} certificationSummary - certification summary。
+ * @returns {Object[]} readiness判定対象device配列。
+ */
+function selectGate18_9J2TargetDevices(candidateDevices, certificationSummary) {
+  if (!isConcreteIdentityText(certificationSummary?.printerDeviceId)) {
+    return candidateDevices;
+  }
+  return candidateDevices.filter((device) => device.deviceId === certificationSummary.printerDeviceId);
+}
+
+/**
  * 機器単位のMaterialSource accounting状態を診断する。
  *
  * 【詳細説明】
@@ -1080,7 +1181,8 @@ function summarizeDevice({ data, target, machine, openMounts, snapshots, segment
     const segmentDeviceId = toText(segment.deviceId);
     return !segmentDeviceId || !deviceId || segmentDeviceId === deviceId;
   });
-  const candidateJobs = createPrintBindingCandidateJobs(scopedSnapshots, scopedSegments, deviceId);
+  const historyEntries = valuesOfCollection(machine?.printStore?.history);
+  const candidateJobs = createPrintBindingCandidateJobs(scopedSnapshots, scopedSegments, deviceId, historyEntries);
   const observedUsedSegments = scopedSegments.filter((segment) => (
     toText(segment.usageState) === "observed-used" &&
     toFiniteNumberOrNull(segment.usedLengthMm) !== null &&
@@ -1191,7 +1293,8 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
     device.printerType === "creality-k2" &&
     (device.multiSourceExpected || device.sourceCounts.cfs > 0)
   ));
-  const deviceReports = candidateDevices.map((device) => {
+  const targetDevices = selectGate18_9J2TargetDevices(candidateDevices, certificationSummary);
+  const deviceReports = targetDevices.map((device) => {
     const reasons = [];
     if (device.sourceCounts.loadedCfs < 2) {
       reasons.push("loaded-cfs-source-count-less-than-two");
@@ -1210,8 +1313,26 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
       if (job.jobMaterialSegmentCount <= 0) {
         jobReasons.push("job-material-segment-missing");
       }
+      if (!job.rawMaterialUsedPresent) {
+        jobReasons.push("raw-material-used-source-csv-missing");
+      }
+      if (job.rawMaterialUsedParserReasons.includes("material-used-source-count-mismatch")) {
+        jobReasons.push("raw-material-used-source-count-mismatch");
+      }
+      if (
+        job.printStartSnapshotCount !== job.jobMaterialSegmentCount ||
+        (
+          job.rawMaterialUsedSourceCount > 0 &&
+          job.rawMaterialUsedSourceCount !== job.printStartSnapshotCount
+        )
+      ) {
+        jobReasons.push("source-result-set-count-mismatch");
+      }
       if (job.observedUsedSegmentCount <= 0) {
         jobReasons.push("observed-used-segment-missing");
+      }
+      if (job.invalidObservedUsedSegmentCount > 0) {
+        jobReasons.push("observed-used-zero-segment-invalid");
       }
       if (job.confirmedUnusedSegmentCount <= 0) {
         jobReasons.push("confirmed-unused-zero-segment-missing");
@@ -1229,7 +1350,12 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
         reasons: jobReasons,
         printStartSnapshotCount: job.printStartSnapshotCount,
         jobMaterialSegmentCount: job.jobMaterialSegmentCount,
+        rawMaterialUsedPresent: job.rawMaterialUsedPresent,
+        rawMaterialUsedSourceCount: job.rawMaterialUsedSourceCount,
+        rawMaterialUsedParserReasons: job.rawMaterialUsedParserReasons,
+        sessionIds: job.sessionIds,
         observedUsedSegmentCount: job.observedUsedSegmentCount,
+        invalidObservedUsedSegmentCount: job.invalidObservedUsedSegmentCount,
         confirmedUnusedSegmentCount: job.confirmedUnusedSegmentCount,
         reviewableProjectionCandidateSegmentCount: job.reviewableProjectionCandidateSegmentCount,
         itemKeeperDigestConsistentSegmentCount: job.itemKeeperDigestConsistentSegmentCount,
@@ -1237,6 +1363,14 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
     });
     if (!jobReports.some((job) => job.readyForFixtureReview)) {
       reasons.push("ready-candidate-print-result-set-missing");
+    }
+    if (isConcreteIdentityText(certificationSummary?.printerSessionId)) {
+      const candidateSessionIds = [...new Set(
+        device.printBinding.candidateJobs.flatMap((job) => job.sessionIds || []).filter(Boolean)
+      )];
+      if (candidateSessionIds.length > 0 && !candidateSessionIds.includes(certificationSummary.printerSessionId)) {
+        reasons.push("certification-session-id-mismatch");
+      }
     }
     return {
       hostname: device.hostname,
@@ -1254,6 +1388,9 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
   if (candidateDevices.length === 0) {
     reasons.push("k2-cfs-device-not-found");
   }
+  if (candidateDevices.length > 0 && targetDevices.length === 0) {
+    reasons.push("certification-target-device-not-found");
+  }
   if (!certificationSummary) {
     reasons.push("cfs-certification-panel-export-missing");
   } else {
@@ -1266,11 +1403,10 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
     if (certificationSummary.loadedSourceCount !== null && certificationSummary.loadedSourceCount < 2) {
       reasons.push("certification-panel-loaded-source-count-less-than-two");
     }
-    for (const device of candidateDevices) {
+    for (const device of targetDevices.length > 0 ? targetDevices : candidateDevices) {
       const certificationDeviceId = certificationSummary.printerDeviceId;
       if (
-        certificationDeviceId &&
-        !certificationDeviceId.startsWith("<") &&
+        isConcreteIdentityText(certificationDeviceId) &&
         device.deviceId &&
         certificationDeviceId !== device.deviceId
       ) {
@@ -1281,7 +1417,7 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
       }
       if (
         certificationSummary.printerFirmwareVersion &&
-        !certificationSummary.printerFirmwareVersion.startsWith("<") &&
+        isConcreteIdentityText(certificationSummary.printerFirmwareVersion) &&
         device.firmwareVersion &&
         certificationSummary.printerFirmwareVersion !== device.firmwareVersion
       ) {
@@ -1294,7 +1430,7 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
       reasons.push(`${device.hostname}:${reason}`);
     }
   }
-  const ready = candidateDevices.length > 0 &&
+  const ready = targetDevices.length > 0 &&
     Boolean(certificationSummary) &&
     deviceReports.some((device) => device.readyForFixtureReview) &&
     !certificationSummary.liveSendEnabled &&

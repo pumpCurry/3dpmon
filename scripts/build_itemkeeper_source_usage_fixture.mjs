@@ -18,9 +18,9 @@
  * - {@link buildItemKeeperSourceUsageFixture}：export payloadからfixture artifactを生成
  * - {@link runItemKeeperSourceUsageFixtureBuilder}：CLI指定ファイルを読み書きする
  *
- * @version 1.390.1639 (PR #440)
+ * @version 1.390.1641 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 11:55:00
+ * @lastModified 2026-09-02 13:56:31
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2 registry entry追加時にreviewed registry entry skeleton出力を追加する
@@ -159,6 +159,18 @@ function unwrapText(value) {
  */
 function resolvePrintJobId(record) {
   return toText(record?.printJobId || record?.jobId || record?.printId || record?.id);
+}
+
+/**
+ * PrintPlan ID候補を取得する。
+ *
+ * @private
+ * @function resolvePrintPlanId
+ * @param {Object|null|undefined} record - snapshot / segment / history候補。
+ * @returns {string} PrintPlan ID。
+ */
+function resolvePrintPlanId(record) {
+  return toText(record?.printPlanId || record?.planId);
 }
 
 /**
@@ -439,28 +451,95 @@ function resolveCertificationPrinter(certificationPayload) {
  * @param {Object} input.options - CLI/build options。
  * @returns {Object} device metadata。
  */
-function createFixtureDeviceMetadata({ data, certificationPayload, options }) {
-  const target = findTargetForDevice(data, options);
-  const machine = findMachineForTarget(data, target, options);
+function createFixtureDeviceMetadata({ data, certificationPayload, options, target = null, machine = null }) {
+  const resolvedTarget = target || findTargetForDevice(data, options);
+  const resolvedMachine = machine || findMachineForTarget(data, resolvedTarget, options);
   const certificationPrinter = resolveCertificationPrinter(certificationPayload);
   return {
     deviceId: toText(options.deviceId),
-    printerType: toText(options.printerType || target?.printerType || "creality-k2"),
+    printerType: toText(options.printerType || resolvedTarget?.printerType || "creality-k2"),
     model: toText(
-      options.model ||
+      resolvedTarget?.printerCoreV3Identity?.reportedModel ||
+      resolvedMachine?.printerCoreV3Identity?.reportedModel ||
+      unwrapText(resolvedMachine?.storedData?.model) ||
       certificationPrinter.model ||
-      target?.printerCoreV3Identity?.reportedModel ||
-      machine?.printerCoreV3Identity?.reportedModel ||
-      unwrapText(machine?.storedData?.model)
+      options.model
     ),
     firmwareVersion: toText(
-      options.firmwareVersion ||
+      resolvedTarget?.printerCoreV3Identity?.firmwareVersion ||
+      resolvedMachine?.printerCoreV3Identity?.firmwareVersion ||
+      unwrapText(resolvedMachine?.storedData?.firmwareVersion) ||
+      unwrapText(resolvedMachine?.storedData?.modelver) ||
+      unwrapText(resolvedMachine?.storedData?.fwVersion) ||
       certificationPrinter.firmwareVersion ||
-      unwrapText(machine?.storedData?.firmwareVersion) ||
-      unwrapText(machine?.storedData?.modelver) ||
-      unwrapText(machine?.storedData?.fwVersion)
+      options.firmwareVersion
     ),
   };
+}
+
+/**
+ * redaction placeholderではないidentity文字列か判定する。
+ *
+ * 【詳細説明】
+ * - certification exportはredacted placeholderを含む場合があるため、実値だけをconflict判定へ使う。
+ *
+ * @private
+ * @function isConcreteIdentityText
+ * @param {*} value - identity候補。
+ * @returns {boolean} 比較可能なidentity文字列ならtrue。
+ */
+function isConcreteIdentityText(value) {
+  const text = toText(value);
+  return Boolean(text && !text.startsWith("<"));
+}
+
+/**
+ * fixture builderのidentity conflictを検査する。
+ *
+ * 【詳細説明】
+ * - fixture evidenceのdevice metadataはexport target/machineを基準にする。
+ * - certification JSONやCLI overrideは、欠落値の補完には使えるが、exportで観測済みのidentityと
+ *   矛盾する場合はreview不可として隔離する。
+ *
+ * @private
+ * @function createIdentityReviewBlockers
+ * @param {Object} input - 入力context。
+ * @param {Object} input.device - fixture device metadata。
+ * @param {Object|null|undefined} input.certificationPayload - certification payload。
+ * @param {Object} input.options - CLI/build options。
+ * @returns {string[]} identity review blocker配列。
+ */
+function createIdentityReviewBlockers({ device, certificationPayload, options }) {
+  const blockers = [];
+  const certificationPrinter = resolveCertificationPrinter(certificationPayload);
+  if (
+    isConcreteIdentityText(certificationPrinter.deviceId) &&
+    device.deviceId &&
+    certificationPrinter.deviceId !== device.deviceId
+  ) {
+    blockers.push("certification-device-id-mismatch");
+  }
+  if (
+    isConcreteIdentityText(certificationPrinter.model) &&
+    device.model &&
+    certificationPrinter.model !== device.model
+  ) {
+    blockers.push("certification-model-mismatch");
+  }
+  if (
+    isConcreteIdentityText(certificationPrinter.firmwareVersion) &&
+    device.firmwareVersion &&
+    certificationPrinter.firmwareVersion !== device.firmwareVersion
+  ) {
+    blockers.push("certification-firmware-version-mismatch");
+  }
+  if (toText(options.model) && device.model && options.model !== device.model) {
+    blockers.push("cli-model-override-conflicts-with-export");
+  }
+  if (toText(options.firmwareVersion) && device.firmwareVersion && options.firmwareVersion !== device.firmwareVersion) {
+    blockers.push("cli-firmware-version-override-conflicts-with-export");
+  }
+  return blockers;
 }
 
 /**
@@ -508,13 +587,16 @@ function collectTargetSegments(data, options) {
  * @param {Object} options - CLI/build options。
  * @returns {Object|null} print history entry。
  */
-function findTargetHistoryEntry(data, options) {
-  const machines = data.machines && typeof data.machines === "object" ? data.machines : {};
-  for (const machine of valuesOfCollection(machines)) {
-    const history = valuesOfCollection(machine.printStore?.history);
-    const match = history.find((entry) => resolvePrintJobId(entry) === options.printJobId);
-    if (match) {
-      return match;
+function findTargetHistoryEntry(data, options, target = null, expectedPrintPlanId = "") {
+  const machine = findMachineForTarget(data, target || findTargetForDevice(data, options), options);
+  const history = valuesOfCollection(machine?.printStore?.history);
+  const matchingEntries = history.filter((entry) => resolvePrintJobId(entry) === options.printJobId);
+  if (!toText(expectedPrintPlanId)) {
+    return matchingEntries[0] || null;
+  }
+  for (const entry of matchingEntries) {
+    if (resolvePrintPlanId(entry) === expectedPrintPlanId) {
+      return entry;
     }
   }
   return null;
@@ -697,10 +779,13 @@ export function buildItemKeeperSourceUsageFixture({
   inputHashes = {},
 }) {
   const data = getExportDataRoot(exportPayload);
-  const device = createFixtureDeviceMetadata({ data, certificationPayload, options });
+  const target = findTargetForDevice(data, options);
+  const machine = findMachineForTarget(data, target, options);
+  const device = createFixtureDeviceMetadata({ data, certificationPayload, options, target, machine });
   const snapshots = collectTargetSnapshots(data, options);
   const segments = collectTargetSegments(data, options);
-  const historyEntry = findTargetHistoryEntry(data, options);
+  const snapshotPrintPlanId = toText(snapshots[0]?.printPlanId);
+  const historyEntry = findTargetHistoryEntry(data, options, target, snapshotPrintPlanId);
   const expectedSourceOrder = attachPrintPlanIdToExpectedSourceOrder(
     createExpectedSourceOrder(snapshots, segments),
     snapshots
@@ -749,12 +834,16 @@ export function buildItemKeeperSourceUsageFixture({
     projectionDigest: createItemKeeperSourceUsageProjectionCertificationDigest(segment),
   }));
   const warnings = createBuildWarnings({ device, snapshots, segments, historyEntry, certificationPayload });
+  const reviewBlockers = createIdentityReviewBlockers({ device, certificationPayload, options });
   return {
     schemaVersion: 1,
     builder: "itemkeeper-source-usage-fixture-builder",
-    status: fixtureReceipt.ok ? "fixture-accepted" : "fixture-rejected",
+    status: reviewBlockers.length > 0
+      ? "fixture-review-not-ready"
+      : fixtureReceipt.ok ? "fixture-accepted" : "fixture-rejected",
     generatedAt: new Date().toISOString(),
     warnings,
+    reviewBlockers,
     captureBundle,
     fixtureEvidence,
     fixtureReceipt,

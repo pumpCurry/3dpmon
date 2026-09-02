@@ -146,6 +146,14 @@ at least one observed-used segment, at least one explicit `confirmed-unused`
 matching CFS Debug / Certification panel export. Even when
 `gate18_9J2.readyForFixtureReview` is true, it does not enable production
 ItemKeeper projection or reviewed registry registration by itself.
+Gate 18.9J-2 readiness is scoped to the certification target device when the
+panel export contains a concrete device ID. Other monitored K2 printers in the
+same all-data export must not make the target fixture fail. The candidate job
+must also contain raw K2 `materialUsed` CSV from the target machine history, and
+the CSV source count must match both the print-start snapshot count and the
+`JobMaterialSegment` count. If the certification panel export carries a concrete
+session ID, that ID must match the candidate print-start/session evidence before
+the job can be marked ready for fixture review.
 
 Required sequence:
 
@@ -217,7 +225,11 @@ This builder is read-only. It creates `fixture-evidence.json`,
 `capture-manifest.json` from the exported stores. A rejected receipt is still a
 useful artifact because it records the missing snapshot, segment, raw CSV,
 order, or usage-state evidence without mutating 3DPmon storage, ItemKeeper, or
-the reviewed production registry.
+the reviewed production registry. The builder resolves raw history from the
+target machine only, using the requested `deviceId` and `printJobId` plus
+`printPlanId` when available. Device metadata is anchored to the 3DPmon export
+target/machine; certification JSON and CLI metadata may fill missing fields, but
+conflicts are reported as `fixture-review-not-ready` review blockers.
 
 ## Gate 10: K2 CFS Topology Certification
 
