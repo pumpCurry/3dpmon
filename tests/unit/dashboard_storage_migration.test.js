@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1644 (PR #441)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-02 07:45:00
+ * @lastModified 2026-09-02 14:10:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -263,7 +263,12 @@ vi.mock('../../3dp_lib/dashboard_data.js', () => ({
 vi.mock('../../3dp_lib/dashboard_filament_presets.js', () => ({ FILAMENT_PRESETS: [] }));
 vi.mock('../../3dp_lib/dashboard_log_util.js', () => ({ logManager: { add: vi.fn() } }));
 vi.mock('../../3dp_lib/dashboard_utils.js', () => ({ getCurrentTimestamp: () => 0 }));
-vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({ initLedgerAnchors: () => ({ seeded: 0 }), quarantineInvalidMountEvents: () => 0 }));
+vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({
+  attributedUsed: () => 0,
+  getSpoolIntervals: () => [],
+  initLedgerAnchors: () => ({ seeded: 0 }),
+  quarantineInvalidMountEvents: () => 0
+}));
 vi.mock('../../3dp_lib/dashboard_storage_idb.js', () => ({
   initIdb: vi.fn(), isIdbAvailable: () => false, getIdbCache: () => null,
   queueSharedWrite: vi.fn(), queueMachineWrite: vi.fn(), flushIdb: vi.fn(),

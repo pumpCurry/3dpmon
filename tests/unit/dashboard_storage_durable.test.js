@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1624 (PR #440)
+ * @version 1.390.1644 (PR #441)
  * @since   1.390.1580 (PR #440)
- * @lastModified 2026-09-02 06:58:30
+ * @lastModified 2026-09-02 14:10:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -151,7 +151,12 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({
 vi.mock("../../3dp_lib/dashboard_filament_presets.js", () => ({ FILAMENT_PRESETS: [] }));
 vi.mock("../../3dp_lib/dashboard_log_util.js", () => ({ logManager: { add: vi.fn() } }));
 vi.mock("../../3dp_lib/dashboard_utils.js", () => ({ getCurrentTimestamp: () => 0 }));
-vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({ initLedgerAnchors: vi.fn(), quarantineInvalidMountEvents: vi.fn(() => 0) }));
+vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
+  attributedUsed: () => 0,
+  getSpoolIntervals: () => [],
+  initLedgerAnchors: vi.fn(),
+  quarantineInvalidMountEvents: vi.fn(() => 0)
+}));
 vi.mock("../../3dp_lib/dashboard_target_identity.js", () => ({ parseDest: vi.fn(), isIpLiteral: vi.fn(), extractHost: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_storage_idb.js", () => ({
   initIdb: vi.fn(),

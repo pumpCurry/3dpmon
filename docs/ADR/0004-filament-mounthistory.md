@@ -37,6 +37,8 @@
 ### データモデル：mountHistory
 追記専用。usageHistory のスナップショットとは**別ストア**に置き、安易にロールオーバーしない（古い装着記録の消失が補正不能の原因だったため）。usageHistory 側も現在は既定で件数上限による自動削除を行わず、明示的に `usageHistoryMaxEntries` を1以上にした場合だけ古い記録から削除する。
 
+印刷履歴 (`printStore.history`) も同様に既定は件数無制限で保持する。ユーザーが `printHistoryMaxEntries` を1以上にして自動削除を有効化した場合でも、最新の残量導出アンカー区間（唯一のopen区間、openが無ければ最終区間）に含まれ、`attributedUsed(job, spoolId) > 0` となるジョブは削除対象から外す。これにより、履歴削除後の `reconcileSpool()` が「消費済みジョブを失ったため残量を増やす」方向へ巻き戻ることを防ぐ。
+
 ```js
 // monitorData.mountHistory: MountEvent[]
 {

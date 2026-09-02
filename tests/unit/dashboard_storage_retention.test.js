@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1641 (PR #441)
+ * @version 1.390.1644 (PR #441)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 13:38:32
+ * @lastModified 2026-09-02 14:10:41
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -34,6 +34,11 @@ class LocalStorageStub {
 }
 
 const mocks = vi.hoisted(() => ({
+  idbAvailable: false,
+  queueSharedWrite: vi.fn(),
+  queueMachineWrite: vi.fn(),
+  protectedIntervals: [],
+  attributedUsed: vi.fn(() => 0),
   monitorData: {
     appSettings: {
       printHistoryMaxEntries: 0
@@ -86,14 +91,19 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({
 vi.mock("../../3dp_lib/dashboard_filament_presets.js", () => ({ FILAMENT_PRESETS: [] }));
 vi.mock("../../3dp_lib/dashboard_log_util.js", () => ({ logManager: { add: vi.fn() } }));
 vi.mock("../../3dp_lib/dashboard_utils.js", () => ({ getCurrentTimestamp: () => 0 }));
-vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({ initLedgerAnchors: vi.fn(), quarantineInvalidMountEvents: vi.fn(() => 0) }));
+vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
+  initLedgerAnchors: vi.fn(),
+  quarantineInvalidMountEvents: vi.fn(() => 0),
+  getSpoolIntervals: vi.fn(() => mocks.protectedIntervals),
+  attributedUsed: mocks.attributedUsed
+}));
 vi.mock("../../3dp_lib/dashboard_target_identity.js", () => ({ parseDest: vi.fn(), isIpLiteral: vi.fn(), extractHost: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_storage_idb.js", () => ({
   initIdb: vi.fn(),
-  isIdbAvailable: () => false,
+  isIdbAvailable: () => mocks.idbAvailable,
   getIdbCache: () => null,
-  queueSharedWrite: vi.fn(),
-  queueMachineWrite: vi.fn(),
+  queueSharedWrite: mocks.queueSharedWrite,
+  queueMachineWrite: mocks.queueMachineWrite,
   flushIdb: vi.fn(async () => {}),
   exportAllIdb: vi.fn(),
   importAllIdb: vi.fn(),
@@ -104,8 +114,11 @@ vi.mock("../../3dp_lib/dashboard_storage_idb.js", () => ({
 const {
   applyPrintHistoryRetention,
   applyConfiguredPrintHistoryRetentionToAllMachines,
+  initStorage,
   resolvePrintHistoryRetentionLimit,
+  resolveUsageHistoryRetentionLimit,
   savePrintHistory,
+  saveUnifiedStorage,
   trimUsageHistory
 } = await import("../../3dp_lib/dashboard_storage.js");
 
@@ -119,6 +132,12 @@ beforeEach(() => {
   mocks.monitorData.machines = {};
   mocks.monitorData.usageHistory = [];
   mocks.monitorData.usageHistoryRev = 0;
+  mocks.idbAvailable = false;
+  mocks.queueSharedWrite.mockClear();
+  mocks.queueMachineWrite.mockClear();
+  mocks.protectedIntervals = [];
+  mocks.attributedUsed.mockReset();
+  mocks.attributedUsed.mockReturnValue(0);
 });
 
 describe("印刷履歴保持設定", () => {
@@ -145,6 +164,16 @@ describe("印刷履歴保持設定", () => {
     expect(applyPrintHistoryRetention(makeHistory(4), { printHistoryMaxEntries: 0 })).toHaveLength(4);
   });
 
+  it("保持上限は十進整数だけを受理し、booleanや指数表記などの暗黙変換を拒否する", () => {
+    expect(resolvePrintHistoryRetentionLimit({ printHistoryMaxEntries: true })).toBe(0);
+    expect(resolvePrintHistoryRetentionLimit({ printHistoryMaxEntries: "0x10" })).toBe(0);
+    expect(resolvePrintHistoryRetentionLimit({ printHistoryMaxEntries: "1e3" })).toBe(0);
+    expect(resolvePrintHistoryRetentionLimit({ printHistoryMaxEntries: [10] })).toBe(0);
+    expect(resolvePrintHistoryRetentionLimit({ printHistoryMaxEntries: "1500" })).toBe(1500);
+    expect(resolveUsageHistoryRetentionLimit({ usageHistoryMaxEntries: "4500" })).toBe(4500);
+    expect(resolveUsageHistoryRetentionLimit({ usageHistoryMaxEntries: false })).toBe(0);
+  });
+
   it("設定変更時に全ホストの既存印刷履歴へ保持上限を適用できる", () => {
     mocks.monitorData.appSettings.printHistoryMaxEntries = 2;
     mocks.monitorData.machines = {
@@ -159,6 +188,64 @@ describe("印刷履歴保持設定", () => {
     expect(mocks.monitorData.machines.K1Max.printStore.history.map((job) => job.id)).toEqual([3, 2]);
     expect(mocks.monitorData.machines.K2Pro.printStore.history.map((job) => job.id)).toEqual([4, 3]);
     expect(mocks.monitorData.machines.Empty.printStore.history.map((job) => job.id)).toEqual([1]);
+  });
+
+  it("保持上限適用時も台帳残量導出に必要な装着区間内の消費ジョブを削除しない", () => {
+    mocks.monitorData.appSettings.printHistoryMaxEntries = 1;
+    mocks.monitorData.filamentSpools = [{ id: "spool-a", deleted: false }];
+    mocks.protectedIntervals = [
+      { spoolId: "spool-a", host: "K1Max", sinceJobId: 100, untilJobId: null, open: true }
+    ];
+    mocks.attributedUsed.mockImplementation((job, spoolId) => (
+      spoolId === "spool-a" && Number(job?.materialUsedMm) > 0 ? Number(job.materialUsedMm) : 0
+    ));
+    mocks.monitorData.machines = {
+      K1Max: {
+        printStore: {
+          history: [
+            { id: 103, filename: "third.gcode", materialUsedMm: 1000 },
+            { id: 102, filename: "second.gcode", materialUsedMm: 1000 },
+            { id: 101, filename: "first.gcode", materialUsedMm: 1000 },
+            { id: 99, filename: "before-anchor.gcode", materialUsedMm: 1000 }
+          ],
+          current: null,
+          videos: {}
+        }
+      }
+    };
+
+    const result = applyConfiguredPrintHistoryRetentionToAllMachines();
+
+    expect(result.changedHosts).toEqual(["K1Max"]);
+    expect(result.removedJobs).toBe(1);
+    expect(mocks.monitorData.machines.K1Max.printStore.history.map((job) => job.id)).toEqual([103, 102, 101]);
+  });
+
+  it("IndexedDB利用時のlocalStorage回復バックアップは無制限設定でも履歴をbounded snapshotとして保存する", async () => {
+    mocks.idbAvailable = true;
+    mocks.monitorData.appSettings.printHistoryMaxEntries = 0;
+    mocks.monitorData.appSettings.usageHistoryMaxEntries = 0;
+    mocks.monitorData.usageHistory = Array.from({ length: 4502 }, (_, index) => ({ usageId: `u-${index}` }));
+    mocks.monitorData.machines = {
+      "K2Pro-69E7": {
+        storedData: {},
+        runtimeData: { socket: "not-serializable" },
+        historyData: [],
+        printStore: { history: makeHistory(1502), current: null, videos: {} }
+      }
+    };
+
+    await initStorage();
+    saveUnifiedStorage(true);
+
+    const hostBackup = JSON.parse(globalThis.localStorage.getItem("3dpmon-host-K2Pro-69E7"));
+    const globalBackup = JSON.parse(globalThis.localStorage.getItem("3dpmon-global"));
+    expect(hostBackup.printStore.history).toHaveLength(1500);
+    expect(hostBackup.printStore.historyBackupTruncated).toBe(true);
+    expect(hostBackup.runtimeData).toBeUndefined();
+    expect(globalBackup.usageHistory).toHaveLength(4500);
+    expect(globalBackup.storageRecoveryBackup?.usageHistoryTruncated).toBe(true);
+    expect(mocks.queueMachineWrite.mock.calls[0][1].printStore.history).toHaveLength(1502);
   });
 });
 

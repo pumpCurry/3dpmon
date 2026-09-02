@@ -198,6 +198,12 @@ monitorData = {
 - 2秒スロットリング (SAVE_THROTTLE_MS)
 - 同一データスキップ (_lastSavedJson 比較)
 - IndexedDB バッチ書き込み (queueSharedWrite/queueMachineWrite)
+- Electron / IndexedDB が正本の場合、印刷履歴と使用履歴は既定で件数上限による自動削除を行わない。
+  ただし障害復元用の localStorage バックアップと relay 子への転送は、quota と転送量を守るため
+  近傍 snapshot に制限し、切り詰めた場合は metadata (`historyBackupTruncated`,
+  `usageHistoryTruncated` など) を付ける。
+- 印刷履歴の自動削除を明示的にONにした場合でも、mountHistory から残量を再計算するために
+  必要な現行アンカー区間内の消費ジョブは保持上限より優先して保護する。
 
 ### 6.4 移行サポート
 - 最小サポート移行元: **v1.40** (`3dp-monitor_1.400`)

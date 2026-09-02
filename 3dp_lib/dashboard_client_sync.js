@@ -22,9 +22,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1279 (PR #426)
+ * @version 1.390.1644 (PR #441)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-08-04 11:50:46
+ * @lastModified 2026-09-02 14:10:41
  * -----------------------------------------------------------
  */
 
@@ -56,6 +56,27 @@ function _normalizeNegativeRemainingDisplayMode(value) {
   if (value === "clamp-zero") return "clamp-zero";
   if (value === "show-negative" || value === "show" || value === "signed") return "show-negative";
   return null;
+}
+
+/**
+ * 親から受信した履歴保持上限を十進整数だけに正規化する。
+ *
+ * @private
+ * @function _normalizeRetentionLimit
+ * @param {*} value - relay snapshot/deltaの保持上限値。
+ * @returns {number} 0または1以上の安全な整数。0は無制限。
+ */
+function _normalizeRetentionLimit(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^[0-9]+$/.test(trimmed)) return 0;
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+  }
+  return 0;
 }
 
 /** リレーモード: null=未検出, "parent"=親, "readonly"=子閲覧, "satellite"=子操作 */
@@ -601,6 +622,12 @@ function _applySnapshot(state) {
         ?? state.appSettings.filamentRemainingDisplayMode
     );
     if (negativeMode) monitorData.appSettings.negativeRemainingDisplayMode = negativeMode;
+    if ("printHistoryMaxEntries" in state.appSettings) {
+      monitorData.appSettings.printHistoryMaxEntries = _normalizeRetentionLimit(state.appSettings.printHistoryMaxEntries);
+    }
+    if ("usageHistoryMaxEntries" in state.appSettings) {
+      monitorData.appSettings.usageHistoryMaxEntries = _normalizeRetentionLimit(state.appSettings.usageHistoryMaxEntries);
+    }
   }
 
   // ★ フィラメントデータ: 親が唯一の権威 — 受信内容で全置換する。
@@ -722,6 +749,12 @@ function _applyDelta(msg) {
     if ("appSettingsNegativeRemainingDisplayMode" in msg.shared) {
       const negativeMode = _normalizeNegativeRemainingDisplayMode(msg.shared.appSettingsNegativeRemainingDisplayMode);
       if (negativeMode) monitorData.appSettings.negativeRemainingDisplayMode = negativeMode;
+    }
+    if ("appSettingsPrintHistoryMaxEntries" in msg.shared) {
+      monitorData.appSettings.printHistoryMaxEntries = _normalizeRetentionLimit(msg.shared.appSettingsPrintHistoryMaxEntries);
+    }
+    if ("appSettingsUsageHistoryMaxEntries" in msg.shared) {
+      monitorData.appSettings.usageHistoryMaxEntries = _normalizeRetentionLimit(msg.shared.appSettingsUsageHistoryMaxEntries);
     }
   }
 
