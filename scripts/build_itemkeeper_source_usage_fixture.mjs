@@ -18,9 +18,9 @@
  * - {@link buildItemKeeperSourceUsageFixture}：export payloadからfixture artifactを生成
  * - {@link runItemKeeperSourceUsageFixtureBuilder}：CLI指定ファイルを読み書きする
  *
- * @version 1.390.1643 (PR #440)
+ * @version 1.390.1645 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 15:19:24
+ * @lastModified 2026-09-02 15:26:05
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2 registry entry追加時にreviewed registry entry skeleton出力を追加する
@@ -43,6 +43,10 @@ import {
   K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE,
   resolveK2MaterialUsedSourceCsv,
 } from "../3dp_lib/printer_core/dashboard_material_used_csv_parser.js";
+import {
+  doesCfsSessionMatchCorrelationEvidence,
+  normalizeCfsSessionCorrelationEvidence,
+} from "../3dp_lib/printer_core/dashboard_cfs_session_correlation.js";
 
 /**
  * CLI usage text。
@@ -566,12 +570,21 @@ function createIdentityReviewBlockers({ device, certificationPayload, options, s
   const certificationSessionId = isConcreteIdentityText(certificationPrinter.sessionId)
     ? toText(certificationPrinter.sessionId)
     : "";
+  const certificationSessionCorrelation = normalizeCfsSessionCorrelationEvidence(
+    certificationPayload?.manifest?.sessionCorrelation
+  );
+  const requiresCertificationSession = Boolean(certificationSessionId || certificationSessionCorrelation.value);
   const sessionIds = Array.isArray(sessionEvidence?.sessionIds) ? sessionEvidence.sessionIds : [];
-  if (certificationSessionId && sessionIds.length <= 0) {
+  if (requiresCertificationSession && sessionIds.length <= 0) {
     blockers.push("certification-session-id-missing");
-  } else if (certificationSessionId && sessionIds.length > 1) {
+  } else if (requiresCertificationSession && sessionIds.length > 1) {
     blockers.push("candidate-session-id-ambiguous");
   } else if (certificationSessionId && sessionIds[0] !== certificationSessionId) {
+    blockers.push("certification-session-id-mismatch");
+  } else if (
+    certificationSessionCorrelation.value &&
+    !doesCfsSessionMatchCorrelationEvidence(sessionIds[0], certificationSessionCorrelation)
+  ) {
     blockers.push("certification-session-id-mismatch");
   }
   return blockers;
@@ -594,14 +607,15 @@ function createIdentityReviewBlockers({ device, certificationPayload, options, s
  * @returns {Object} session evidence。
  */
 function createFixtureSessionEvidence({ snapshots, segments, historyEntry }) {
-  const sessionIds = [...new Set([
-    ...snapshots.map(resolveRecordSessionId),
+  const sessionIds = [...new Set(snapshots.map(resolveRecordSessionId).filter(Boolean))];
+  const observedOtherSessionIds = [...new Set([
     ...segments.map(resolveRecordSessionId),
     resolveRecordSessionId(historyEntry),
   ].filter(Boolean))];
   return {
     sessionId: sessionIds.length === 1 ? sessionIds[0] : "",
     sessionIds,
+    observedOtherSessionIds,
   };
 }
 
@@ -772,6 +786,9 @@ function createFixtureEvidence({
       printPlanId: toText(expectedSourceOrder[0]?.printPlanId || historyEntry?.printPlanId || ""),
       sessionId: toText(sessionEvidence?.sessionId),
       sessionIds: Array.isArray(sessionEvidence?.sessionIds) ? [...sessionEvidence.sessionIds] : [],
+      observedOtherSessionIds: Array.isArray(sessionEvidence?.observedOtherSessionIds)
+        ? [...sessionEvidence.observedOtherSessionIds]
+        : [],
     },
     raw: {
       materialUsedSourceCsv: resolveK2MaterialUsedSourceCsv(historyEntry),
@@ -870,6 +887,7 @@ export function buildItemKeeperSourceUsageFixture({
       printPlanId,
       sessionId: sessionEvidence.sessionId,
       sessionIds: [...sessionEvidence.sessionIds],
+      observedOtherSessionIds: [...sessionEvidence.observedOtherSessionIds],
     },
     inputHashes,
     snapshotIds: snapshots.map((snapshot) => toText(snapshot.snapshotId)),

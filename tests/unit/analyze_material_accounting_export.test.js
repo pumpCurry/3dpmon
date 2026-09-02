@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1643 (PR #440)
+ * @version 1.390.1645 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 15:11:47
+ * @lastModified 2026-09-02 15:26:05
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -35,6 +35,11 @@ import {
   createPrinterCoreV3DeterministicId,
   stableStringifyPrinterCoreV3Value,
 } from "../../3dp_lib/printer_core/dashboard_data_schema_v3.js";
+import { createCfsSessionCorrelationEvidence } from "../../3dp_lib/printer_core/dashboard_cfs_session_correlation.js";
+import {
+  createCfsCertificationExportBundle,
+  createCfsCertificationPanelViewModel,
+} from "../../3dp_lib/printer_core/dashboard_cfs_certification_panel.js";
 
 /**
  * ItemKeeper source-aware projectionのmodule-owned認証authority名。
@@ -1052,6 +1057,91 @@ describe("analyze_material_accounting_export", () => {
 
     expect(report.gate18_9J2.readyForFixtureReview).toBe(false);
     expect(job.sessionIds).toEqual([]);
+    expect(job.reasons).toContain("certification-session-id-missing");
+  });
+
+  it("J-2 readinessはredacted certification sessionをcorrelation evidenceで照合する", () => {
+    const payload = createGate18_9J2ReadyPayload();
+
+    const report = analyzeMaterialAccountingExport(payload, {
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          liveSendEnabled: false,
+          printer: { model: "F012", deviceId: "serial:k2", sessionId: "<ID_001>" },
+          sessionCorrelation: createCfsSessionCorrelationEvidence("session:k2-a", { salt: "test-session-salt" }),
+        },
+        summary: { material: { summary: { loadedSourceCount: 3 } } },
+      },
+    });
+    const job = report.gate18_9J2.devices[0].candidateJobs[0];
+
+    expect(report.gate18_9J2.readyForFixtureReview).toBe(true);
+    expect(job.sessionIds).toEqual(["session:k2-a"]);
+    expect(job.reasons).not.toContain("certification-session-id-mismatch");
+  });
+
+  it("J-2 readinessはCertification panelのredacted export bundleをcorrelationで照合する", () => {
+    const payload = createGate18_9J2ReadyPayload();
+    const certificationPayload = createCfsCertificationExportBundle(createCfsCertificationPanelViewModel({
+      printer: {
+        model: "F012",
+        deviceId: "serial:k2",
+        sessionId: "session:k2-a",
+        active: true,
+      },
+      materialViewModel: {
+        summary: {
+          loadedSourceCount: 3,
+          selectedSourceCount: 1,
+        },
+      },
+      export: {
+        sessionCorrelationSalt: "test-session-salt",
+      },
+    }));
+
+    const report = analyzeMaterialAccountingExport(payload, { certificationPayload });
+    const job = report.gate18_9J2.devices[0].candidateJobs[0];
+
+    expect(certificationPayload.manifest.printer.sessionId).toMatch(/^<ID_\d+>$/u);
+    expect(certificationPayload.manifest.sessionCorrelation.value).toBe(
+      createCfsSessionCorrelationEvidence("session:k2-a", { salt: "test-session-salt" }).value
+    );
+    expect(report.gate18_9J2.readyForFixtureReview).toBe(true);
+    expect(job.reasons).not.toContain("certification-session-id-mismatch");
+  });
+
+  it("J-2 readinessはsegment/historyだけのsession証跡でsnapshot欠落を補完しない", () => {
+    const payload = createGate18_9J2ReadyPayload();
+    for (const snapshot of payload.materialAccountingPrintBindingStore.printStartSnapshots) {
+      delete snapshot.sessionId;
+      delete snapshot.issuanceEvidence;
+      delete snapshot.startContext;
+      delete snapshot.uploadReceipt;
+    }
+    for (const segment of payload.materialAccountingPrintBindingStore.jobMaterialSegments) {
+      segment.issuanceEvidence = { sessionId: "session:k2-a" };
+    }
+    for (const history of payload.machines["K2Pro-69E7"].printStore.history) {
+      history.sessionId = "session:k2-a";
+    }
+
+    const report = analyzeMaterialAccountingExport(payload, {
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          liveSendEnabled: false,
+          printer: { model: "F012", deviceId: "serial:k2", sessionId: "session:k2-a" },
+        },
+        summary: { material: { summary: { loadedSourceCount: 3 } } },
+      },
+    });
+    const job = report.gate18_9J2.devices[0].candidateJobs[0];
+
+    expect(report.gate18_9J2.readyForFixtureReview).toBe(false);
+    expect(job.sessionIds).toEqual([]);
+    expect(job.observedOtherSessionIds).toEqual(["session:k2-a"]);
     expect(job.reasons).toContain("certification-session-id-missing");
   });
 

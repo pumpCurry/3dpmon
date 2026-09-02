@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1617 (PR #440)
+ * @version 1.390.1645 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-09-01 23:58:00
+ * @lastModified 2026-09-02 15:26:05
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -31,6 +31,7 @@ import {
   createCfsCertificationPanelViewModel,
   renderCfsCertificationPanel,
 } from "../../3dp_lib/printer_core/dashboard_cfs_certification_panel.js";
+import { createCfsSessionCorrelationValue } from "../../3dp_lib/printer_core/dashboard_cfs_session_correlation.js";
 
 /**
  * CFS Certification パネル用の代表material view modelを生成する。
@@ -256,6 +257,9 @@ describe("dashboard_cfs_certification_panel", () => {
           { kind: "marker", name: "operator-cfs-load" },
         ],
       },
+      export: {
+        sessionCorrelationSalt: "test-session-salt",
+      },
     });
 
     const bundle = createCfsCertificationExportBundle(viewModel);
@@ -269,11 +273,17 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(serialized).not.toContain("192.168.54.153");
     expect(serialized).not.toContain("K2Pro-69E7");
     expect(serialized).not.toContain("ABCDEF123456");
+    expect(serialized).not.toContain("session-1");
     expect(serialized).toContain("<MAC_001>");
     expect(serialized).toContain("<SERIAL_001>");
     expect(serialized).toContain("<IP_001>");
     expect(serialized).toContain("<HOSTNAME_001>");
     expect(serialized).toContain("<RFID_001>");
+    expect(bundle.manifest.printer.sessionId).toMatch(/^<ID_\d+>$/u);
+    expect(bundle.manifest.sessionCorrelation).toMatchObject({
+      salt: "test-session-salt",
+      value: createCfsSessionCorrelationValue("session-1", "test-session-salt"),
+    });
   });
 
   it("export bundleはboxsInfo probe summaryをraw evidenceとは別に抽出する", () => {

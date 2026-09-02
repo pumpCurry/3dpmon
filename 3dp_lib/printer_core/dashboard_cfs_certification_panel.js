@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1645 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-09-02 01:07:00
+ * @lastModified 2026-09-02 15:26:05
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -29,6 +29,7 @@
 "use strict";
 
 import { redactProtocolValue } from "./dashboard_protocol_recorder.js";
+import { createCfsSessionCorrelationEvidence } from "./dashboard_cfs_session_correlation.js";
 
 /**
  * CFS Certification パネルViewModelのschema version。
@@ -109,6 +110,44 @@ function cloneJson(value) {
   } catch (_error) {
     return null;
   }
+}
+
+/**
+ * redaction後bundle内の自由記述文字列からraw session IDを除去する。
+ *
+ * 【詳細説明】
+ * - Protocol Recorderは`sessionId` keyの値は秘匿するが、preflight detailのような自由記述文字列に
+ *   埋め込まれたsession IDはkey名だけでは検出できない。
+ * - Certification exportは対象sessionを既に知っているため、既知のraw session文字列だけを
+ *   redacted printer.sessionId tokenへ置換して、通常文言への過剰redactionを避ける。
+ *
+ * @private
+ * @function replaceKnownSessionText
+ * @param {*} value - redaction後bundle値。
+ * @param {string} rawSessionId - export前のraw session ID。
+ * @param {string} replacement - redaction済みsession token。
+ * @returns {*} raw session文字列置換済み値。
+ */
+function replaceKnownSessionText(value, rawSessionId, replacement) {
+  const sessionText = toText(rawSessionId);
+  const replacementText = toText(replacement, "<SESSION_ID>");
+  if (!sessionText || value === null || value === undefined) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => replaceKnownSessionText(entry, sessionText, replacementText));
+  }
+  if (typeof value === "object") {
+    const result = {};
+    for (const [key, childValue] of Object.entries(value)) {
+      result[key] = replaceKnownSessionText(childValue, sessionText, replacementText);
+    }
+    return result;
+  }
+  if (typeof value !== "string") {
+    return value;
+  }
+  return value.split(sessionText).join(replacementText);
 }
 
 /**
@@ -878,6 +917,7 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     export: {
       captureId: toText(options.export?.captureId, ""),
       fixtureId: toText(options.export?.fixtureId, ""),
+      sessionCorrelationSalt: toText(options.export?.sessionCorrelationSalt, ""),
       jsonAvailable: true,
       ndjsonAvailable: true,
       zipAvailable: false,
@@ -962,6 +1002,9 @@ function formatProbeTargetSource(probeSummary) {
 export function createCfsCertificationExportBundle(viewModel) {
   const rawEvidence = cloneJson(viewModel?.evidence?.raw) || {};
   const protocolEvents = Array.isArray(rawEvidence.events) ? rawEvidence.events : [];
+  const sessionCorrelation = createCfsSessionCorrelationEvidence(viewModel?.printer?.sessionId, {
+    salt: viewModel?.export?.sessionCorrelationSalt,
+  });
   const probeSummaries = {
     before: extractProbeSummaryForExport(rawEvidence.beforeBoxsInfo),
     after: extractProbeSummaryForExport(rawEvidence.afterBoxsInfo),
@@ -977,6 +1020,7 @@ export function createCfsCertificationExportBundle(viewModel) {
       sourceId: viewModel?.command?.sourceId || "",
       displaySlot: viewModel?.command?.displaySlot || "",
       commandKind: viewModel?.command?.commandKind || "",
+      sessionCorrelation,
       dryRunStatus: viewModel?.dryRun?.status || "unknown",
       liveSendEnabled: viewModel?.liveSend?.enabled === true,
       redactionApplied: false,
@@ -995,7 +1039,12 @@ export function createCfsCertificationExportBundle(viewModel) {
     events: cloneJson(protocolEvents) || [],
     summaryTimeline: cloneJson(viewModel?.evidence?.timeline) || [],
   };
-  const redacted = redactProtocolValue(bundle);
+  const redactedBundle = redactProtocolValue(bundle);
+  const redacted = replaceKnownSessionText(
+    redactedBundle,
+    viewModel?.printer?.sessionId,
+    redactedBundle?.manifest?.printer?.sessionId
+  );
   redacted.manifest = {
     ...(redacted.manifest || {}),
     redactionApplied: true,

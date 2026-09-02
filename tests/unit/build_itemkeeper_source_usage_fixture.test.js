@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1643 (PR #440)
+ * @version 1.390.1645 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 15:19:24
+ * @lastModified 2026-09-02 15:26:05
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -31,6 +31,11 @@ import {
   parseArgs,
   runItemKeeperSourceUsageFixtureBuilder,
 } from "../../scripts/build_itemkeeper_source_usage_fixture.mjs";
+import { createCfsSessionCorrelationEvidence } from "../../3dp_lib/printer_core/dashboard_cfs_session_correlation.js";
+import {
+  createCfsCertificationExportBundle,
+  createCfsCertificationPanelViewModel,
+} from "../../3dp_lib/printer_core/dashboard_cfs_certification_panel.js";
 
 /**
  * builder test用の共通CLI optionsを生成する。
@@ -347,6 +352,98 @@ describe("build_itemkeeper_source_usage_fixture", () => {
     expect(result.status).toBe("fixture-accepted");
     expect(result.fixtureEvidence.print.sessionId).toBe("session:k2-a");
     expect(result.reviewBlockers).not.toContain("certification-session-id-mismatch");
+  });
+
+  it("redacted certification sessionはcorrelation evidenceでtarget snapshot sessionと照合する", () => {
+    const payload = createExportPayload();
+    for (const snapshot of payload.materialAccountingPrintBindingStore.printStartSnapshots) {
+      snapshot.issuanceEvidence = { sessionId: "session:k2-a" };
+    }
+
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          printer: {
+            model: "F012",
+            firmwareVersion: "1.1.6.7",
+            sessionId: "<ID_001>",
+          },
+          sessionCorrelation: createCfsSessionCorrelationEvidence("session:k2-a", { salt: "test-session-salt" }),
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-accepted");
+    expect(result.fixtureEvidence.print.sessionId).toBe("session:k2-a");
+    expect(result.captureBundle.print.sessionId).toBe("session:k2-a");
+    expect(result.reviewBlockers).toEqual([]);
+  });
+
+  it("Certification panelのredacted export bundleからbuilder session provenanceを照合する", () => {
+    const payload = createExportPayload();
+    for (const snapshot of payload.materialAccountingPrintBindingStore.printStartSnapshots) {
+      snapshot.issuanceEvidence = { sessionId: "session:k2-a" };
+    }
+    const certificationPayload = createCfsCertificationExportBundle(createCfsCertificationPanelViewModel({
+      printer: {
+        model: "F012",
+        firmwareVersion: "1.1.6.7",
+        deviceId: "serial:k2-pro-69e7",
+        sessionId: "session:k2-a",
+        active: true,
+      },
+      export: {
+        sessionCorrelationSalt: "test-session-salt",
+      },
+    }));
+
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload,
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(certificationPayload.manifest.printer.sessionId).toMatch(/^<ID_\d+>$/u);
+    expect(result.status).toBe("fixture-accepted");
+    expect(result.fixtureEvidence.print.sessionId).toBe("session:k2-a");
+    expect(result.reviewBlockers).toEqual([]);
+  });
+
+  it("builderはsegment/historyだけのsession証跡でsnapshot欠落を補完しない", () => {
+    const payload = createExportPayload();
+    for (const segment of payload.materialAccountingPrintBindingStore.jobMaterialSegments) {
+      segment.issuanceEvidence = { sessionId: "session:k2-a" };
+    }
+    for (const history of payload.machines["K2Pro-69E7"].printStore.history) {
+      history.sessionId = "session:k2-a";
+    }
+
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          printer: {
+            model: "F012",
+            firmwareVersion: "1.1.6.7",
+            sessionId: "<ID_001>",
+          },
+          sessionCorrelation: createCfsSessionCorrelationEvidence("session:k2-a", { salt: "test-session-salt" }),
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-review-not-ready");
+    expect(result.fixtureEvidence.print.sessionIds).toEqual([]);
+    expect(result.fixtureEvidence.print.observedOtherSessionIds).toEqual(["session:k2-a"]);
+    expect(result.reviewBlockers).toContain("certification-session-id-missing");
   });
 
   it("CLIからartifact一式を書き出す", async () => {
