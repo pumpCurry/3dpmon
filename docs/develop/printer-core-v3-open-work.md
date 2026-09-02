@@ -66,7 +66,11 @@ reviewable source-aware projection digest candidate、同一runのCFS Debug / Ce
 raw K2 `materialUsed` CSVはtarget machine historyを優先し、履歴保持上限でhistory rowが先に
 落ちた場合だけ同一jobの `JobMaterialSegment.evidence.completionEvidence` fallbackを使う。
 ただしCSVのsource数、parser/profile、print-start binding order、各 `usedLengthMm` との
-値一致が崩れる場合はreadyにしない。
+値一致が崩れる場合はreadyにしない。target machine history rawとsegment側durable rawが
+両方存在する場合はhistory rawをcanonicalにするが、segment側rawとの完全一致を要求し、
+不一致またはsegment内のraw混在はfixture/analyzerともfail-closedにする。保存済みの
+`historyCoverage.activeAnchorComplete:true` は現在プロセスでのfetch証明であり、再起動・
+storage restore後は新しい履歴fetchがactive anchorを跨ぐまで再probe待ちとして扱う。
 このreadinessがtrueでも、reviewed registry entry追加とproduction issuer activationは別GateまでHOLDする。
 
 Gate 18.9J-1では、ItemKeeper source-aware projectionを本番送信へ解禁せず、

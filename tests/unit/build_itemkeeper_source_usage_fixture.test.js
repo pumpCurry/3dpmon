@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1656 (PR #440)
+ * @version 1.390.1658 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 17:05:50
+ * @lastModified 2026-09-02 18:32:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -331,6 +331,42 @@ describe("build_itemkeeper_source_usage_fixture", () => {
     expect(result.fixtureEvidence.raw.materialUsedSourceCsv).toBe("");
     expect(result.warnings).toContain("raw-material-used-completion-evidence-conflict");
     expect(result.warnings).toContain("raw-material-used-source-csv-missing");
+  });
+
+  it("履歴rawとsegment completionEvidence rawが不一致ならfixtureを採用しない", () => {
+    const payload = createExportPayload();
+    for (const segment of payload.materialAccountingPrintBindingStore.jobMaterialSegments) {
+      segment.evidence = {
+        completionEvidence: {
+          rawMaterialUsed: "3210,10",
+          parserVersion: "k2-material-used-csv:v1",
+          sourceOrderingProfile: "print-start-binding-authority-order:v1",
+          sourceCount: 2,
+          partCount: 2,
+        },
+      };
+    }
+
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          generatedAt: "2026-09-02T01:29:00.000Z",
+          printer: {
+            model: "F012",
+            firmwareVersion: "1.1.6.7",
+          },
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-rejected");
+    expect(result.captureBundle.rawMaterialUsed).toBe("3210,0");
+    expect(result.fixtureEvidence.raw.materialUsedSourceCsv).toBe("3210,0");
+    expect(result.warnings).toContain("raw-material-used-completion-evidence-mismatch");
   });
 
   it("certification sessionがあるfixtureは対象jobのsession provenanceをevidenceへ明示する", () => {

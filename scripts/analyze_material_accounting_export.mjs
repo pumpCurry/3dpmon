@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1657 (PR #440)
+ * @version 1.390.1658 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 17:44:30
+ * @lastModified 2026-09-02 18:32:30
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -37,6 +37,7 @@ import {
   K2_MATERIAL_USED_CSV_PARSER_VERSION,
   K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE,
   parseK2MaterialUsedSourceCsv,
+  resolveK2MaterialUsedCompletionEvidenceCsv,
   resolveK2MaterialUsedSourceCsv,
 } from "../3dp_lib/printer_core/dashboard_material_used_csv_parser.js";
 import {
@@ -797,33 +798,6 @@ function createPrintBindingJobKey(record) {
 }
 
 /**
- * JobMaterialSegmentへ保存されたcompletion raw CSV証跡を取得する。
- *
- * 【詳細説明】
- * - 印刷履歴は保持上限により削除される場合があるため、Gate 18.9J-2 fixture判定では
- *   segment側に保存されたcompletionEvidenceを履歴CSVの代替証跡として扱う。
- * - 同一job内で複数のraw CSVが混ざる場合は、後続のparserで偶然readyにならないよう
- *   conflict理由を返し、raw CSVは採用しない。
- *
- * @private
- * @function resolveSegmentCompletionMaterialUsedCsv
- * @param {Object[]} segments - JobMaterialSegment配列。
- * @returns {{rawMaterialUsed:string,reasons:string[]}} segment completion evidence。
- */
-function resolveSegmentCompletionMaterialUsedCsv(segments) {
-  const rawValues = [...new Set((Array.isArray(segments) ? segments : [])
-    .map((segment) => toText(segment?.evidence?.completionEvidence?.rawMaterialUsed))
-    .filter(Boolean))];
-  if (rawValues.length === 0) {
-    return { rawMaterialUsed: "", reasons: [] };
-  }
-  if (rawValues.length > 1) {
-    return { rawMaterialUsed: "", reasons: ["raw-material-used-completion-evidence-conflict"] };
-  }
-  return { rawMaterialUsed: rawValues[0], reasons: [] };
-}
-
-/**
  * completionEvidenceとJobMaterialSegment使用量の整合性を検査する。
  *
  * 【詳細説明】
@@ -934,11 +908,9 @@ function createPrintBindingCandidateJobs(snapshots, segments, deviceId, historie
         ...group.histories.map(resolveRecordSessionId),
       ].filter(Boolean))];
       const rawHistoryEntry = group.histories.find((history) => Boolean(resolveK2MaterialUsedSourceCsv(history))) || null;
-      const segmentCompletionEvidence = rawHistoryEntry
-        ? { rawMaterialUsed: "", reasons: [] }
-        : resolveSegmentCompletionMaterialUsedCsv(group.segments);
+      const materialUsedCompletionEvidence = resolveK2MaterialUsedCompletionEvidenceCsv(rawHistoryEntry, group.segments);
       const parsedMaterialUsed = parseK2MaterialUsedSourceCsv(
-        resolveK2MaterialUsedSourceCsv(rawHistoryEntry) || segmentCompletionEvidence.rawMaterialUsed,
+        materialUsedCompletionEvidence.rawMaterialUsed,
         {
           expectedCount: group.snapshots.length,
           requireWhenMultiple: group.snapshots.length > 1 || group.segments.length > 1,
@@ -946,7 +918,7 @@ function createPrintBindingCandidateJobs(snapshots, segments, deviceId, historie
       );
       const rawMaterialUsedParserReasons = [
         ...parsedMaterialUsed.reasons,
-        ...segmentCompletionEvidence.reasons,
+        ...materialUsedCompletionEvidence.reasons,
         ...validateSegmentCompletionMaterialUsedEvidence(group.segments, group.snapshots, parsedMaterialUsed),
       ];
       const observedUsedSegments = group.segments.filter((segment) => (

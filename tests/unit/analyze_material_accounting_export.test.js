@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1657 (PR #440)
+ * @version 1.390.1658 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 17:44:30
+ * @lastModified 2026-09-02 18:32:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -872,6 +872,39 @@ describe("analyze_material_accounting_export", () => {
 
     expect(report.gate18_9J2.readyForFixtureReview).toBe(false);
     expect(job.rawMaterialUsedParserReasons).toContain("raw-material-used-segment-value-mismatch");
+    expect(job.reasons).toContain("raw-material-used-parser-reasons-present");
+    expect(job.readyForFixtureReview).toBe(false);
+  });
+
+  it("J-2 readinessは履歴rawとsegment完了rawが一致しない同一jobをreadyにしない", () => {
+    const payload = createGate18_9J2ReadyPayload();
+    for (const segment of payload.materialAccountingPrintBindingStore.jobMaterialSegments) {
+      segment.evidence = {
+        ...(segment.evidence || {}),
+        completionEvidence: {
+          rawMaterialUsed: "3210,9999,0",
+          parserVersion: "k2-material-used-csv:v1",
+          sourceOrderingProfile: "print-start-binding-authority-order:v1",
+          sourceCount: 3,
+          partCount: 3,
+        },
+      };
+    }
+
+    const report = analyzeMaterialAccountingExport(payload, {
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          liveSendEnabled: false,
+          printer: { model: "F012", deviceId: "serial:k2", sessionId: "session:k2-a" },
+        },
+        summary: { material: { summary: { loadedSourceCount: 3 } } },
+      },
+    });
+    const job = report.gate18_9J2.devices[0].candidateJobs[0];
+
+    expect(report.gate18_9J2.readyForFixtureReview).toBe(false);
+    expect(job.rawMaterialUsedParserReasons).toContain("raw-material-used-completion-evidence-mismatch");
     expect(job.reasons).toContain("raw-material-used-parser-reasons-present");
     expect(job.readyForFixtureReview).toBe(false);
   });

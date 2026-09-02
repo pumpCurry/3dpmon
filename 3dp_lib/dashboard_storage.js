@@ -30,9 +30,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1657 (PR #440)
+ * @version 1.390.1658 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 17:44:30
+ * @lastModified 2026-09-02 18:32:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -2976,6 +2976,46 @@ function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
 }
 
 /**
+ * 復元されたprint history fetch coverageを再probe待ちへ戻す。
+ *
+ * 【詳細説明】
+ * - `recordPrintHistoryFetchCoverage()`の`activeAnchorComplete:true`は、現在起動中の
+ *   3DPmonがプリンタから実際に受け取った履歴windowだけを根拠にする。
+ * - 再起動後は、保存済みのfetch証跡が「停止中に印刷がなかった」ことまでは証明しないため、
+ *   最初の履歴再取得が終わるまでactive anchor coverageをfail-closedにする。
+ * - `totalLifetimeComplete:false`は明示retention済みの総履歴不完全性なので保持する。
+ *
+ * @private
+ * @function _markRestoredFetchCoverageRequiresReprobe
+ * @param {Object|null|undefined} machineData - 復元候補machine snapshot。
+ * @returns {Object|null|undefined} fetch coverageを再probe待ちへ正規化したsnapshot。
+ */
+function _markRestoredFetchCoverageRequiresReprobe(machineData) {
+  const coverage = machineData?.printStore?.historyCoverage;
+  if (
+    !machineData ||
+    typeof machineData !== "object" ||
+    !coverage ||
+    typeof coverage !== "object" ||
+    coverage.source !== "print-history-fetch" ||
+    coverage.activeAnchorComplete !== true
+  ) {
+    return machineData;
+  }
+  machineData.printStore = {
+    ...machineData.printStore,
+    historyCoverage: {
+      ...coverage,
+      activeAnchorComplete: false,
+      source: "print-history-fetch-restore-reprobe-required",
+      staleSource: "print-history-fetch",
+      restoredAt: getCurrentTimestamp()
+    }
+  };
+  return machineData;
+}
+
+/**
  * monitorData を per-host 分割形式で localStorage に書き込む。
  * グローバルデータは LS_KEY_GLOBAL に、per-host データは LS_KEY_HOST_PREFIX+hostname に書き込む。
  * 前回書き込みと同一ならスキップする。
@@ -3319,7 +3359,9 @@ function _restoreFromData(shared, machines, options = {}) {
     }
     const hostnameKeys = new Set(Object.keys(machines));
     for (const [host, rawMachineData] of Object.entries(machines)) {
-      const machineData = _markLocalStorageRecoveryHistoryAuthority(rawMachineData, options);
+      const machineData = _markRestoredFetchCoverageRequiresReprobe(
+        _markLocalStorageRecoveryHistoryAuthority(rawMachineData, options)
+      );
       // IPキーで、かつ同一プリンタのホスト名キーが存在する場合はスキップ
       const resolvedHostname = ipToHostname.get(host);
       if (resolvedHostname && hostnameKeys.has(resolvedHostname) && host !== resolvedHostname) {

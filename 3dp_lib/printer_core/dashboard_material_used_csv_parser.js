@@ -13,11 +13,12 @@
  *
  * 【公開関数一覧】
  * - {@link resolveK2MaterialUsedSourceCsv}：K2履歴entryからmaterialUsed CSV候補を抽出
+ * - {@link resolveK2MaterialUsedCompletionEvidenceCsv}：履歴rawとsegment完了rawを同じ規則で照合
  * - {@link parseK2MaterialUsedSourceCsv}：K2 materialUsed CSVをsource別使用量へ変換
  *
- * @version 1.390.1634 (PR #440)
+ * @version 1.390.1658 (PR #440)
  * @since   1.390.1632 (PR #440)
- * @lastModified 2026-09-02 09:58:00
+ * @lastModified 2026-09-02 18:32:30
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -72,6 +73,74 @@ export function resolveK2MaterialUsedSourceCsv(historyEntry) {
     }
   }
   return "";
+}
+
+/**
+ * segment側に保存されたK2 materialUsed completion raw CSV候補を収集する。
+ *
+ * 【詳細説明】
+ * - JobMaterialSegmentの`evidence.completionEvidence.rawMaterialUsed`は、印刷履歴が
+ *   retention済みの場合にfixture/analyzerが使う耐久証跡である。
+ * - 履歴rawと比較する前に、同一job内のsegment rawが複数種類へ分岐していないかを
+ *   pure helper側で一元的に確認する。
+ *
+ * @private
+ * @function collectSegmentCompletionMaterialUsedCsvValues
+ * @param {Array<Object>} segments - JobMaterialSegment候補配列。
+ * @returns {string[]} 重複除去済みraw CSV候補配列。
+ */
+function collectSegmentCompletionMaterialUsedCsvValues(segments) {
+  return [...new Set((Array.isArray(segments) ? segments : [])
+    .map((segment) => toTrimmedString(segment?.evidence?.completionEvidence?.rawMaterialUsed))
+    .filter(Boolean))];
+}
+
+/**
+ * 履歴rawとJobMaterialSegment completion rawからcanonical materialUsed CSVを解決する。
+ *
+ * 【詳細説明】
+ * - print history rawが存在する場合は、プリンタ履歴由来のrawをcanonicalとして採用する。
+ * - segment側completionEvidenceはretention後のfallbackだが、履歴rawと両方ある場合に
+ *   不一致なら保存済みdurable evidenceが同じ完了観測を指していないためreasonを返す。
+ * - segment側rawが複数種類ある場合は、どれか一つを選ばずconflictとしてfail-closedできる
+ *   reasonを返す。履歴rawがある場合も、conflict自体は監査理由として残す。
+ *
+ * @function resolveK2MaterialUsedCompletionEvidenceCsv
+ * @param {Object|null|undefined} historyEntry - K2/Crealityのprint history entry候補。
+ * @param {Array<Object>} segments - 同一jobのJobMaterialSegment候補配列。
+ * @returns {{rawMaterialUsed:string,source:string,reasons:string[]}} canonical raw CSVと検証理由。
+ * @example
+ * const evidence = resolveK2MaterialUsedCompletionEvidenceCsv(historyEntry, segments);
+ */
+export function resolveK2MaterialUsedCompletionEvidenceCsv(historyEntry, segments) {
+  const historyRaw = resolveK2MaterialUsedSourceCsv(historyEntry);
+  const segmentRawValues = collectSegmentCompletionMaterialUsedCsvValues(segments);
+  const reasons = [];
+  if (segmentRawValues.length > 1) {
+    reasons.push("raw-material-used-completion-evidence-conflict");
+  }
+  if (historyRaw) {
+    if (segmentRawValues.length === 1 && segmentRawValues[0] !== historyRaw) {
+      reasons.push("raw-material-used-completion-evidence-mismatch");
+    }
+    return Object.freeze({
+      rawMaterialUsed: historyRaw,
+      source: "print-history",
+      reasons: Object.freeze([...new Set(reasons)]),
+    });
+  }
+  if (segmentRawValues.length === 1) {
+    return Object.freeze({
+      rawMaterialUsed: segmentRawValues[0],
+      source: "job-material-segment-completion-evidence",
+      reasons: Object.freeze([]),
+    });
+  }
+  return Object.freeze({
+    rawMaterialUsed: "",
+    source: segmentRawValues.length > 1 ? "conflict" : "missing",
+    reasons: Object.freeze([...new Set(reasons)]),
+  });
 }
 
 /**

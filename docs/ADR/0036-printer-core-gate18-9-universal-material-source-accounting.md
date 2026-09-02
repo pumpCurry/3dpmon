@@ -612,7 +612,13 @@ Gate 18.9 must cover:
   as a raw K2 `materialUsed` CSV fallback after print history retention removes
   the target history row, but parser/profile metadata and every parsed CSV value
   must still match the corresponding `JobMaterialSegment.usedLengthMm` in
-  print-start binding order.
+  print-start binding order. If both target machine history raw and durable
+  segment completion raw exist for the same job, history raw remains canonical
+  and the segment raw must match it exactly; mismatches or mixed segment raw
+  values reject the fixture/analyzer candidate. A persisted
+  `historyCoverage.activeAnchorComplete:true` is not reused after restart or
+  storage restore; it is demoted to re-probe-required until the current process
+  receives a new print history window that crosses the active anchor.
   With the registry empty, production registration remains fail-closed with
   `reviewed-live-fixture-registry-entry-required`.
 - K2/CFS UI print-start sends create a module-attested MaterialBindingPlan

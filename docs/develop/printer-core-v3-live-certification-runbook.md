@@ -158,6 +158,13 @@ segment's `usedLengthMm` in print-start binding order. If the certification
 panel export carries a concrete session ID, that ID must match the candidate
 print-start/session evidence before the job can be marked ready for fixture
 review.
+When both the target machine history row and durable segment completion evidence
+contain raw K2 `materialUsed` CSV for the same job, the history row remains the
+canonical raw source, but the durable segment raw must match it exactly; a
+mismatch or mixed segment raw values keeps the fixture rejected. Stored
+`historyCoverage.activeAnchorComplete:true` is also only a current-process fetch
+proof. After app restart or storage restore, it must be treated as
+re-probe-required until a new printer history fetch crosses the active anchor.
 
 Required sequence:
 
@@ -239,8 +246,8 @@ history from the target machine only, using the requested `deviceId` and
 `printJobId` plus `printPlanId` when available. If that row is absent because of
 print history retention, the builder may use the same job's
 `JobMaterialSegment.evidence.completionEvidence.rawMaterialUsed` fallback, but
-conflicting fallback values or CSV/segment usage mismatches keep the fixture
-rejected. Device metadata is anchored to the 3DPmon export target/machine;
+conflicting fallback values, history/durable raw mismatches, or CSV/segment
+usage mismatches keep the fixture rejected. Device metadata is anchored to the 3DPmon export target/machine;
 certification JSON and CLI metadata may fill missing fields, but conflicts are
 reported as `fixture-review-not-ready` review blockers.
 

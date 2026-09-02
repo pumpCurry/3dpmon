@@ -18,9 +18,9 @@
  * - {@link buildItemKeeperSourceUsageFixture}：export payloadからfixture artifactを生成
  * - {@link runItemKeeperSourceUsageFixtureBuilder}：CLI指定ファイルを読み書きする
  *
- * @version 1.390.1656 (PR #440)
+ * @version 1.390.1658 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 17:05:50
+ * @lastModified 2026-09-02 18:32:30
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2 registry entry追加時にreviewed registry entry skeleton出力を追加する
@@ -41,7 +41,7 @@ import {
 import {
   K2_MATERIAL_USED_CSV_PARSER_VERSION,
   K2_MATERIAL_USED_SOURCE_ORDERING_PROFILE,
-  resolveK2MaterialUsedSourceCsv,
+  resolveK2MaterialUsedCompletionEvidenceCsv,
 } from "../3dp_lib/printer_core/dashboard_material_used_csv_parser.js";
 import {
   doesCfsDeviceMatchCorrelationEvidence,
@@ -760,33 +760,6 @@ function createExpectedSourceOrder(snapshots, segments) {
 }
 
 /**
- * JobMaterialSegmentへ保存されたcompletion raw CSV証跡を取得する。
- *
- * 【詳細説明】
- * - 印刷履歴は保持上限で削除される場合があるため、builderでもsegment側に保存した
- *   completionEvidenceを履歴CSVの代替証跡として利用する。
- * - 同一job内で複数のraw CSVが混ざる場合は、どれか一つを選ばず理由だけを返し、
- *   fixture receipt側でfail-closedできるようにする。
- *
- * @private
- * @function resolveSegmentCompletionMaterialUsedCsv
- * @param {Object[]} segments - JobMaterialSegment配列。
- * @returns {{rawMaterialUsed:string,reasons:string[]}} segment completion evidence。
- */
-function resolveSegmentCompletionMaterialUsedCsv(segments) {
-  const rawValues = [...new Set((Array.isArray(segments) ? segments : [])
-    .map((segment) => toText(segment?.evidence?.completionEvidence?.rawMaterialUsed))
-    .filter(Boolean))];
-  if (rawValues.length === 0) {
-    return { rawMaterialUsed: "", reasons: [] };
-  }
-  if (rawValues.length > 1) {
-    return { rawMaterialUsed: "", reasons: ["raw-material-used-completion-evidence-conflict"] };
-  }
-  return { rawMaterialUsed: rawValues[0], reasons: [] };
-}
-
-/**
  * fixture evidence envelopeを生成する。
  *
  * @private
@@ -943,11 +916,8 @@ export function buildItemKeeperSourceUsageFixture({
   );
   const printPlanId = toText(expectedSourceOrder[0]?.printPlanId || historyEntry?.printPlanId || "");
   const sessionEvidence = createFixtureSessionEvidence({ snapshots, segments, historyEntry });
-  const historyRawMaterialUsed = resolveK2MaterialUsedSourceCsv(historyEntry);
-  const segmentCompletionEvidence = historyRawMaterialUsed
-    ? { rawMaterialUsed: "", reasons: [] }
-    : resolveSegmentCompletionMaterialUsedCsv(segments);
-  const rawMaterialUsedSourceCsv = historyRawMaterialUsed || segmentCompletionEvidence.rawMaterialUsed;
+  const materialUsedCompletionEvidence = resolveK2MaterialUsedCompletionEvidenceCsv(historyEntry, segments);
+  const rawMaterialUsedSourceCsv = materialUsedCompletionEvidence.rawMaterialUsed;
   const captureBundle = {
     schemaVersion: 1,
     authority: "itemkeeper-source-usage-capture-bundle",
@@ -1002,15 +972,16 @@ export function buildItemKeeperSourceUsageFixture({
     historyEntry,
     certificationPayload,
     rawMaterialUsedSourceCsv,
-    rawMaterialUsedReasons: segmentCompletionEvidence.reasons,
+    rawMaterialUsedReasons: materialUsedCompletionEvidence.reasons,
   });
   const reviewBlockers = createIdentityReviewBlockers({ device, certificationPayload, options, sessionEvidence });
+  const rawEvidenceRejected = materialUsedCompletionEvidence.reasons.length > 0;
   return {
     schemaVersion: 1,
     builder: "itemkeeper-source-usage-fixture-builder",
     status: reviewBlockers.length > 0
       ? "fixture-review-not-ready"
-      : fixtureReceipt.ok ? "fixture-accepted" : "fixture-rejected",
+      : fixtureReceipt.ok && !rawEvidenceRejected ? "fixture-accepted" : "fixture-rejected",
     generatedAt: new Date().toISOString(),
     warnings,
     reviewBlockers,
