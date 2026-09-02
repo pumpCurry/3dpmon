@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1664 (PR #440)
+ * @version 1.390.1666 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-09-02 19:18:30
+ * @lastModified 2026-09-02 19:20:31
  * -----------------------------------------------------------
  */
 

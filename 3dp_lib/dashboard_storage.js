@@ -31,9 +31,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1664 (PR #440)
+ * @version 1.390.1666 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 19:18:30
+ * @lastModified 2026-09-02 19:20:31
  * -----------------------------------------------------------
  * @todo
  * - none
