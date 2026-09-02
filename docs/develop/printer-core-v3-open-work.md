@@ -189,9 +189,14 @@ source-aware mountとして扱わない。
   nested `spoolMount` / `materialSource` はdiagnostic evidenceであり、後付け改変でdebit continuity
   windowやCSV順序を動かすauthorityにはしない。debit evaluatorへ渡すmount/sourceも
   `bindingAuthority` から再構成し、diagnostic payloadを改変してもauthority判定は変化しない。
+  continuity照合IDは `bindingAuthority.source` と完了時の現在観測sourceだけから作り、
+  diagnostic `snapshot.materialSource.aliases` は使わない。mount authorityは実SpoolMountの
+  canonical `sourceBindingAtOpen.sourceIdentityDigest` を保持する。
   trusted print binding repository factoryはpublic barrelから再exportせず、production runtimeは
   caller supplied `data` / `persist` DIを拒否する。テスト用DIは
   `createMaterialAccountingPrintBindingRuntimeForTest()` に分離し、test環境以外では使用できない。
+  trusted factory / issuer-injected repository / test-only runtime factory のimport境界は
+  `3dp_lib/**/*.js` のproduction module全体にESLint allowlistで固定する。
   print-start local receiptと同一msのsource/provider breaking eventは、print interval内の
   physical discontinuityとして扱い、debit候補へ昇格しない。
   この接続もshadow attributionまでで、managed spool残量debitやlegacy usage writeは行わない。

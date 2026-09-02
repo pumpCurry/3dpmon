@@ -17,9 +17,9 @@
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  * - {@link createMaterialAccountingPrintBindingRuntimeForTest}：test-only DI runtimeを生成
  *
- * @version 1.390.1629 (PR #440)
+ * @version 1.390.1630 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-02 08:35:23
+ * @lastModified 2026-09-02 09:01:01
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -557,6 +557,7 @@ function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
  * - PrintBinding snapshotはcanonical `materialSourceId`を保存する一方、
  *   MaterialSource観測storeのchange logはtransport/localな`sourceId`で記録されることがある。
  * - canonical IDとaliasesを同時に照合し、CFS slotの変更イベントを見落とさない。
+ * - `snapshot.materialSource`は診断用payloadなので、後から混入したaliasでcontinuity判定が変わらないよう除外する。
  *
  * @private
  * @function createMaterialSourceContinuityLookupIds
@@ -567,14 +568,9 @@ function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
 function createMaterialSourceContinuityLookupIds(snapshot, observedSource) {
   const authoritySource = getSnapshotAuthoritySource(snapshot);
   return new Set([
-    snapshot?.materialSourceId,
-    snapshot?.sourceId,
     authoritySource.materialSourceId,
     authoritySource.sourceId,
-    snapshot?.materialSource?.materialSourceId,
-    snapshot?.materialSource?.sourceId,
     ...(Array.isArray(authoritySource.aliases) ? authoritySource.aliases : []),
-    ...(Array.isArray(snapshot?.materialSource?.aliases) ? snapshot.materialSource.aliases : []),
     observedSource?.materialSourceId,
     observedSource?.sourceId,
     ...(Array.isArray(observedSource?.aliases) ? observedSource.aliases : []),

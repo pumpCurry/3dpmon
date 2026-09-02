@@ -16,9 +16,9 @@
  * - {@link createPrintStartMaterialBindingAuthority}：snapshot用canonical binding authorityを生成
  * - {@link createPrintStartMaterialBindingAuthorityDigest}：binding authority digestを生成
  *
- * @version 1.390.1629 (PR #440)
+ * @version 1.390.1630 (PR #440)
  * @since   1.390.1629 (PR #440)
- * @lastModified 2026-09-02 08:35:23
+ * @lastModified 2026-09-02 09:01:01
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -158,7 +158,10 @@ function createBindingAuthorityMount(input = {}) {
     verification: toTrimmedString(mount.verification) || null,
     sourceIdentityStrengthAtOpen: toTrimmedString(mount.sourceIdentityStrengthAtOpen) || null,
     expectedRfid: toTrimmedString(mount.expectedRfid) || null,
-    sourceIdentityDigestAtOpen: toTrimmedString(mount.sourceIdentityDigestAtOpen) || null,
+    sourceIdentityDigestAtOpen: toTrimmedString(
+      mount.sourceIdentityDigestAtOpen ??
+      mount.sourceBindingAtOpen?.sourceIdentityDigest,
+    ) || null,
   };
 }
 

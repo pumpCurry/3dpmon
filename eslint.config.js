@@ -2,6 +2,30 @@ import js from '@eslint/js';
 import jsdoc from 'eslint-plugin-jsdoc';
 import prettierConfig from 'eslint-config-prettier';
 
+const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS = [
+  {
+    regex: '(^|/)dashboard_material_accounting_contract\\.js$',
+    importNames: ['createTrustedPrintStartMaterialAccountingPrintBindingRepository'],
+    message: 'Trusted print binding repository factory is runtime-internal; import it only from dashboard_material_accounting_print_binding_runtime.js.',
+  },
+  {
+    regex: '(^|/)dashboard_material_accounting_print_binding_repository\\.js$',
+    importNames: ['createMaterialAccountingPrintBindingRepositoryWithIssuer'],
+    message: 'Issuer-injected print binding repository is contract-internal; import it only from dashboard_material_accounting_contract.js.',
+  },
+  {
+    regex: '(^|/)dashboard_material_accounting_print_binding_runtime\\.js$',
+    importNames: ['createMaterialAccountingPrintBindingRuntimeForTest'],
+    message: 'Test-only print binding runtime factory must not be imported by production modules.',
+  },
+];
+
+const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_CONTRACT = TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS
+  .filter((restriction) => !restriction.importNames.includes('createMaterialAccountingPrintBindingRepositoryWithIssuer'));
+
+const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_RUNTIME = TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS
+  .filter((restriction) => !restriction.importNames.includes('createTrustedPrintStartMaterialAccountingPrintBindingRepository'));
+
 export default [
   js.configs.recommended,
   jsdoc.configs['flat/recommended'],
@@ -87,34 +111,25 @@ export default [
       // --- 初期導入のため一部ルールを緩和 ---
       'no-prototype-builtins': 'off',
       'no-fallthrough': 'warn',
-    },
-  },
-  {
-    files: ['3dp_lib/printer_core/**/*.js'],
-    rules: {
       'no-restricted-imports': ['error', {
-        paths: [
-          {
-            name: './dashboard_material_accounting_contract.js',
-            importNames: ['createTrustedPrintStartMaterialAccountingPrintBindingRepository'],
-            message: 'Trusted print binding repository factory is runtime-internal; import it only from dashboard_material_accounting_print_binding_runtime.js.',
-          },
-          {
-            name: './dashboard_material_accounting_print_binding_repository.js',
-            importNames: ['createMaterialAccountingPrintBindingRepositoryWithIssuer'],
-            message: 'Issuer-injected print binding repository is contract-internal; import it only from dashboard_material_accounting_contract.js.',
-          },
-        ],
+        patterns: TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS,
       }],
     },
   },
   {
-    files: [
-      '3dp_lib/printer_core/dashboard_material_accounting_contract.js',
-      '3dp_lib/printer_core/dashboard_material_accounting_print_binding_runtime.js',
-    ],
+    files: ['3dp_lib/printer_core/dashboard_material_accounting_contract.js'],
     rules: {
-      'no-restricted-imports': 'off',
+      'no-restricted-imports': ['error', {
+        patterns: TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_CONTRACT,
+      }],
+    },
+  },
+  {
+    files: ['3dp_lib/printer_core/dashboard_material_accounting_print_binding_runtime.js'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_RUNTIME,
+      }],
     },
   },
   {

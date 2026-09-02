@@ -635,11 +635,20 @@ Gate 18.9 must cover:
   `bindingAuthority` invalidates the trusted snapshot, while changing
   diagnostic fields such as `spoolMount.verification` or
   `materialSource.displayLabel` does not change debit authority.
+- Source-continuity lookup IDs are derived from `bindingAuthority.source` and
+  the current completion-time MaterialSource observation only. Diagnostic
+  `snapshot.materialSource` IDs and aliases are intentionally excluded so that
+  imported/restored diagnostic payload edits cannot change continuity results.
+  The mount source identity digest is copied from the canonical SpoolMount
+  `sourceBindingAtOpen.sourceIdentityDigest` field into `bindingAuthority`.
 - The trusted print binding repository factory is not re-exported from the
   public print binding barrel. Production print binding runtime does not accept
   caller-supplied `data` or `persist` dependency injection. Tests must use the
   dedicated `createMaterialAccountingPrintBindingRuntimeForTest()` helper,
   which is unavailable outside the test environment.
+  ESLint enforces the trusted factory, issuer-injected repository, and test-only
+  runtime helper import allowlist across all `3dp_lib/**/*.js` production
+  modules, not only inside `printer_core`.
 - trusted print-start snapshots restored from same-process CAS store may regain
   debit eligibility only through module-owned attestation validation. Restart
   or import loses that process-local trust and must revalidate before debit.

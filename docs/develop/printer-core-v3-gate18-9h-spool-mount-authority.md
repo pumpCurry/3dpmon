@@ -492,10 +492,19 @@ Gate 18.9I-4:
   `spoolMount.verification` や `materialSource.displayLabel` の後付け変更では
   debit結果を変えない。逆に `bindingAuthority` 側のorder/openedAt/source/mountが
   signatureと矛盾した場合は `untrusted-print-start-snapshot` としてdebit候補へ昇格しない。
+- source continuityの照合IDは `bindingAuthority.source` と完了時の現在観測
+  `MaterialSource` だけから作る。diagnostic `snapshot.materialSource.aliases` は後付け改変で
+  continuity判定を変えられない。
+- `bindingAuthority.mount.sourceIdentityDigestAtOpen` は canonical SpoolMount の
+  `sourceBindingAtOpen.sourceIdentityDigest` をauthorityへ写す。diagnostic互換fieldがあれば読むが、
+  実storeのcanonical位置は `sourceBindingAtOpen` である。
 - trusted print binding repository factoryはpublic barrel
   `dashboard_material_accounting_print_binding.js` から再exportしない。production runtimeは
   caller supplied `data` / `persist` DIを拒否し、test fixtureだけ
   `createMaterialAccountingPrintBindingRuntimeForTest()` で注入できる。
+- trusted factory / issuer-injected repository / test-only runtime factory のimport境界は
+  `3dp_lib/**/*.js` のproduction module全体へESLint allowlistとして固定する。allowed module以外の
+  relative path違いimportもrelease前lintで失敗させる。
 - `MaterialBindingPlan`本体と`commandBinding`は、pending登録時にdevice/session/generation/file/source/spool/toolの
   semantic projectionで再照合する。module-attested planであっても、request Aのbindingを
   別source/fileのplanへ混ぜた場合は拒否する。

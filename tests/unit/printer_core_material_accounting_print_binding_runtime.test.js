@@ -958,6 +958,101 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     expect(segment.debit.reasons).not.toContain("mount-not-open-at-print-start");
   });
 
+  it("diagnostic materialSource alias追加ではbindingAuthority由来のcontinuity判定を変えない", async () => {
+    const data = createRuntimeData();
+    attachOpenMounts(data);
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, {
+      printJobId: "job:diagnostic-alias-tamper",
+      firstObservedAt: "2026-09-01T08:01:00.000Z",
+    });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
+    await runtime.recordObservedPrintStart({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:diagnostic-alias-tamper",
+    });
+    const snapshot = data.materialAccountingPrintBindingStore.printStartSnapshots.find(
+      (entry) => entry.protocolToolAlias === "T1A"
+    );
+    snapshot.materialSource = {
+      ...(snapshot.materialSource || {}),
+      aliases: [
+        ...(Array.isArray(snapshot.materialSource?.aliases) ? snapshot.materialSource.aliases : []),
+        "source:k2:cfs:forged-diagnostic-only",
+      ],
+    };
+    const deviceRecord = data.materialSourceObservations.byDeviceId["serial:k2"];
+    deviceRecord.events = Array.isArray(deviceRecord.events) ? deviceRecord.events : [];
+    deviceRecord.events.push({
+      observationId: "mso:serial-k2:forged-diagnostic-alias",
+      deviceId: "serial:k2",
+      sourceId: "source:k2:cfs:forged-diagnostic-only",
+      observedAt: "2026-09-01T08:10:00.000Z",
+      changeKind: "source-changed",
+      before: null,
+      after: null,
+      authority: "observation-only",
+    });
+    attachObservedCompletedPrintJob(data, {
+      hostname,
+      printJobId: "job:diagnostic-alias-tamper",
+      completedAt: "2026-09-01T08:31:00.000Z",
+    });
+    markMaterialSourcesObservedAt(data, "2026-09-01T08:30:45.000Z");
+    data.machines[hostname].printStore.history.at(-1).materialUsed = "3210,6543";
+
+    const result = await runtime.recordObservedPrintCompletion({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:diagnostic-alias-tamper",
+      resultSetCompleteness: "complete",
+    });
+
+    const segment = result.segments.find((entry) => entry.protocolToolAlias === "T1A");
+    expect(result.ok).toBe(true);
+    expect(segment.debit.canDebit).toBe(true);
+    expect(segment.debit.reasons).not.toContain("physical-discontinuity");
+    expect(segment.debit.reasons).not.toContain("source-continuity-required");
+  });
+
+  it("bindingAuthority mountはSpoolMountのsourceBindingAtOpen digestを保持する", async () => {
+    const data = createRuntimeData();
+    const mounts = attachOpenMounts(data);
+    data.materialAccountingSpoolMountStore.spoolMounts = [
+      {
+        ...mounts[0],
+        sourceBindingAtOpen: {
+          sourceIdentityDigest: "fnv1a128:source-identity-at-open-a",
+        },
+      },
+      ...mounts.slice(1),
+    ];
+    const plan = createPlan(data);
+    const hostname = attachObservedPrintJob(data, { printJobId: "job:source-digest-at-open" });
+    const persist = vi.fn(async ({ nextStore }) => {
+      data.materialAccountingPrintBindingStore = nextStore;
+      return { ok: true, casApplied: true, backend: "test" };
+    });
+    const runtime = createMaterialAccountingPrintBindingRuntimeForTest({ data, persist });
+
+    await runtime.recordObservedPrintStart({
+      printPlan: plan,
+      hostname,
+      printJobId: "job:source-digest-at-open",
+    });
+
+    const snapshot = data.materialAccountingPrintBindingStore.printStartSnapshots.find(
+      (entry) => entry.protocolToolAlias === "T1A"
+    );
+    expect(snapshot.bindingAuthority.mount.sourceIdentityDigestAtOpen)
+      .toBe("fnv1a128:source-identity-at-open-a");
+  });
+
   it("K2履歴のmaterialUsed文字列をPrintPlan順のsource-specific usageへ展開する", async () => {
     const data = createRuntimeData();
     attachOpenMounts(data);
