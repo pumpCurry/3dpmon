@@ -22,9 +22,9 @@
  * - {@link sendRelayCommand}：親経由でプリンタにコマンド送信
  * - {@link sendRelayFilament}：親経由でフィラメント操作
  *
- * @version 1.390.1645 (PR #441)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.820 (PR #367)
- * @lastModified 2026-09-02 14:42:12
+ * @lastModified 2026-09-02 16:45:11
  * -----------------------------------------------------------
  */
 
@@ -430,6 +430,11 @@ export function _applySharedFilamentState(shared) {
   _replaceArrayInPlace(monitorData.hiddenPresets, shared.hiddenPresets);
   _replaceArrayInPlace(monitorData.favoritePresets, shared.favoritePresets);
   _replaceArrayInPlace(monitorData.usageHistory, shared.usageHistory);
+  if (Object.prototype.hasOwnProperty.call(shared, "usageHistoryTruncated")) {
+    monitorData.usageHistoryViewTruncated = shared.usageHistoryTruncated === true;
+    monitorData.usageHistoryViewTotalCount = _normalizeRelayHistoryCount(shared.usageHistoryTotalCount);
+    monitorData.usageHistoryViewWindowLimit = _normalizeRelayHistoryCount(shared.usageHistoryWindowLimit);
+  }
   // ★ Phase4: 未帰属消費の隔離領域を親からミラー（子は読み取り専用。欠落時は不変）。
   _replaceArrayInPlace(monitorData.pendingUnattributedUsage, shared.pendingUnattributedUsage);
   // ★ P0-1: 隔離アーカイブ（per-host 集約オブジェクト）を全置換ミラー（子バッジ件数の親子一致）。

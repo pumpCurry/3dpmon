@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1645 (PR #441)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.1645 (PR #441)
- * @lastModified 2026-09-02 14:42:12
+ * @lastModified 2026-09-02 16:45:11
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -357,6 +357,9 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
       hiddenPresets: ["h1"],
       favoritePresets: ["f1"],
       usageHistory: [{ id: "u1" }],
+      usageHistoryTruncated: true,
+      usageHistoryTotalCount: 4502,
+      usageHistoryWindowLimit: 4500,
     });
     expect(monitorData.filamentInventory).toBe(refInv); // ビュー参照維持
     expect(monitorData.filamentInventory).toEqual([{ modelId: "m1", quantity: 3 }]);
@@ -364,6 +367,9 @@ describe("_applySharedFilamentState — フィラメント補助ドメイン（�
     expect(monitorData.hiddenPresets).toEqual(["h1"]);
     expect(monitorData.favoritePresets).toEqual(["f1"]);
     expect(monitorData.usageHistory).toEqual([{ id: "u1" }]);
+    expect(monitorData.usageHistoryViewTruncated).toBe(true);
+    expect(monitorData.usageHistoryViewTotalCount).toBe(4502);
+    expect(monitorData.usageHistoryViewWindowLimit).toBe(4500);
   });
 
   it("切れイベント文脈（filamentEventContext）を全置換ミラー", () => {
