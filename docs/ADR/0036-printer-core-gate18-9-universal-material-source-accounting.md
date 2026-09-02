@@ -616,11 +616,16 @@ Gate 18.9 must cover:
   segment completion raw exist for the same job, history raw remains canonical
   and the segment raw must match it exactly; mismatches or mixed segment raw
   values reject the fixture/analyzer candidate. A persisted
-  `historyCoverage.activeAnchorComplete:true` is not reused after restart or
-  storage restore; it is demoted to re-probe-required until the current process
-  receives a new print history window that covers the current active anchor
+  `historyCoverage.activeAnchorComplete:true` is not reused after restart,
+  storage restore, disconnect, or reconnect; it is demoted to
+  re-probe-required until the current process receives a new print history
+  window that covers the current active anchor
   (`oldestPrintJobId <= anchorSinceJobId <= newestPrintJobId`) and records that
   same anchor in `anchorSinceJobIds`.
+  Manual history filament edits must visibly warn the operator and keep the
+  cached remaining length when total-history completeness has no positive
+  authority. Ordinary recent-history fetches do not mint
+  `totalLifetimeComplete:true`.
   With the registry empty, production registration remains fail-closed with
   `reviewed-live-fixture-registry-entry-required`.
 - K2/CFS UI print-start sends create a module-attested MaterialBindingPlan

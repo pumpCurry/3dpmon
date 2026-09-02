@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1663 (PR #440)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-09-02 01:07:00
+ * @lastModified 2026-09-02 18:52:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -64,7 +64,7 @@ import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js"
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, recreatePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
-import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { markPrintHistoryActiveCoverageRequiresReprobe, saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import {
   createMoonrakerSession,
@@ -2148,6 +2148,7 @@ export function connectWs(hostOrDest) {
      これにより、再接続時に connectionMap に IP キーの孤立エントリが生まれる問題を防ぐ。 */
   const target = _findConnectionTarget(dest);
   const host = (target?.hostname) || ip;
+  _invalidatePrintHistoryActiveCoverageForConnection(host, "print-history-socket-connect-reprobe-required");
 
   // ★ Moonraker(Fluidd/Klipper)機: 別プロトコルのため専用アダプタへ委譲する。
   //   K1 系の生 WebSocket・ハートビート・履歴フェッチ処理は一切通さない。
@@ -2292,6 +2293,9 @@ function connectMoonraker(dest, host) {
     onLog: (msg, level = "info") => pushLog(msg, level, false, host),
     onState: (s) => {
       st.state = s;
+      if (["connecting", "waiting", "disconnected"].includes(s)) {
+        _invalidatePrintHistoryActiveCoverageForConnection(host, "print-history-external-session-reprobe-required");
+      }
       updateConnectionUI(s, {}, host);
       updatePrinterListUI();
       // 接続確立時に集計ループを起動（K1 の handleSocketOpen 相当）
@@ -2711,6 +2715,28 @@ function handleSocketError(error, host) {
   console.error("[ws.onerror]", error);
 };
 
+/**
+ * 接続世代の切り替わりでactive history coverageを再probe待ちへ戻す。
+ *
+ * 【詳細説明】
+ * - active anchor coverageはプリンタ履歴windowを接続中に取得した事実へ依存するため、
+ *   切断または新規接続開始後は、次の履歴取得が完了するまで残量authorityへ使わない。
+ * - storage層へ直接依頼し、対象hostにcoverageが無い場合はno-opとして扱う。
+ *
+ * @private
+ * @function _invalidatePrintHistoryActiveCoverageForConnection
+ * @param {string} host - 対象ホスト名。
+ * @param {string} source - invalidation理由を示すsource名。
+ * @returns {void}
+ */
+function _invalidatePrintHistoryActiveCoverageForConnection(host, source) {
+  try {
+    markPrintHistoryActiveCoverageRequiresReprobe(host, { source });
+  } catch (error) {
+    console.warn(`[connection] active history coverage invalidation skipped (${host}):`, error?.message || error);
+  }
+}
+
 
 /**
  * 接続終了時の処理。
@@ -2727,6 +2753,7 @@ function handleSocketClose(host) {
  // 切断直後は該当ホストの通知を抑制する（他ホストには影響しない）
   setNotificationSuppressed(true, host);
   const st = getState(host);
+  _invalidatePrintHistoryActiveCoverageForConnection(host, "print-history-socket-close-reprobe-required");
   _endPrinterCoreV3LiveShadowSession(host, st);
   _closeSecondaryMaterialProviderSession(host, st);
 
@@ -2901,6 +2928,7 @@ export function stopHeartbeat(host) {
 export function disconnectWs(host) {
   const st = getState(host);
   st.userDisc = true;
+  _invalidatePrintHistoryActiveCoverageForConnection(host, "print-history-user-disconnect-reprobe-required");
 
   // pending な自動再接続タイマーをキャンセル
   if (st.retryTimer) {

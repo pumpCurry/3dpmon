@@ -15,6 +15,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+const storageMocks = vi.hoisted(() => ({
+  markPrintHistoryActiveCoverageRequiresReprobe: vi.fn(),
+  saveUnifiedStorage: vi.fn()
+}));
+
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({
   monitorData: { appSettings: { httpPort: 80, connectionTargets: [] }, machines: {} },
   PLACEHOLDER_HOSTNAME: "_$_NO_MACHINE_$_",
@@ -40,7 +45,7 @@ vi.mock("../../3dp_lib/dashboard_panel_factory.js", () => ({
   migratePanelsToHost: vi.fn(), renamePanelsHost: vi.fn(), ensureHostPanels: vi.fn(),
   removePanelsForHost: vi.fn(), updateAllPanelHeaders: vi.fn(),
 }));
-vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorage: vi.fn() }));
+vi.mock("../../3dp_lib/dashboard_storage.js", () => storageMocks);
 vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({ showConfirmDialog: vi.fn() }));
 
 /** new WebSocket() を記録するフェイク実装 */
@@ -62,6 +67,8 @@ let connectWs;
 beforeEach(async () => {
   vi.resetModules();                 // connectionMap / reconnect を毎回まっさら化
   FakeWebSocket.instances = [];
+  storageMocks.markPrintHistoryActiveCoverageRequiresReprobe.mockClear();
+  storageMocks.saveUnifiedStorage.mockClear();
   global.WebSocket = FakeWebSocket;
   window.WebSocket = FakeWebSocket;
   delete window._3dpmonRelayChild;
@@ -93,5 +100,14 @@ describe("connectWs — 多重接続防止 (fix/ws-duplicate-connection)", () =>
     connectWs("127.0.0.1:9999");
     expect(first.closeCalls).toBe(0);            // CLOSED には close() を呼ばない
     expect(FakeWebSocket.instances.length).toBe(2); // 新規接続は張られる
+  });
+
+  it("新しいWS接続開始時に同一プロセス内の古いactive history coverage proofを再probe待ちへ落とす", () => {
+    connectWs("127.0.0.1:9999");
+
+    expect(storageMocks.markPrintHistoryActiveCoverageRequiresReprobe)
+      .toHaveBeenCalledWith("127.0.0.1", {
+        source: "print-history-socket-connect-reprobe-required"
+      });
   });
 });

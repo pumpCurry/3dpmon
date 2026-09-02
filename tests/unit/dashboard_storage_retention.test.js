@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1662 (PR #440)
+ * @version 1.390.1663 (PR #440)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 18:41:09
+ * @lastModified 2026-09-02 18:52:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -115,6 +115,7 @@ const {
   applyPrintHistoryRetention,
   applyConfiguredPrintHistoryRetentionToAllMachines,
   initStorage,
+  markPrintHistoryActiveCoverageRequiresReprobe,
   recordPrintHistoryFetchCoverage,
   resolvePrintHistoryRetentionLimit,
   resolveUsageHistoryRetentionLimit,
@@ -337,6 +338,43 @@ describe("印刷履歴保持設定", () => {
       activeAnchorComplete: false,
       source: "print-history-fetch",
       coverageProof: "fetch-window-crosses-active-anchor"
+    });
+  });
+
+  it("same-process reconnectでは既存active coverage proofを再probe待ちへ落とす", () => {
+    mocks.monitorData.machines = {
+      K1Max: {
+        printStore: {
+          history: [],
+          current: null,
+          historyCoverage: {
+            activeAnchorComplete: true,
+            totalLifetimeComplete: false,
+            source: "print-history-fetch",
+            oldestPrintJobId: 100,
+            newestPrintJobId: 300,
+            anchorSinceJobIds: [200]
+          },
+          videos: {}
+        }
+      }
+    };
+
+    const result = markPrintHistoryActiveCoverageRequiresReprobe("K1Max", {
+      source: "print-history-socket-reconnect"
+    });
+
+    expect(result).toMatchObject({
+      changed: true,
+      activeAnchorComplete: false,
+      staleSource: "print-history-fetch"
+    });
+    expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({
+      activeAnchorComplete: false,
+      totalLifetimeComplete: false,
+      source: "print-history-socket-reconnect",
+      staleSource: "print-history-fetch",
+      staleActiveAnchorComplete: true
     });
   });
 

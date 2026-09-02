@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1663 (PR #440)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-09-02 01:07:00
+ * @lastModified 2026-09-02 18:52:20
  *
  * @vitest-environment jsdom
  */
@@ -46,7 +46,10 @@ vi.mock("../../3dp_lib/dashboard_panel_factory.js", () => ({
   migratePanelsToHost: vi.fn(), renamePanelsHost: vi.fn(), ensureHostPanels: vi.fn(),
   removePanelsForHost: vi.fn(), recreatePanelsForHost: vi.fn(), updateAllPanelHeaders: vi.fn(),
 }));
-vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorage: vi.fn() }));
+vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
+  markPrintHistoryActiveCoverageRequiresReprobe: vi.fn(),
+  saveUnifiedStorage: vi.fn()
+}));
 vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({ showConfirmDialog: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_moonraker.js", () => ({
   createMoonrakerSession: vi.fn(() => ({ close: vi.fn() })),

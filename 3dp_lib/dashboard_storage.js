@@ -24,15 +24,16 @@
  * - {@link cleanupLegacy}：レガシー削除
  * - {@link estimateStorageQuota}：容量取得
  * - {@link syncStorageNow}：即時同期
+ * - {@link markPrintHistoryActiveCoverageRequiresReprobe}：active anchor coverageを再probe待ちへ戻す
  * - {@link testMaxLocalStorageQuota}：書き込みテスト
  * - {@link recordPrintHistoryFetchCoverage}：印刷履歴fetch windowのactive anchor被覆を記録
  * - {@link estimateLocalStorageUsageBytes}：使用量推定
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1662 (PR #440)
+ * @version 1.390.1663 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 18:41:09
+ * @lastModified 2026-09-02 18:52:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1990,6 +1991,58 @@ export function recordPrintHistoryFetchCoverage(host, historyWindow) {
     oldestPrintJobId,
     newestPrintJobId,
     anchorSinceJobIds
+  };
+}
+
+/**
+ * 指定ホストのactive anchor coverageを再probe待ちへ戻す。
+ *
+ * 【詳細説明】
+ * - `activeAnchorComplete:true`は、現在の接続世代でプリンタから取得した履歴windowが
+ *   active anchorを跨いだ場合だけ使用できる揮発的な証明として扱う。
+ * - WebSocket切断、再接続開始、同一プロセス内の接続差し替えでは、前接続で得たtrueを
+ *   新しい接続世代へ持ち越さないようfalseへ落とす。
+ * - `totalLifetimeComplete:false`は履歴全体の不完全性を示す耐久メタデータなので保持する。
+ *
+ * @function markPrintHistoryActiveCoverageRequiresReprobe
+ * @param {string} host - 対象ホスト名。
+ * @param {Object} [options={}] - 再probe化オプション。
+ * @param {string} [options.source="print-history-active-reprobe-required"] - coverage source名。
+ * @returns {{changed:boolean,activeAnchorComplete:boolean|null,staleSource:string|null}} 更新結果。
+ */
+export function markPrintHistoryActiveCoverageRequiresReprobe(host, options = {}) {
+  const source = typeof options.source === "string" && options.source
+    ? options.source
+    : "print-history-active-reprobe-required";
+  const machine = host ? monitorData.machines?.[host] : null;
+  const coverage = machine?.printStore?.historyCoverage;
+  if (!coverage || typeof coverage !== "object") {
+    return {
+      changed: false,
+      activeAnchorComplete: null,
+      staleSource: null
+    };
+  }
+  if (coverage.activeAnchorComplete !== true) {
+    return {
+      changed: false,
+      activeAnchorComplete: coverage.activeAnchorComplete === false ? false : null,
+      staleSource: coverage.staleSource || null
+    };
+  }
+  const staleSource = coverage.source || "unknown";
+  machine.printStore.historyCoverage = {
+    ...coverage,
+    activeAnchorComplete: false,
+    source,
+    staleSource,
+    staleActiveAnchorComplete: true,
+    reprobeRequiredAt: getCurrentTimestamp()
+  };
+  return {
+    changed: true,
+    activeAnchorComplete: false,
+    staleSource
   };
 }
 
