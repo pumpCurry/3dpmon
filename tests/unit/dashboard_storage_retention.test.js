@@ -16,7 +16,7 @@
  *
  * @version 1.390.1653 (PR #440)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 16:47:35
+ * @lastModified 2026-09-02 16:45:11
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -194,6 +194,14 @@ describe("印刷履歴保持設定", () => {
     expect(mocks.monitorData.machines.K1Max.printStore.history.map((job) => job.id)).toEqual([3, 2]);
     expect(mocks.monitorData.machines.K2Pro.printStore.history.map((job) => job.id)).toEqual([4, 3]);
     expect(mocks.monitorData.machines.Empty.printStore.history.map((job) => job.id)).toEqual([1]);
+    expect(mocks.monitorData.machines.K1Max.printStore.historyCoverage).toMatchObject({
+      activeAnchorComplete: true,
+      totalLifetimeComplete: false,
+      source: "print-history-retention",
+      sourceLength: 3,
+      retainedLength: 2,
+      limit: 2
+    });
   });
 
   it("保持上限適用時も台帳残量導出に必要な装着区間内の消費ジョブを削除しない", () => {
@@ -225,6 +233,71 @@ describe("印刷履歴保持設定", () => {
     expect(result.changedHosts).toEqual(["K1Max"]);
     expect(result.removedJobs).toBe(1);
     expect(mocks.monitorData.machines.K1Max.printStore.history.map((job) => job.id)).toEqual([103, 102, 101]);
+  });
+
+  it("保持上限適用時はanchor直後のcoverage sentinelを残してverified判定を保護する", () => {
+    mocks.monitorData.appSettings.printHistoryMaxEntries = 1;
+    mocks.monitorData.filamentSpools = [{ id: "spool-a", deleted: false }];
+    mocks.protectedIntervals = [
+      { spoolId: "spool-a", host: "K1Max", sinceJobId: 100, untilJobId: null, open: true }
+    ];
+    mocks.attributedUsed.mockImplementation((job, spoolId) => (
+      spoolId === "spool-a" && Number(job?.materialUsedMm) > 0 ? Number(job.materialUsedMm) : 0
+    ));
+    mocks.monitorData.machines = {
+      K1Max: {
+        printStore: {
+          history: [
+            { id: 103, filename: "third.gcode", materialUsedMm: 1000 },
+            { id: 102, filename: "second.gcode", materialUsedMm: 1000 },
+            { id: 101, filename: "coverage-sentinel.gcode", materialUsedMm: 0 },
+            { id: 99, filename: "before-anchor.gcode", materialUsedMm: 1000 }
+          ],
+          current: null,
+          videos: {}
+        }
+      }
+    };
+
+    const result = applyConfiguredPrintHistoryRetentionToAllMachines();
+
+    expect(result.changedHosts).toEqual(["K1Max"]);
+    expect(result.removedJobs).toBe(1);
+    expect(mocks.monitorData.machines.K1Max.printStore.history.map((job) => job.id)).toEqual([103, 102, 101]);
+  });
+
+  it("保持上限適用時はPrintBinding完了証跡が未commitのjob履歴を削除しない", () => {
+    mocks.monitorData.appSettings.printHistoryMaxEntries = 1;
+    mocks.monitorData.materialAccountingPrintBindingStore = {
+      printStartSnapshots: [
+        {
+          snapshotId: "snapshot:pending-a",
+          printJobId: "job:pending",
+          printPlanId: "plan:pending",
+          deviceId: "serial:k2"
+        }
+      ],
+      jobMaterialSegments: []
+    };
+    mocks.monitorData.machines = {
+      K2Pro: {
+        printStore: {
+          history: [
+            { id: 103, printJobId: "job:new", filename: "new.gcode" },
+            { id: 102, printJobId: "job:pending", filename: "pending.gcode" },
+            { id: 101, printJobId: "job:old", filename: "old.gcode" }
+          ],
+          current: null,
+          videos: {}
+        }
+      }
+    };
+
+    const result = applyConfiguredPrintHistoryRetentionToAllMachines();
+
+    expect(result.changedHosts).toEqual(["K2Pro"]);
+    expect(result.removedJobs).toBe(1);
+    expect(mocks.monitorData.machines.K2Pro.printStore.history.map((job) => job.id)).toEqual([103, 102]);
   });
 
   it("IndexedDB利用時のlocalStorage回復バックアップは無制限設定でも履歴をbounded snapshotとして保存する", async () => {

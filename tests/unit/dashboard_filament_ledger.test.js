@@ -838,6 +838,42 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
     expect(sp._remainingVerified).not.toBe(true);
   });
 
+  it("明示retentionでtotal履歴だけが不完全な場合は手動総量再計算を止め、自動deriveはanchor基準を維持する", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.h = {
+      printStore: {
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: false,
+          source: "print-history-retention"
+        },
+        history: [
+          job(101, 5000, { filamentInfo: [{ spoolId: "sp1", usedMm: 5000 }] })
+        ]
+      }
+    };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 90000, sinceJobId: 100, ts: 1000 });
+
+    const derived = deriveSpoolRemaining("sp1");
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(derived).toMatchObject({
+      remainingMm: 85000,
+      verified: true,
+      mode: "anchor",
+      usedMm: 5000
+    });
+    expect(res).toMatchObject({
+      before: 90000,
+      after: 90000,
+      used: 0,
+      mode: "halt-incomplete-total-history",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
   it("他スプールに帰属するジョブは合算しない（multi-spool の per-reel 厳密帰属）", () => {
     const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 100000 });
     setHistory("h", [

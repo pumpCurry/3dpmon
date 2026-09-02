@@ -1371,7 +1371,9 @@ export function importHistoryOnly(data) {
     });
     const retained = applyPrintHistoryRetention(existing.printStore.history, monitorData.appSettings, { host });
     if (retained.length !== existing.printStore.history.length) {
+      const sourceLength = existing.printStore.history.length;
       existing.printStore.history = retained;
+      _markExplicitPrintHistoryRetentionCoverage(existing.printStore, sourceLength, retained.length, resolvePrintHistoryRetentionLimit(monitorData.appSettings));
       existing.printStore._historyRev = (Number(existing.printStore._historyRev) || 0) + 1;
     }
   }
@@ -1732,9 +1734,17 @@ function _collectLedgerProtectedPrintJobIds(host, history) {
     if (!interval || interval.boundaryStatus === "unknown") continue;
     const sinceJobId = Number(interval.sinceJobId) || 0;
     const untilJobId = interval.untilJobId == null ? null : Number(interval.untilJobId);
+    const coverageSentinelId = sinceJobId + 1;
     for (const job of history) {
       const jobId = Number(job?.id);
       if (!Number.isFinite(jobId)) continue;
+      if (
+        sinceJobId >= 0 &&
+        jobId === coverageSentinelId &&
+        (untilJobId == null || !Number.isFinite(untilJobId) || jobId <= untilJobId)
+      ) {
+        protectedIds.add(jobId);
+      }
       if (jobId <= sinceJobId) continue;
       if (untilJobId != null && Number.isFinite(untilJobId) && jobId > untilJobId) continue;
       const used = Number(attributedUsed(job, spoolId));
@@ -1742,6 +1752,114 @@ function _collectLedgerProtectedPrintJobIds(host, history) {
     }
   }
   return protectedIds;
+}
+
+/**
+ * 履歴jobの識別子候補を文字列集合として生成する。
+ *
+ * 【詳細説明】
+ * - K2/PrintBinding側では`printJobId`がprotocol/job文字列で保持され、従来K1履歴では
+ *   数値`id`が主キーとして使われるため、retention保護では両方を照合候補にする。
+ *
+ * @private
+ * @function _collectHistoryJobIdentityKeys
+ * @param {Object|null|undefined} job - printStore.history entry。
+ * @returns {Set<string>} job identity候補。
+ */
+function _collectHistoryJobIdentityKeys(job) {
+  return new Set([
+    job?.printJobId,
+    job?.jobId,
+    job?.id,
+    job?.starttime
+  ].map((value) => String(value ?? "").trim()).filter(Boolean));
+}
+
+/**
+ * completion attributionが未commitのPrintBinding jobをretention保護対象として収集する。
+ *
+ * 【詳細説明】
+ * - print-start snapshotだけがCAS保存済みでcompletion segmentがまだ無いjobでは、
+ *   後続retryが`printStore.history`のraw materialUsed CSVを再読する。
+ * - その履歴をretentionで削除すると、authorityはfail-closedするがsource-aware accountingを
+ *   後から完成できなくなるため、segmentが揃うまではjob履歴を保持する。
+ *
+ * @private
+ * @function _collectPrintBindingProtectedPrintJobIds
+ * @param {Array<Object>} history - 新しい順に並ぶprintStore.history。
+ * @returns {Set<number>} 保護対象の数値job id集合。
+ */
+function _collectPrintBindingProtectedPrintJobIds(history) {
+  const protectedIds = new Set();
+  const store = monitorData.materialAccountingPrintBindingStore;
+  if (!store || typeof store !== "object" || !Array.isArray(history) || history.length === 0) {
+    return protectedIds;
+  }
+  const snapshotsByJobId = new Map();
+  for (const snapshot of Array.isArray(store.printStartSnapshots) ? store.printStartSnapshots : []) {
+    const printJobId = String(snapshot?.printJobId ?? "").trim();
+    if (!printJobId) continue;
+    snapshotsByJobId.set(printJobId, (snapshotsByJobId.get(printJobId) || 0) + 1);
+  }
+  if (snapshotsByJobId.size === 0) {
+    return protectedIds;
+  }
+  const segmentsByJobId = new Map();
+  for (const segment of Array.isArray(store.jobMaterialSegments) ? store.jobMaterialSegments : []) {
+    const printJobId = String(segment?.printJobId ?? "").trim();
+    if (!printJobId) continue;
+    segmentsByJobId.set(printJobId, (segmentsByJobId.get(printJobId) || 0) + 1);
+  }
+  const pendingJobIds = new Set();
+  for (const [printJobId, snapshotCount] of snapshotsByJobId.entries()) {
+    if ((segmentsByJobId.get(printJobId) || 0) < snapshotCount) {
+      pendingJobIds.add(printJobId);
+    }
+  }
+  if (pendingJobIds.size === 0) {
+    return protectedIds;
+  }
+  for (const job of history) {
+    const numericJobId = Number(job?.id);
+    if (!Number.isFinite(numericJobId)) continue;
+    const keys = _collectHistoryJobIdentityKeys(job);
+    if ([...keys].some((key) => pendingJobIds.has(key))) {
+      protectedIds.add(numericJobId);
+    }
+  }
+  return protectedIds;
+}
+
+/**
+ * 明示retentionにより履歴全体の総量再計算authorityが不完全になったことを記録する。
+ *
+ * 【詳細説明】
+ * - ユーザー設定による保持上限は正常な操作なので、bounded recoveryのように
+ *   active anchor deriveまで停止する必要はない。
+ * - 一方で履歴全体を合算するmanual recomputeは成立しないため、totalLifetimeCompleteだけを
+ *   falseにし、ledger側が総量再計算だけfail-closedできるようにする。
+ *
+ * @private
+ * @function _markExplicitPrintHistoryRetentionCoverage
+ * @param {Object|null|undefined} printStore - 対象printStore。
+ * @param {number} sourceLength - retention適用前の履歴件数。
+ * @param {number} retainedLength - retention適用後の履歴件数。
+ * @param {number} limit - 設定保持上限。
+ * @returns {void}
+ */
+function _markExplicitPrintHistoryRetentionCoverage(printStore, sourceLength, retainedLength, limit) {
+  if (!printStore || typeof printStore !== "object" || !(sourceLength > retainedLength)) {
+    return;
+  }
+  printStore.historyCoverage = {
+    ...(printStore.historyCoverage && typeof printStore.historyCoverage === "object" ? printStore.historyCoverage : {}),
+    activeAnchorComplete: printStore.historyAuthorityIncomplete === true ? false : true,
+    totalLifetimeComplete: false,
+    source: "print-history-retention",
+    sourceLength,
+    retainedLength,
+    limit
+  };
 }
 
 /**
@@ -1765,7 +1883,10 @@ export function applyPrintHistoryRetention(history, settings = monitorData.appSe
   if (limit <= 0) return list.slice();
   const retained = list.slice(0, limit);
   const seen = new Set(retained.map((job) => Number(job?.id)).filter(Number.isFinite));
-  const protectedIds = _collectLedgerProtectedPrintJobIds(options.host, list);
+  const protectedIds = new Set([
+    ..._collectLedgerProtectedPrintJobIds(options.host, list),
+    ..._collectPrintBindingProtectedPrintJobIds(list)
+  ]);
   if (protectedIds.size === 0) return retained;
   for (const job of list.slice(limit)) {
     const jobId = Number(job?.id);
@@ -1801,6 +1922,7 @@ export function applyConfiguredPrintHistoryRetentionToAllMachines() {
     if (!Array.isArray(history) || history.length <= limit) continue;
     const retained = applyPrintHistoryRetention(history, monitorData.appSettings, { host });
     machine.printStore.history = retained;
+    _markExplicitPrintHistoryRetentionCoverage(machine.printStore, history.length, retained.length, limit);
     machine.printStore._historyRev = (Number(machine.printStore._historyRev) || 0) + 1;
     changedHosts.push(host);
     removedJobs += history.length - retained.length;
@@ -2691,6 +2813,23 @@ function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
     ...machineData.printStore,
     historyAuthorityIncomplete: true,
     historyAuthoritySource: "localStorage-bounded-recovery-backup",
+    historyCoverage: {
+      ...(machineData.printStore.historyCoverage && typeof machineData.printStore.historyCoverage === "object"
+        ? machineData.printStore.historyCoverage
+        : {}),
+      activeAnchorComplete: false,
+      totalLifetimeComplete: false,
+      source: "localStorage-bounded-recovery-backup",
+      sourceLength: Number.isSafeInteger(sourceLength) && sourceLength >= 0
+        ? sourceLength
+        : null,
+      retainedLength: Array.isArray(machineData.printStore.history)
+        ? machineData.printStore.history.length
+        : null,
+      limit: Number.isSafeInteger(limit) && limit >= 0
+        ? limit
+        : null
+    },
     historyAuthoritySourceLength: Number.isSafeInteger(sourceLength) && sourceLength >= 0
       ? sourceLength
       : null,
@@ -3623,7 +3762,9 @@ export function savePrintHistory(history, hostname) {
   if (!host) return;
   ensureMachineData(host);
   const ps = monitorData.machines[host].printStore;
+  const sourceLength = Array.isArray(history) ? history.length : 0;
   ps.history = applyPrintHistoryRetention(history, monitorData.appSettings, { host });
+  _markExplicitPrintHistoryRetentionCoverage(ps, sourceLength, ps.history.length, resolvePrintHistoryRetentionLimit(monitorData.appSettings));
   // ★ 監査§6: 履歴 revision を単調インクリメント。relay delta の変更検出署名は
   //   O(1) の軽量サンプル（末尾ジョブ＋現在ジョブ）で、履歴中間の filamentInfo 編集・
   //   分割 upsert・reconcile 等（件数・末尾不変）を取りこぼしうる。履歴を実際に書き換える

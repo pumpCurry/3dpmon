@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1645 (PR #441)
+ * @version 1.390.1653 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-09-02 14:38:14
+ * @lastModified 2026-09-02 16:45:11
  * -----------------------------------------------------------
  */
 
@@ -112,7 +112,9 @@ function _historyForHost(host) {
  * @returns {boolean} 不完全な履歴authorityならtrue。
  */
 function _isHistoryAuthorityIncomplete(host) {
-  return monitorData.machines?.[host]?.printStore?.historyAuthorityIncomplete === true;
+  const printStore = monitorData.machines?.[host]?.printStore;
+  return printStore?.historyAuthorityIncomplete === true ||
+    printStore?.historyCoverage?.activeAnchorComplete === false;
 }
 
 /**
@@ -128,7 +130,27 @@ function _isHistoryAuthorityIncomplete(host) {
  */
 function _hasAnyIncompleteHistoryAuthority() {
   return Object.values(monitorData.machines || {}).some((machine) => (
-    machine?.printStore?.historyAuthorityIncomplete === true
+    machine?.printStore?.historyAuthorityIncomplete === true ||
+    machine?.printStore?.historyCoverage?.activeAnchorComplete === false
+  ));
+}
+
+/**
+ * 全履歴を前提にした総量再計算authorityが不完全なhostを含むか判定する。
+ *
+ * 【詳細説明】
+ * - 明示retention済み履歴はactive anchor deriveには使えるが、履歴全体を合算する
+ *   `recomputeSpoolFromManualEdit()` の母集団としては不完全になる。
+ * - bounded recoveryの不完全履歴は従来どおり両方を停止し、この関数でも不完全扱いにする。
+ *
+ * @private
+ * @function _hasAnyIncompleteTotalHistoryAuthority
+ * @returns {boolean} 総量再計算に使えない履歴が存在する場合true。
+ */
+function _hasAnyIncompleteTotalHistoryAuthority() {
+  return Object.values(monitorData.machines || {}).some((machine) => (
+    machine?.printStore?.historyAuthorityIncomplete === true ||
+    machine?.printStore?.historyCoverage?.totalLifetimeComplete === false
   ));
 }
 
@@ -990,6 +1012,15 @@ export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
       after: before,
       used: 0,
       mode: "halt-incomplete-history",
+      skipped: true
+    };
+  }
+  if (_hasAnyIncompleteTotalHistoryAuthority()) {
+    return {
+      before,
+      after: before,
+      used: 0,
+      mode: "halt-incomplete-total-history",
       skipped: true
     };
   }
