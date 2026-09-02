@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1629 (PR #440)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-09-02 08:35:23
+ * @lastModified 2026-09-02 16:45:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -122,6 +122,44 @@ function normalizeNonNegativeMm(value) {
   }
   const numberValue = typeof value === "string" ? Number(value.trim()) : value;
   return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null;
+}
+
+/**
+ * completion時のraw usage CSV監査証跡を正規化する。
+ *
+ * 【詳細説明】
+ * - `printStore.history`は保持上限で削除される場合があるため、source別帰属に使った
+ *   最小限のraw CSVとparser情報をJobMaterialSegment側にも保存する。
+ * - 不正なcaller supplied evidenceをauthorityへ混ぜないよう、必須文字列と件数だけを
+ *   厳密に検証し、問題があればnullとして扱う。
+ *
+ * @private
+ * @function normalizeCompletionEvidence
+ * @param {*} value - completion evidence候補。
+ * @returns {{rawMaterialUsed:string,parserVersion:string,sourceOrderingProfile:string,sourceCount:number,partCount:number}|null} 正規化済みcompletion evidence。
+ */
+function normalizeCompletionEvidence(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const rawMaterialUsed = toTrimmedString(value.rawMaterialUsed);
+  const parserVersion = toTrimmedString(value.parserVersion);
+  const sourceOrderingProfile = toTrimmedString(value.sourceOrderingProfile);
+  const sourceCount = Number(value.sourceCount);
+  const partCount = Number(value.partCount);
+  if (!rawMaterialUsed || !parserVersion || !sourceOrderingProfile) {
+    return null;
+  }
+  if (!Number.isInteger(sourceCount) || sourceCount < 0 || !Number.isInteger(partCount) || partCount < 0) {
+    return null;
+  }
+  return Object.freeze({
+    rawMaterialUsed,
+    parserVersion,
+    sourceOrderingProfile,
+    sourceCount,
+    partCount,
+  });
 }
 
 /**
@@ -1475,6 +1513,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
    * @param {number=} input.totalUsedLengthMm - total-only usage観測。
    * @param {"complete"|"partial"=} input.resultSetCompleteness - source-specific結果集合の完全性。
    * @param {Object=} input.resultSetCompletenessEvidence - module-owned result-set completeness evidence。
+   * @param {Object=} input.completionEvidence - source-specific usage解析に使った完了時raw CSV監査証跡。
    * @param {Object<string,Object>=} input.continuityBySourceId - source continuity evidence。
    * @returns {Object} repository result。
    */
@@ -1485,6 +1524,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const operationId = toTrimmedString(input.attributionOperationId);
     const materialUsages = Array.isArray(input.materialUsages) ? input.materialUsages : [];
     const requestedResultSetCompleteness = input.resultSetCompleteness === "complete" ? "complete" : "partial";
+    const completionEvidence = normalizeCompletionEvidence(input.completionEvidence);
     const planKey = `${printJobId}:${printPlan?.printPlanId || ""}`;
     const plannedSnapshots = (snapshotsByPlanKey.get(planKey) || [])
       .map((snapshot) => snapshot)
@@ -1560,6 +1600,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
       printPlanId: printPlan?.printPlanId || null,
       completedAt,
       resultSetCompleteness,
+      completionEvidence,
       materialUsages,
       totalUsedLengthMm,
     });
@@ -1676,6 +1717,12 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
       if (evidence) {
         usageEvidence.push(evidence);
       }
+      const segmentEvidence = evidence
+        ? {
+          usageEvidenceId: evidence.evidenceId,
+          ...(completionEvidence ? { completionEvidence: cloneJsonValue(completionEvidence) } : {}),
+        }
+        : (completionEvidence ? { completionEvidence: cloneJsonValue(completionEvidence) } : {});
       return {
         schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
         segmentId: createPrinterCoreV3DeterministicId("material-accounting-job-segment", [
@@ -1697,7 +1744,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         confidence: evidence?.confidence || "unknown",
         sourceSnapshotId: snapshot?.snapshotId || null,
         order: getSnapshotAuthorityOrder(snapshot, index),
-        evidence: evidence ? { usageEvidenceId: evidence.evidenceId } : {},
+        evidence: segmentEvidence,
         debit: {
           status: debit.status,
           canDebit: Boolean(debit.canDebit && usedLengthMm > 0),

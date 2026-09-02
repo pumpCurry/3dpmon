@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1646 (PR #440)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 15:42:55
+ * @lastModified 2026-09-02 16:45:11
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -803,6 +803,43 @@ describe("analyze_material_accounting_export", () => {
       readyForFixtureReview: false,
     });
     expect(job.reasons).toContain("raw-material-used-source-csv-missing");
+  });
+
+  it("J-2 readinessは履歴保持上限でprint historyが消えてもsegment完了証拠からraw CSVを検証する", () => {
+    const payload = createGate18_9J2ReadyPayload();
+    payload.machines["K2Pro-69E7"].printStore.history = [];
+    for (const segment of payload.materialAccountingPrintBindingStore.jobMaterialSegments) {
+      segment.evidence = {
+        ...(segment.evidence || {}),
+        completionEvidence: {
+          rawMaterialUsed: "3210,6543,0",
+          parserVersion: "k2-material-used-csv:v1",
+          sourceOrderingProfile: "print-start-binding-authority-order:v1",
+          sourceCount: 3,
+          partCount: 3,
+        },
+      };
+    }
+
+    const report = analyzeMaterialAccountingExport(payload, {
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          liveSendEnabled: false,
+          printer: { model: "F012", deviceId: "serial:k2", sessionId: "session:k2-a" },
+        },
+        summary: { material: { summary: { loadedSourceCount: 3 } } },
+      },
+    });
+    const job = report.gate18_9J2.devices[0].candidateJobs[0];
+
+    expect(report.gate18_9J2.readyForFixtureReview).toBe(true);
+    expect(job).toMatchObject({
+      rawMaterialUsedPresent: true,
+      rawMaterialUsedSourceCount: 3,
+      readyForFixtureReview: true,
+    });
+    expect(job.reasons).not.toContain("raw-material-used-source-csv-missing");
   });
 
   it("J-2 readinessはsnapshot/segment/raw CSVのsource数が一致しない同一jobをreadyにしない", () => {

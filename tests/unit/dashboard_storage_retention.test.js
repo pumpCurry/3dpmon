@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1645 (PR #441)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 14:33:53
+ * @lastModified 2026-09-02 16:47:35
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -127,12 +127,17 @@ function makeHistory(count) {
   return Array.from({ length: count }, (_, index) => ({ id: count - index, filename: `job-${count - index}.gcode` }));
 }
 
+function makePrintBindingStoreRecordArray(prefix, count) {
+  return Array.from({ length: count }, (_, index) => ({ [`${prefix}Id`]: `${prefix}:${index}` }));
+}
+
 beforeEach(() => {
   globalThis.localStorage = new LocalStorageStub();
   mocks.monitorData.appSettings = { printHistoryMaxEntries: 0 };
   mocks.monitorData.machines = {};
   mocks.monitorData.usageHistory = [];
   mocks.monitorData.usageHistoryRev = 0;
+  mocks.monitorData.materialAccountingPrintBindingStore = {};
   mocks.idbAvailable = false;
   mocks.queueSharedWrite.mockClear();
   mocks.queueMachineWrite.mockClear();
@@ -227,6 +232,16 @@ describe("印刷履歴保持設定", () => {
     mocks.monitorData.appSettings.printHistoryMaxEntries = 0;
     mocks.monitorData.appSettings.usageHistoryMaxEntries = 0;
     mocks.monitorData.usageHistory = Array.from({ length: 4502 }, (_, index) => ({ usageId: `u-${index}` }));
+    mocks.monitorData.materialAccountingPrintBindingStore = {
+      schemaVersion: 1,
+      authority: "material-accounting-print-binding-shadow-store",
+      printStartSnapshots: makePrintBindingStoreRecordArray("snapshot", 1502),
+      usageEvidence: makePrintBindingStoreRecordArray("evidence", 1502),
+      jobMaterialSegments: makePrintBindingStoreRecordArray("segment", 1502),
+      ledgerEvents: makePrintBindingStoreRecordArray("ledgerEvent", 1502),
+      unattributedUsage: makePrintBindingStoreRecordArray("unattributedUsage", 1502),
+      retainedUnsupportedEntries: makePrintBindingStoreRecordArray("retainedUnsupportedEntry", 1502)
+    };
     mocks.monitorData.machines = {
       "K2Pro-69E7": {
         storedData: {},
@@ -246,7 +261,43 @@ describe("印刷履歴保持設定", () => {
     expect(hostBackup.runtimeData).toBeUndefined();
     expect(globalBackup.usageHistory).toHaveLength(4500);
     expect(globalBackup.storageRecoveryBackup?.usageHistoryTruncated).toBe(true);
+    expect(globalBackup.materialAccountingPrintBindingStore.printStartSnapshots).toHaveLength(1500);
+    expect(globalBackup.materialAccountingPrintBindingStore.usageEvidence).toHaveLength(1500);
+    expect(globalBackup.materialAccountingPrintBindingStore.jobMaterialSegments).toHaveLength(1500);
+    expect(globalBackup.materialAccountingPrintBindingStore.ledgerEvents).toHaveLength(1500);
+    expect(globalBackup.materialAccountingPrintBindingStore.unattributedUsage).toHaveLength(1500);
+    expect(globalBackup.materialAccountingPrintBindingStore.retainedUnsupportedEntries).toHaveLength(1500);
+    expect(globalBackup.storageRecoveryBackup?.materialAccountingPrintBindingStore).toMatchObject({
+      truncated: true,
+      backupLimit: 1500,
+      printStartSnapshotsSourceLength: 1502,
+      usageEvidenceSourceLength: 1502,
+      jobMaterialSegmentsSourceLength: 1502,
+      ledgerEventsSourceLength: 1502,
+      unattributedUsageSourceLength: 1502,
+      retainedUnsupportedEntriesSourceLength: 1502
+    });
     expect(mocks.queueMachineWrite.mock.calls[0][1].printStore.history).toHaveLength(1502);
+  });
+
+  it("truncatedされたlocalStorage回復バックアップのPrintBinding storeはauthorityとして復元しない", () => {
+    globalThis.localStorage.setItem("3dpmon-global", JSON.stringify({
+      appSettings: { printHistoryMaxEntries: 0 },
+      materialAccountingPrintBindingStore: {
+        retainedUnsupportedEntries: [{ reason: "would-be-restored-if-not-truncated" }]
+      },
+      storageRecoveryBackup: {
+        materialAccountingPrintBindingStore: {
+          truncated: true,
+          backupLimit: 1500,
+          retainedUnsupportedEntriesSourceLength: 1502
+        }
+      }
+    }));
+
+    restoreUnifiedStorage();
+
+    expect(mocks.monitorData.materialAccountingPrintBindingStore.retainedUnsupportedEntries).toEqual([]);
   });
 
   it("localStorage回復バックアップがtruncatedなら復元後の履歴を台帳authority不完全として印付けする", () => {

@@ -29,9 +29,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1645 (PR #441)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 14:38:14
+ * @lastModified 2026-09-02 16:50:21
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1636,6 +1636,27 @@ const LOCAL_STORAGE_PRINT_HISTORY_BACKUP_LIMIT = MAX_PRINT_HISTORY;
 const LOCAL_STORAGE_USAGE_HISTORY_BACKUP_LIMIT = MAX_USAGE_HISTORY;
 
 /**
+ * IndexedDB利用時にlocalStorageへ書き出すPrintBinding回復バックアップの配列別上限。
+ *
+ * @constant {number}
+ */
+const LOCAL_STORAGE_PRINT_BINDING_BACKUP_LIMIT = MAX_PRINT_HISTORY;
+
+/**
+ * PrintBinding store内でbounded recovery backup対象にする配列フィールド。
+ *
+ * @constant {ReadonlyArray<string>}
+ */
+const PRINT_BINDING_RECOVERY_ARRAY_FIELDS = Object.freeze([
+  "printStartSnapshots",
+  "usageEvidence",
+  "jobMaterialSegments",
+  "ledgerEvents",
+  "unattributedUsage",
+  "retainedUnsupportedEntries"
+]);
+
+/**
  * 履歴保持件数設定を厳格な十進整数として正規化する。
  *
  * 【詳細説明】
@@ -2564,6 +2585,48 @@ function _boundedRecoveryArray(list, limit, direction) {
 }
 
 /**
+ * PrintBinding storeのlocalStorage回復バックアップ用bounded snapshotを生成する。
+ *
+ * 【詳細説明】
+ * - PrintBinding storeはsource-aware使用量証跡として長期運用で増え続けるため、IndexedDB利用時の
+ *   localStorage回復バックアップへ丸ごと複製するとquotaを圧迫する。
+ * - 正本は専用CAS/IndexedDBに残し、localStorageには直近側のbounded snapshotだけを置く。
+ * - truncation metadataを`storageRecoveryBackup`へ返し、復元時に不完全なbackupをauthorityとして
+ *   扱わないための判定材料にする。
+ *
+ * @private
+ * @function _createPrintBindingLocalStorageRecoverySnapshot
+ * @param {Object|null|undefined} store - PrintBinding store候補。
+ * @returns {{store:Object,metadata:Object}} bounded backup storeとmetadata。
+ */
+function _createPrintBindingLocalStorageRecoverySnapshot(store) {
+  const source = store && typeof store === "object" && !Array.isArray(store)
+    ? store
+    : {};
+  const result = _cloneStorageJsonValue(source);
+  const metadata = {
+    truncated: false,
+    backupLimit: LOCAL_STORAGE_PRINT_BINDING_BACKUP_LIMIT,
+  };
+  for (const field of PRINT_BINDING_RECOVERY_ARRAY_FIELDS) {
+    const bounded = _boundedRecoveryArray(
+      Array.isArray(source[field]) ? source[field] : [],
+      LOCAL_STORAGE_PRINT_BINDING_BACKUP_LIMIT,
+      "tail"
+    );
+    result[field] = bounded.items.map((entry) => _cloneStorageJsonValue(entry));
+    metadata[`${field}Truncated`] = bounded.truncated;
+    metadata[`${field}SourceLength`] = bounded.totalCount;
+    if (bounded.truncated) {
+      metadata.truncated = true;
+    }
+  }
+  // process-local operation cacheはrestart後のauthorityに使わないため、回復バックアップでも落とす。
+  result.operationsById = {};
+  return { store: result, metadata };
+}
+
+/**
  * per-host localStorageへ保存するmachine snapshotを生成する。
  *
  * 【詳細説明】
@@ -2666,6 +2729,21 @@ function _writePerHostLocalStorage(options = {}) {
       usageHistoryTruncated: boundedUsage.truncated,
       usageHistorySourceLength: boundedUsage.totalCount,
       usageHistoryBackupLimit: boundedUsage.limit
+    };
+  }
+  if (
+    options.boundedRecoveryBackup &&
+    globalData.materialAccountingPrintBindingStore &&
+    typeof globalData.materialAccountingPrintBindingStore === "object" &&
+    !Array.isArray(globalData.materialAccountingPrintBindingStore)
+  ) {
+    const boundedPrintBinding = _createPrintBindingLocalStorageRecoverySnapshot(
+      globalData.materialAccountingPrintBindingStore
+    );
+    globalData.materialAccountingPrintBindingStore = boundedPrintBinding.store;
+    globalData.storageRecoveryBackup = {
+      ...(globalData.storageRecoveryBackup || {}),
+      materialAccountingPrintBindingStore: boundedPrintBinding.metadata,
     };
   }
   const globalJson = JSON.stringify(globalData);
@@ -3318,7 +3396,15 @@ function _restoreFromData(shared, machines, options = {}) {
 
   // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを復元する。
   //   復元してもlegacy usageHistoryやspool残量へは投影しない。
-  if (shared?.materialAccountingPrintBindingStore && typeof shared.materialAccountingPrintBindingStore === "object") {
+  if (
+    options.source === "localStorage" &&
+    shared?.storageRecoveryBackup?.materialAccountingPrintBindingStore?.truncated === true
+  ) {
+    console.warn("[restoreUnifiedStorage] PrintBinding store restore skipped: localStorage recovery backup is truncated.");
+    monitorData.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(
+      monitorData.materialAccountingPrintBindingStore
+    );
+  } else if (shared?.materialAccountingPrintBindingStore && typeof shared.materialAccountingPrintBindingStore === "object") {
     _mergeMaterialAccountingPrintBindingStore(shared.materialAccountingPrintBindingStore);
   } else {
     monitorData.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(

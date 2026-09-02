@@ -17,9 +17,9 @@
  * - {@link createMaterialAccountingPrintBindingRuntime}：print-start/completion binding runtimeを生成
  * - {@link createMaterialAccountingPrintBindingRuntimeForTest}：test-only DI runtimeを生成
  *
- * @version 1.390.1634 (PR #440)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-02 09:58:00
+ * @lastModified 2026-09-02 16:45:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J でmanaged spool残量debitとItemKeeper projectionを接続する
@@ -494,7 +494,7 @@ function getSnapshotAuthoritySource(snapshot) {
  * @function parseMaterialUsagesFromHistoryEntry
  * @param {Object|null|undefined} historyEntry - printStore.history entry。
  * @param {Object[]} orderedSnapshots - order昇順のprint-start snapshot配列。
- * @returns {{ok:boolean,materialUsages:Object[],rawMaterialUsed:string,parserVersion:string,sourceOrderingProfile:string,reasons:string[]}} source-specific usage候補。
+ * @returns {{ok:boolean,materialUsages:Object[],rawMaterialUsed:string,parts:string[],parserVersion:string,sourceOrderingProfile:string,reasons:string[]}} source-specific usage候補。
  */
 function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
   const raw = resolveK2MaterialUsedSourceCsv(historyEntry);
@@ -521,6 +521,7 @@ function parseMaterialUsagesFromHistoryEntry(historyEntry, orderedSnapshots) {
     ok: parsed.reasons.length === 0,
     materialUsages,
     rawMaterialUsed: parsed.rawMaterialUsed,
+    parts: [...parsed.parts],
     parserVersion: parsed.parserVersion,
     sourceOrderingProfile: parsed.sourceOrderingProfile,
     reasons: [...new Set(parsed.reasons)],
@@ -1504,6 +1505,13 @@ function createMaterialAccountingPrintBindingRuntimeInternal(input = {}) {
       totalUsedLengthMm,
       resultSetCompleteness: request.resultSetCompleteness === "complete" ? inferredResultSetCompleteness : "partial",
       resultSetCompletenessEvidence: request.resultSetCompletenessEvidence,
+      completionEvidence: {
+        rawMaterialUsed: usageSet.rawMaterialUsed,
+        parserVersion: usageSet.parserVersion,
+        sourceOrderingProfile: usageSet.sourceOrderingProfile,
+        sourceCount: materialUsages.length,
+        partCount: usageSet.parts.length,
+      },
       continuityBySourceId: buildRuntimeContinuityBySourceId(data, orderedSnapshots, completedAt, completionObservedReceivedAt),
     });
     if (!result.ok && result.status !== MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.PENDING) {

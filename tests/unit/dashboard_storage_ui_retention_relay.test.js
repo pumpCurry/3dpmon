@@ -9,13 +9,14 @@
  *
  * 【機能内容サマリ】
  * - リレー子ウィンドウで印刷履歴保持設定が親権威を破らないことを検証
+ * - 親ウィンドウの保持設定入力がstrict integerだけを保存することを検証
  *
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1645 (PR #441)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.1645 (PR #441)
- * @lastModified 2026-09-02 14:40:50
+ * @lastModified 2026-09-02 16:47:35
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -41,6 +42,31 @@ const mocks = vi.hoisted(() => ({
   setChartWindowMinutes: vi.fn((value) => value)
 }));
 
+/**
+ * テスト用に履歴保持上限を本番と同じstrict positive integer規則で解釈する。
+ *
+ * 【詳細説明】
+ * - UIテストのmockが`Number()`で指数表記を受け入れると、本番storage normalizerとの境界を
+ *   検証できないため、ここでは十進整数文字列と正のsafe integerだけを受理する。
+ *
+ * @function resolveStrictRetentionLimitForTest
+ * @param {Object|null|undefined} settings - appSettings互換値。
+ * @returns {number} 0または1以上の保持上限。
+ */
+function resolveStrictRetentionLimitForTest(settings) {
+  const raw = settings?.printHistoryMaxEntries;
+  if (typeof raw === "number") {
+    return Number.isSafeInteger(raw) && raw > 0 ? raw : 0;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!/^[0-9]+$/.test(trimmed)) return 0;
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+  }
+  return 0;
+}
+
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({
   monitorData: mocks.monitorData
 }));
@@ -58,7 +84,7 @@ vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
   importAllData: vi.fn(async () => ({})),
   importHistoryOnly: vi.fn(async () => ({})),
   saveUnifiedStorage: mocks.saveUnifiedStorage,
-  resolvePrintHistoryRetentionLimit: vi.fn((settings) => Number(settings?.printHistoryMaxEntries) || 0),
+  resolvePrintHistoryRetentionLimit: vi.fn(resolveStrictRetentionLimitForTest),
   applyConfiguredPrintHistoryRetentionToAllMachines: mocks.applyConfiguredPrintHistoryRetentionToAllMachines,
   MAX_PRINT_HISTORY: 100000
 }));
@@ -145,5 +171,23 @@ describe("ストレージUI — リレー子の印刷履歴保持設定", () => 
 
     expect(retention.disabled).toBe(true);
     expect(max.disabled).toBe(true);
+  });
+
+  it("親ウィンドウでも指数表記の保持上限は保存せず、即時trimを実行しない", () => {
+    window.getRelayMode = () => "parent";
+    mocks.monitorData.appSettings.printHistoryMaxEntries = 42;
+    const { retention, max } = mountStorageDom();
+
+    initStorageUI();
+
+    retention.checked = true;
+    max.disabled = false;
+    max.value = "1e3";
+    max.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(mocks.monitorData.appSettings.printHistoryMaxEntries).toBe(42);
+    expect(mocks.applyConfiguredPrintHistoryRetentionToAllMachines).not.toHaveBeenCalled();
+    expect(mocks.saveUnifiedStorage).not.toHaveBeenCalled();
+    expect(max.value).toBe("42");
   });
 });

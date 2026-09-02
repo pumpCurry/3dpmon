@@ -17,9 +17,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1629 (PR #440)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.1587 (PR #440)
- * @lastModified 2026-09-02 08:35:23
+ * @lastModified 2026-09-02 16:45:11
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -831,6 +831,22 @@ describe("MaterialAccountingPrintBindingRuntime", () => {
     ])).toEqual([
       ["T1A", "spool:a", 3210, true],
       ["T1B", "spool:b", 6543, true],
+    ]);
+    expect(result.segments.map((segment) => segment.evidence.completionEvidence)).toEqual([
+      {
+        rawMaterialUsed: "3210,6543",
+        parserVersion: "k2-material-used-csv:v1",
+        sourceOrderingProfile: "print-start-binding-authority-order:v1",
+        sourceCount: 2,
+        partCount: 2,
+      },
+      {
+        rawMaterialUsed: "3210,6543",
+        parserVersion: "k2-material-used-csv:v1",
+        sourceOrderingProfile: "print-start-binding-authority-order:v1",
+        sourceCount: 2,
+        partCount: 2,
+      },
     ]);
     expect(result.usageEvidence.every((evidence) => evidence.trusted === true)).toBe(true);
     expect(data.materialAccountingPrintBindingStore.ledgerEvents).toHaveLength(2);

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.1645 (PR #441)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.198 (PR #89)
- * @lastModified 2026-09-02 14:42:12
+ * @lastModified 2026-09-02 16:50:21
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -195,6 +195,22 @@ export function initStorageUI() {
     }
   };
 
+  /**
+   * 印刷履歴保持件数入力をstorage側と同じstrict規則で解釈する。
+   *
+   * 【詳細説明】
+   * - 削除上限は保存直後に既存履歴へ適用されるため、`parseInt("1e3", 10) === 1`のような
+   *   JavaScriptの途中解釈を許すと意図しない大量削除につながる。
+   * - 入力値は文字列のままstorage側normalizerへ渡し、十進整数として明確な値だけを採用する。
+   *
+   * @private
+   * @function _resolvePrintHistoryRetentionInput
+   * @returns {number} 1以上の保持上限。無効入力は0。
+   */
+  const _resolvePrintHistoryRetentionInput = () => resolvePrintHistoryRetentionLimit({
+    printHistoryMaxEntries: elPrintHistoryMax?.value ?? ""
+  });
+
   const _savePrintHistoryRetention = () => {
     if (!elPrintHistoryRetention) return;
     if (isRelayChildStorageWindow()) {
@@ -203,9 +219,13 @@ export function initStorageUI() {
       return;
     }
     if (elPrintHistoryRetention.checked) {
-      const v = parseInt(elPrintHistoryMax?.value, 10);
-      monitorData.appSettings.printHistoryMaxEntries =
-        Number.isFinite(v) && v >= 1 ? v : MAX_PRINT_HISTORY;
+      const limit = _resolvePrintHistoryRetentionInput();
+      if (limit <= 0) {
+        _syncRetentionInputs();
+        panelToast("印刷履歴保持件数は1以上の十進整数で入力してください。", true);
+        return;
+      }
+      monitorData.appSettings.printHistoryMaxEntries = limit;
     } else {
       monitorData.appSettings.printHistoryMaxEntries = 0;
     }
