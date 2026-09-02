@@ -615,11 +615,13 @@ Gate 18.9 must cover:
   print-start binding order. If both target machine history raw and durable
   segment completion raw exist for the same job, history raw remains canonical
   and the segment raw must match it exactly; mismatches or mixed segment raw
-  values reject the fixture/analyzer candidate. Analyzer reports must expose
-  `manifest.deviceCorrelation` and `manifest.sessionCorrelation`; official
-  fixture review accepts only target-scoped matches or intentionally
-  `not-provided` rehearsal values, and any mismatch blocks registry-grade
-  fixture acceptance. A persisted
+  values reject the fixture/analyzer candidate. Certification exports must carry
+  `manifest.deviceCorrelation` and `manifest.sessionCorrelation` as
+  `{algorithm,salt,value}` evidence; the analyzer/builder recomputes the local
+  identity/session correlation and rejects missing or mismatched evidence with
+  explicit readiness reasons such as
+  `certification-device-correlation-missing`,
+  `certification-device-id-mismatch`, and their session counterparts. A persisted
   `historyCoverage.activeAnchorComplete:true` is not reused after restart,
   storage restore, disconnect, or reconnect; it is demoted to
   re-probe-required until the current process receives a new print history

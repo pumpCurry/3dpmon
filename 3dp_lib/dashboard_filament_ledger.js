@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1667 (PR #440)
+ * @version 1.390.1668 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-09-02 19:33:18
+ * @lastModified 2026-09-02 19:52:10
  * -----------------------------------------------------------
  */
 
@@ -258,9 +258,22 @@ function _isActiveAnchorCoverageProven(host, sinceJobId) {
  * @returns {boolean} 不完全履歴が存在する場合true。
  */
 function _hasAnyIncompleteHistoryAuthority(relevantHosts = null) {
+  if (relevantHosts instanceof Set) {
+    for (const host of relevantHosts) {
+      if (!host || host === PLACEHOLDER_HOSTNAME) continue;
+      const printStore = monitorData.machines?.[host]?.printStore;
+      if (!printStore) return true;
+      if (
+        printStore.historyAuthorityIncomplete === true ||
+        printStore.historyCoverage?.activeAnchorComplete !== true
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
   return Object.entries(monitorData.machines || {}).some(([host, machine]) => {
     if (host === PLACEHOLDER_HOSTNAME) return false;
-    if (relevantHosts instanceof Set && !relevantHosts.has(host)) return false;
     const printStore = machine?.printStore;
     return Boolean(printStore) && (
       printStore.historyAuthorityIncomplete === true ||
@@ -283,9 +296,22 @@ function _hasAnyIncompleteHistoryAuthority(relevantHosts = null) {
  * @returns {boolean} 総量再計算に使えない履歴が存在する場合true。
  */
 function _hasAnyIncompleteTotalHistoryAuthority(relevantHosts = null) {
+  if (relevantHosts instanceof Set) {
+    for (const host of relevantHosts) {
+      if (!host || host === PLACEHOLDER_HOSTNAME) continue;
+      const printStore = monitorData.machines?.[host]?.printStore;
+      if (!printStore) return true;
+      if (
+        printStore.historyAuthorityIncomplete === true ||
+        !_isTrustedTotalLifetimeCoverage(printStore.historyCoverage)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
   return Object.entries(monitorData.machines || {}).some(([host, machine]) => {
     if (host === PLACEHOLDER_HOSTNAME) return false;
-    if (relevantHosts instanceof Set && !relevantHosts.has(host)) return false;
     const printStore = machine?.printStore;
     return Boolean(printStore) && (
       printStore.historyAuthorityIncomplete === true ||
@@ -1008,23 +1034,35 @@ function _isExplicitlyAttributed(job, spoolId) {
  * 【詳細説明】
  * - 手動総量再計算は当該spoolに関係する履歴だけを合算するため、無関係な実機hostの
  *   一時的な未証明coverageで対象spoolの編集を過剰に止めない。
- * - 関係hostは、mount interval、legacy hostSpoolMap、または履歴内の明示帰属から収集する。
+ * - 関係hostは、mount interval、legacy hostSpoolMap、履歴内の明示帰属、または呼び出し元が指定した
+ *   requiredHostsから収集する。
  *
  * @private
  * @function _collectManualRecomputeAuthorityHosts
  * @param {string} spoolId - 対象スプールID。
+ * @param {Iterable<string>|string=} requiredHosts - 履歴編集元など、現在の帰属から外れても検査必須のhost。
  * @returns {Set<string>} 対象spoolに関係するhost集合。
  */
-function _collectManualRecomputeAuthorityHosts(spoolId) {
+function _collectManualRecomputeAuthorityHosts(spoolId, requiredHosts = []) {
   const hosts = new Set();
-  for (const interval of getSpoolIntervals(spoolId)) {
-    if (interval?.host && interval.host !== PLACEHOLDER_HOSTNAME) {
-      hosts.add(interval.host);
+  const addHost = (host) => {
+    const normalized = String(host || "").trim();
+    if (normalized && normalized !== PLACEHOLDER_HOSTNAME) {
+      hosts.add(normalized);
+    }
+  };
+  const required = typeof requiredHosts === "string" ? [requiredHosts] : requiredHosts;
+  if (required && typeof required[Symbol.iterator] === "function") {
+    for (const host of required) {
+      addHost(host);
     }
   }
+  for (const interval of getSpoolIntervals(spoolId)) {
+    addHost(interval?.host);
+  }
   for (const [host, mountedSpoolId] of Object.entries(monitorData.hostSpoolMap || {})) {
-    if (mountedSpoolId === spoolId && host !== PLACEHOLDER_HOSTNAME) {
-      hosts.add(host);
+    if (mountedSpoolId === spoolId) {
+      addHost(host);
     }
   }
   for (const [host, machine] of Object.entries(monitorData.machines || {})) {
@@ -1155,11 +1193,12 @@ function _recordManualRemainingAdjustment(spool, beforeMm, afterMm, options = {}
  * @param {string} spoolId - スプールID
  * @param {Object} [opts]
  * @param {number} [opts.ts] - 更新時刻 ms（updatedAt と新規 mount の ts）
+ * @param {Iterable<string>|string=} [opts.requiredHosts] - 履歴編集元など、現在の帰属から外れても検査必須のhost。
  * @returns {?{before:number, after:number, used:number, mode:string, skipped?:boolean}}
  *   再計算結果。スプール未発見時は null。mode は "total"（総量基準）／"skip"（印刷中）／
  *   reconcileSpool 由来（total 不明フォールバック時）。
  */
-export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
+export function recomputeSpoolFromManualEdit(spoolId, { ts, requiredHosts } = {}) {
   const spool = (monitorData.filamentSpools || []).find(s => s.id === spoolId);
   if (!spool) return null;
   const before = Number(spool.remainingLengthMm);
@@ -1172,7 +1211,16 @@ export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
     // 総量不明 → 総量基準が不能。アンカー方式へフォールバック。
     return reconcileSpool(spoolId, { ts });
   }
-  const authorityHosts = _collectManualRecomputeAuthorityHosts(spoolId);
+  const authorityHosts = _collectManualRecomputeAuthorityHosts(spoolId, requiredHosts);
+  if (authorityHosts.size === 0) {
+    return {
+      before,
+      after: before,
+      used: 0,
+      mode: "halt-no-authority-host",
+      skipped: true
+    };
+  }
   if (_hasAnyIncompleteHistoryAuthority(authorityHosts)) {
     return {
       before,

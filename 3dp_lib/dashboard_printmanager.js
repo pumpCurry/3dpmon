@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
- * @version 1.390.1663 (PR #440)
+ * @version 1.390.1668 (PR #440)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-09-02 18:52:20
+* @lastModified 2026-09-02 19:52:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -283,21 +283,31 @@ function _patchHistoryFilament(raw, hostname) {
  * @private
  * @param {?string} spoolId - 再計算するスプールID（falsy なら何もしない）
  * @param {number} ts - 更新時刻 ms
+ * @param {Object} [options] - 再計算文脈。
+ * @param {Iterable<string>|string=} [options.requiredHosts] - 現在の帰属から外れても検査必須のhost。
  * @returns {Promise<?Object>} 再計算結果。HALT時も戻り値で通知済み状態を返す。
  */
-async function _recomputeAndRefreshSpool(spoolId, ts) {
+async function _recomputeAndRefreshSpool(spoolId, ts, options = {}) {
   if (!spoolId) return null;
   let result = null;
   try {
-    result = recomputeSpoolFromManualEdit(spoolId, { ts });
+    result = recomputeSpoolFromManualEdit(spoolId, { ts, requiredHosts: options.requiredHosts });
   } catch (e) {
     console.warn("[printmanager] recomputeSpoolFromManualEdit 失敗:", e?.message || e);
     return null;
   }
-  if (result?.mode === "halt-incomplete-history" || result?.mode === "halt-incomplete-total-history") {
-    const message = result.mode === "halt-incomplete-total-history"
-      ? "印刷履歴全体の完全性を確認できないため、フィラメント残量の総量再計算を保留しました。"
-      : "印刷履歴の現在アンカー被覆を確認できないため、フィラメント残量の再計算を保留しました。";
+  if (
+    result?.mode === "halt-no-authority-host" ||
+    result?.mode === "halt-incomplete-history" ||
+    result?.mode === "halt-incomplete-total-history"
+  ) {
+    const message = result.mode === "halt-no-authority-host"
+      ? "対象スプールに紐づく履歴確認元がないため、フィラメント残量の総量再計算を保留しました。"
+      : (
+        result.mode === "halt-incomplete-total-history"
+          ? "印刷履歴全体の完全性を確認できないため、フィラメント残量の総量再計算を保留しました。"
+          : "印刷履歴の現在アンカー被覆を確認できないため、フィラメント残量の再計算を保留しました。"
+      );
     pushLog(message, "warn", false);
     try {
       const { showAlert } = await import("./dashboard_notification_manager.js");
@@ -2900,8 +2910,8 @@ async function _handleHistorySpoolEdit(raw, baseUrl, hostname, sid) {
   // 保存済み履歴を直接更新（updateHistoryList の再パースでデータ破壊を防ぐ）
   _patchHistoryFilament(raw, hostname);
   const recoTs = Date.now();
-  await _recomputeAndRefreshSpool(sid, recoTs);          // 旧スプール（帰属が外れた）
-  await _recomputeAndRefreshSpool(newSp.id, recoTs);     // 新スプール（帰属が付いた）
+  await _recomputeAndRefreshSpool(sid, recoTs, { requiredHosts: [hostname] });      // 旧スプール（帰属が外れた）
+  await _recomputeAndRefreshSpool(newSp.id, recoTs, { requiredHosts: [hostname] }); // 新スプール（帰属が付いた）
   saveUnifiedStorage(true);
   const updatedSp = getSpoolById(newSp.id) || newSp;
   // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
@@ -2942,7 +2952,7 @@ async function _handleHistorySpoolAssign(raw, baseUrl, hostname) {
   _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
   // 保存済み履歴を直接更新
   _patchHistoryFilament(raw, hostname);
-  await _recomputeAndRefreshSpool(newSp.id, Date.now());
+  await _recomputeAndRefreshSpool(newSp.id, Date.now(), { requiredHosts: [hostname] });
   saveUnifiedStorage(true);
   const updatedSp = getSpoolById(newSp.id) || newSp;
   // 現在印刷中ジョブなら機器装着スプール・プレビューも連動

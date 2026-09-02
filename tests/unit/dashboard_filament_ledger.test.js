@@ -1197,6 +1197,51 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
     expect(sp._remainingVerified).not.toBe(true);
   });
 
+  it("対象host集合が空の手動総量再計算は履歴完全性を証明できないためfail-closedする", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 41000 });
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(res).toMatchObject({
+      before: 41000,
+      after: 41000,
+      used: 0,
+      mode: "halt-no-authority-host",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(41000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
+  it("requiredHosts指定時は現在帰属から外れた旧spoolでも編集元hostの履歴完全性を検査する", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 41000 });
+    mockMonitorData.machines.K1Max = {
+      printStore: {
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: false,
+          source: "print-history-retention",
+          oldestPrintJobId: 100,
+          newestPrintJobId: 200,
+          anchorSinceJobIds: []
+        },
+        history: []
+      }
+    };
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1, requiredHosts: ["K1Max"] });
+
+    expect(res).toMatchObject({
+      before: 41000,
+      after: 41000,
+      used: 0,
+      mode: "halt-incomplete-total-history",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(41000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
   it("他スプールに帰属するジョブは合算しない（multi-spool の per-reel 厳密帰属）", () => {
     const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 100000 });
     setHistory("h", [
