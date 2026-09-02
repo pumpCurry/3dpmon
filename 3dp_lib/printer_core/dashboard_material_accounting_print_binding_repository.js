@@ -16,9 +16,9 @@
  * - {@link normalizeStoredMaterialAccountingPrintBindingStore}：保存済みprint binding storeを正規化
  * - {@link createMaterialAccountingPrintBindingRepositoryWithIssuer}：issuer注入済みprint binding repositoryを生成
  *
- * @version 1.390.1523 (PR #438)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 16:16:00
+ * @lastModified 2026-09-02 16:45:11
  * -----------------------------------------------------------
  * @todo
  * - Gate 19以降でtrusted source-specific result registryを接続してから残量debitを有効化する
@@ -30,6 +30,11 @@ import {
   createPrinterCoreV3DeterministicId,
   stableStringifyPrinterCoreV3Value,
 } from "./dashboard_data_schema_v3.js";
+import { validateMaterialBindingPlan } from "./dashboard_material_binding_plan.js";
+import {
+  createPrintStartMaterialBindingAuthority,
+  createPrintStartMaterialBindingAuthorityDigest,
+} from "./dashboard_material_accounting_print_binding_authority.js";
 import { validatePrintPlan } from "./dashboard_print_plan.js";
 
 /**
@@ -120,6 +125,44 @@ function normalizeNonNegativeMm(value) {
 }
 
 /**
+ * completion時のraw usage CSV監査証跡を正規化する。
+ *
+ * 【詳細説明】
+ * - `printStore.history`は保持上限で削除される場合があるため、source別帰属に使った
+ *   最小限のraw CSVとparser情報をJobMaterialSegment側にも保存する。
+ * - 不正なcaller supplied evidenceをauthorityへ混ぜないよう、必須文字列と件数だけを
+ *   厳密に検証し、問題があればnullとして扱う。
+ *
+ * @private
+ * @function normalizeCompletionEvidence
+ * @param {*} value - completion evidence候補。
+ * @returns {{rawMaterialUsed:string,parserVersion:string,sourceOrderingProfile:string,sourceCount:number,partCount:number}|null} 正規化済みcompletion evidence。
+ */
+function normalizeCompletionEvidence(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const rawMaterialUsed = toTrimmedString(value.rawMaterialUsed);
+  const parserVersion = toTrimmedString(value.parserVersion);
+  const sourceOrderingProfile = toTrimmedString(value.sourceOrderingProfile);
+  const sourceCount = Number(value.sourceCount);
+  const partCount = Number(value.partCount);
+  if (!rawMaterialUsed || !parserVersion || !sourceOrderingProfile) {
+    return null;
+  }
+  if (!Number.isInteger(sourceCount) || sourceCount < 0 || !Number.isInteger(partCount) || partCount < 0) {
+    return null;
+  }
+  return Object.freeze({
+    rawMaterialUsed,
+    parserVersion,
+    sourceOrderingProfile,
+    sourceCount,
+    partCount,
+  });
+}
+
+/**
  * logical tool IDを厳密に正規化する。
  *
  * 【詳細説明】
@@ -175,6 +218,37 @@ function createOperationDigest(namespace, payload) {
 }
 
 /**
+ * print binding repositoryが受け取れるplan種別を検証する。
+ *
+ * 【詳細説明】
+ * - PrintPlanは従来どおり`validatePrintPlan()`で検証する。
+ * - 既存remote G-code印刷ではG-code content/upload receiptを持てないため、PrintPlanを弱めず、
+ *   材料割当専用のMaterialBindingPlanだけを別validatorで受け取る。
+ *
+ * @private
+ * @function validatePrintBindingPlan
+ * @param {Object|null|undefined} plan - PrintPlanまたはMaterialBindingPlan候補。
+ * @returns {{ok:boolean,errors:string[]}} 検証結果。
+ */
+function validatePrintBindingPlan(plan) {
+  const printPlanValidation = validatePrintPlan(plan);
+  if (printPlanValidation.ok) {
+    return printPlanValidation;
+  }
+  const materialBindingValidation = validateMaterialBindingPlan(plan);
+  if (materialBindingValidation.ok) {
+    return materialBindingValidation;
+  }
+  return {
+    ok: false,
+    errors: [...new Set([
+      ...printPlanValidation.errors,
+      ...materialBindingValidation.errors,
+    ])],
+  };
+}
+
+/**
  * 配列をID mapへ変換する。
  *
  * @private
@@ -195,6 +269,46 @@ function mapById(records, key) {
 }
 
 /**
+ * MaterialSourceをcanonical IDとaliasの両方で検索できるmapへ変換する。
+ *
+ * 【詳細説明】
+ * - UI/adapterは`source:k2:cfs:1a`のような観測aliasをplanへ保持することがある。
+ * - runtimeはaliasからcanonical MaterialSource recordを復元するため、repository側でもalias検索を許可し、
+ *   ただし保存snapshotにはcanonical `materialSourceId` を使う。
+ *
+ * @private
+ * @function mapMaterialSourcesForBinding
+ * @param {Object[]} records - MaterialSource record配列。
+ * @returns {{sourceMap:Map<string,Object>,ambiguousAliases:Set<string>}} canonical ID/alias mapと衝突alias。
+ */
+function mapMaterialSourcesForBinding(records) {
+  const sourceMap = new Map();
+  const ambiguousAliases = new Set();
+  for (const record of Array.isArray(records) ? records : []) {
+    const canonicalId = toTrimmedString(record?.materialSourceId);
+    const ids = [
+      record?.materialSourceId,
+      ...(Array.isArray(record?.aliases) ? record.aliases : []),
+    ].map(toTrimmedString).filter(Boolean);
+    for (const id of ids) {
+      if (ambiguousAliases.has(id)) {
+        continue;
+      }
+      const existing = sourceMap.get(id);
+      if (!existing) {
+        sourceMap.set(id, record);
+        continue;
+      }
+      if (toTrimmedString(existing.materialSourceId) !== canonicalId) {
+        sourceMap.delete(id);
+        ambiguousAliases.add(id);
+      }
+    }
+  }
+  return { sourceMap, ambiguousAliases };
+}
+
+/**
  * sourceに対応するprint-start時点のactive open mountを解決する。
  *
  * @private
@@ -206,10 +320,14 @@ function mapById(records, key) {
  */
 function findMountForAssignment(assignment, spoolMounts, capturedAt) {
   const sourceId = toTrimmedString(assignment?.materialSourceId);
+  const sourceIds = new Set([
+    sourceId,
+    ...(Array.isArray(assignment?.materialSourceAliases) ? assignment.materialSourceAliases : []),
+  ].map(toTrimmedString).filter(Boolean));
   const assignmentSpoolId = toTrimmedString(assignment?.spoolId);
   const capturedEpoch = Date.parse(capturedAt);
   const candidateMounts = (Array.isArray(spoolMounts) ? spoolMounts : []).filter((mount) => {
-    if (toTrimmedString(mount?.materialSourceId) !== sourceId) {
+    if (!sourceIds.has(toTrimmedString(mount?.materialSourceId))) {
       return false;
     }
     if (assignmentSpoolId && toTrimmedString(mount?.spoolId) !== assignmentSpoolId) {
@@ -279,10 +397,58 @@ function normalizeUsageEntryIdentifiers(entry) {
  * @returns {{toolId:?number,protocolToolAlias:string,materialSourceId:string}} 正規化済み識別子。
  */
 function normalizeSnapshotAssignmentIdentifiers(snapshot) {
+  const authority = snapshot?.bindingAuthority || {};
   return {
-    toolId: normalizeToolId(snapshot?.toolId),
-    protocolToolAlias: toTrimmedString(snapshot?.protocolToolAlias || snapshot?.toolAlias),
-    materialSourceId: toTrimmedString(snapshot?.materialSourceId),
+    toolId: normalizeToolId(authority?.tool?.toolId ?? snapshot?.toolId),
+    protocolToolAlias: toTrimmedString(authority?.tool?.protocolToolAlias || snapshot?.protocolToolAlias || snapshot?.toolAlias),
+    materialSourceId: toTrimmedString(authority?.source?.materialSourceId || snapshot?.materialSourceId),
+  };
+}
+
+/**
+ * snapshotのauthority orderを取得する。
+ *
+ * 【詳細説明】
+ * - K2のsource別使用量CSVはprint-start時点の保存順ではなく、署名対象のcanonical orderへ対応付ける。
+ *
+ * @private
+ * @function getSnapshotAuthorityOrder
+ * @param {Object|null|undefined} snapshot - print-start snapshot。
+ * @param {number} fallbackOrder - authority order欠落時のfallback。
+ * @returns {number} 並び替え用order。
+ */
+function getSnapshotAuthorityOrder(snapshot, fallbackOrder) {
+  const authorityOrder = normalizeToolId(snapshot?.bindingAuthority?.tool?.order);
+  if (authorityOrder !== null) {
+    return authorityOrder;
+  }
+  const snapshotOrder = normalizeToolId(snapshot?.order);
+  return snapshotOrder !== null ? snapshotOrder : fallbackOrder;
+}
+
+/**
+ * snapshotからdebit evaluator用canonical authority viewを取り出す。
+ *
+ * 【詳細説明】
+ * - nested diagnostic `spoolMount` / `materialSource`は表示・調査用に残すだけで、debit authorityには使わない。
+ *
+ * @private
+ * @function getSnapshotDebitAuthority
+ * @param {Object|null|undefined} snapshot - print-start snapshot。
+ * @returns {{mount:Object|null,materialSource:Object|null}} evaluator入力。
+ */
+function getSnapshotDebitAuthority(snapshot) {
+  const authority = snapshot?.bindingAuthority;
+  if (!authority || typeof authority !== "object" || Array.isArray(authority)) {
+    return { mount: null, materialSource: null };
+  }
+  return {
+    mount: authority.mount && typeof authority.mount === "object" && !Array.isArray(authority.mount)
+      ? authority.mount
+      : null,
+    materialSource: authority.source && typeof authority.source === "object" && !Array.isArray(authority.source)
+      ? authority.source
+      : null,
   };
 }
 
@@ -446,6 +612,22 @@ function createShadowPrintStartMaterialSnapshot(input = {}) {
       materialSourceId,
       mountId,
     ]);
+  const toolId = normalizeToolId(input.toolId);
+  const protocolToolAlias = toTrimmedString(input.protocolToolAlias || input.toolAlias) || null;
+  const order = normalizeToolId(input.order);
+  const mountOpenedAt = normalizeIsoTime(input.mountOpenedAt || input.spoolMount?.openedAt || input.mount?.openedAt);
+  const bindingAuthority = createPrintStartMaterialBindingAuthority({
+    ...input,
+    deviceId,
+    printJobId,
+    printPlanId,
+    materialSourceId,
+    mountId,
+    mountOpenedAt,
+    toolId,
+    protocolToolAlias,
+    order,
+  });
   return deepFreezeJson({
     schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
     snapshotId,
@@ -455,9 +637,12 @@ function createShadowPrintStartMaterialSnapshot(input = {}) {
     materialSourceId,
     mountId,
     spoolId: toTrimmedString(input.spoolId),
-    toolId: normalizeToolId(input.toolId),
-    protocolToolAlias: toTrimmedString(input.protocolToolAlias || input.toolAlias) || null,
-    order: normalizeToolId(input.order),
+    mountOpenedAt,
+    toolId,
+    protocolToolAlias,
+    order,
+    bindingAuthority,
+    bindingAuthorityDigest: createPrintStartMaterialBindingAuthorityDigest(bindingAuthority),
     capturedAt: normalizeIsoTime(input.capturedAt),
     materialSource: cloneJsonValue(input.materialSource || null),
     spoolMount: cloneJsonValue(input.spoolMount || null),
@@ -976,6 +1161,28 @@ export function normalizeStoredMaterialAccountingPrintBindingStore(stored) {
 }
 
 /**
+ * MaterialAccounting PrintBinding store digestを生成する。
+ *
+ * 【詳細説明】
+ * - IndexedDB CASでprint-start snapshot / source-specific usage shadow storeを安全に更新するための
+ *   安定digestを作る。
+ * - operation cacheは正規化時に永続authorityから落とされるため、retry用一時cache差分で
+ *   store authority digestが揺れない。
+ *
+ * @function createMaterialAccountingPrintBindingStoreDigest
+ * @param {*} store - digest対象store候補。
+ * @returns {string} deterministic digest。
+ * @example
+ * const digest = createMaterialAccountingPrintBindingStoreDigest(store);
+ */
+export function createMaterialAccountingPrintBindingStoreDigest(store) {
+  const normalizedStore = normalizeStoredMaterialAccountingPrintBindingStore(store);
+  return `fnv1a128:${createPrinterCoreV3DeterministicId("material-accounting-print-binding-store", [
+    stableStringifyPrinterCoreV3Value(normalizedStore),
+  ])}`;
+}
+
+/**
  * repository resultを生成する。
  *
  * @private
@@ -989,8 +1196,8 @@ function createResult(input) {
     status: input.status || (input.ok ? MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.RECORDED : MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.BLOCKED),
     action: input.action || input.status || null,
     reasons: Array.isArray(input.reasons) ? [...new Set(input.reasons)] : [],
-    snapshots: Array.isArray(input.snapshots) ? input.snapshots.map((snapshot) => cloneJsonValue(snapshot)) : [],
-    usageEvidence: Array.isArray(input.usageEvidence) ? input.usageEvidence.map((evidence) => cloneJsonValue(evidence)) : [],
+    snapshots: Array.isArray(input.snapshots) ? input.snapshots.map((snapshot) => deepFreezeJson(snapshot)) : [],
+    usageEvidence: Array.isArray(input.usageEvidence) ? input.usageEvidence.map((evidence) => deepFreezeJson(evidence)) : [],
     segments: Array.isArray(input.segments) ? input.segments.map((segment) => cloneJsonValue(segment)) : [],
     ledgerEvents: Array.isArray(input.ledgerEvents) ? input.ledgerEvents.map((event) => cloneJsonValue(event)) : [],
     unattributedUsage: Array.isArray(input.unattributedUsage) ? input.unattributedUsage.map((usage) => cloneJsonValue(usage)) : [],
@@ -1051,7 +1258,10 @@ function createLedgerEvent(segment, createdAt) {
  *
  * @function createMaterialAccountingPrintBindingRepositoryWithIssuer
  * @param {Object} dependencies - 契約モジュールから注入されるissuer/validator。
- * @param {Function} dependencies.createTrustedSourceSpecificMaterialUsageEvidence - trusted usage issuer。
+ * @param {Function=} dependencies.createSourceSpecificMaterialUsageEvidence - public shadow usage issuer。
+ * @param {Function=} dependencies.createTrustedSourceSpecificMaterialUsageEvidence - trusted usage issuer。
+ * @param {Function=} dependencies.createPrintStartMaterialSnapshot - print-start snapshot issuer。
+ * @param {Function=} dependencies.createTrustedResultSetCompletenessEvidence - trusted result-set completeness issuer。
  * @param {Function} dependencies.validateTrustedResultSetCompletenessEvidence - trusted result-set completeness validator。
  * @param {Function} dependencies.evaluateMaterialDebitEligibility - debit eligibility evaluator。
  * @param {Function} dependencies.validateMaterialSource - MaterialSource validator。
@@ -1062,12 +1272,22 @@ function createLedgerEvent(segment, createdAt) {
  * const repository = createMaterialAccountingPrintBindingRepositoryWithIssuer(dependencies);
  */
 export function createMaterialAccountingPrintBindingRepositoryWithIssuer(dependencies = {}, initialStore = {}) {
-  const createTrustedSourceSpecificMaterialUsageEvidence = dependencies.createTrustedSourceSpecificMaterialUsageEvidence;
+  const createSourceSpecificUsageEvidence = typeof dependencies.createTrustedSourceSpecificMaterialUsageEvidence === "function"
+    ? dependencies.createTrustedSourceSpecificMaterialUsageEvidence
+    : (typeof dependencies.createSourceSpecificMaterialUsageEvidence === "function"
+        ? dependencies.createSourceSpecificMaterialUsageEvidence
+        : createShadowSourceSpecificMaterialUsageEvidence);
+  const createPrintStartMaterialSnapshot = typeof dependencies.createPrintStartMaterialSnapshot === "function"
+    ? dependencies.createPrintStartMaterialSnapshot
+    : createShadowPrintStartMaterialSnapshot;
+  const createTrustedResultSetCompletenessEvidence = typeof dependencies.createTrustedResultSetCompletenessEvidence === "function"
+    ? dependencies.createTrustedResultSetCompletenessEvidence
+    : null;
   const validateTrustedResultSetCompletenessEvidence = dependencies.validateTrustedResultSetCompletenessEvidence;
   const evaluateMaterialDebitEligibility = dependencies.evaluateMaterialDebitEligibility;
   const validateMaterialSource = dependencies.validateMaterialSource;
   const validateSpoolMount = dependencies.validateSpoolMount;
-  if (typeof createTrustedSourceSpecificMaterialUsageEvidence !== "function" ||
+  if (typeof createSourceSpecificUsageEvidence !== "function" ||
       typeof validateTrustedResultSetCompletenessEvidence !== "function" ||
       typeof evaluateMaterialDebitEligibility !== "function" ||
       typeof validateMaterialSource !== "function" ||
@@ -1116,12 +1336,13 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
    *
    * @function recordPrintStartBindings
    * @param {Object} input - binding入力。
-   * @param {Object} input.printPlan - PrintPlan。
+   * @param {Object} input.printPlan - PrintPlanまたはMaterialBindingPlan。
    * @param {string} input.printJobId - PrintJob ID。
    * @param {Object[]} input.materialSources - MaterialSource配列。
    * @param {Object[]} input.spoolMounts - SpoolMount配列。
    * @param {string} input.capturedAt - print-start時刻。
    * @param {string} input.bindingOperationId - binding operation ID。
+   * @param {Object=} input.issuanceEvidence - runtimeが観測した発行文脈。
    * @returns {Object} repository result。
    */
   function recordPrintStartBindings(input = {}) {
@@ -1129,8 +1350,8 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const printJobId = toTrimmedString(input.printJobId);
     const capturedAt = normalizeIsoTime(input.capturedAt);
     const operationId = toTrimmedString(input.bindingOperationId);
-    const planValidation = validatePrintPlan(printPlan);
-    const sourceMap = mapById(input.materialSources, "materialSourceId");
+    const planValidation = validatePrintBindingPlan(printPlan);
+    const sourceLookup = mapMaterialSourcesForBinding(input.materialSources);
     const reasons = [];
     if (!planValidation.ok) {
       reasons.push(...planValidation.errors);
@@ -1147,8 +1368,23 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const plannedSnapshots = [];
     if (reasons.length === 0) {
       for (const assignment of printPlan.toolAssignments) {
-        const source = sourceMap.get(assignment.materialSourceId);
-        const mountResolution = findMountForAssignment(assignment, input.spoolMounts, capturedAt);
+        const assignmentSourceId = toTrimmedString(assignment.materialSourceId);
+        if (sourceLookup.ambiguousAliases.has(assignmentSourceId)) {
+          reasons.push("ambiguous-material-source-alias");
+          continue;
+        }
+        const source = sourceLookup.sourceMap.get(assignmentSourceId);
+        const canonicalAssignment = source?.materialSourceId
+          ? {
+              ...assignment,
+              materialSourceId: source.materialSourceId,
+              materialSourceAliases: [
+                assignment.materialSourceId,
+                ...(Array.isArray(source.aliases) ? source.aliases : []),
+              ],
+            }
+          : assignment;
+        const mountResolution = findMountForAssignment(canonicalAssignment, input.spoolMounts, capturedAt);
         const mount = mountResolution.mount;
         if (!source || !validateMaterialSource(source).ok) {
           reasons.push("material-source-required");
@@ -1162,7 +1398,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           reasons.push(mountResolution.reason || "spool-mount-required");
           continue;
         }
-        plannedSnapshots.push(createShadowPrintStartMaterialSnapshot({
+        plannedSnapshots.push(createPrintStartMaterialSnapshot({
           deviceId: printPlan.deviceId,
           printJobId,
           printPlanId: printPlan.printPlanId,
@@ -1176,6 +1412,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           materialSource: source,
           spoolMount: mount,
           bindingOperationId: operationId,
+          issuanceEvidence: input.issuanceEvidence || null,
         }));
       }
     }
@@ -1221,6 +1458,22 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         reasons,
       });
     }
+    const allSnapshotsAlreadyRecorded = plannedSnapshots.length > 0 &&
+      plannedSnapshots.every((snapshot) => {
+        const existingSnapshot = snapshotsById.get(snapshot.snapshotId);
+        return existingSnapshot &&
+          stableStringifyPrinterCoreV3Value(existingSnapshot) === stableStringifyPrinterCoreV3Value(snapshot);
+      });
+    if (allSnapshotsAlreadyRecorded) {
+      const result = createResult({
+        ok: true,
+        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.IDEMPOTENT,
+        action: "idempotent",
+        snapshots: plannedSnapshots,
+      });
+      recordOperation(operationId, digest, result);
+      return result;
+    }
     for (const snapshot of plannedSnapshots) {
       if (!snapshotsById.has(snapshot.snapshotId)) {
         store.printStartSnapshots.push(cloneJsonValue(snapshot));
@@ -1260,6 +1513,7 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
    * @param {number=} input.totalUsedLengthMm - total-only usage観測。
    * @param {"complete"|"partial"=} input.resultSetCompleteness - source-specific結果集合の完全性。
    * @param {Object=} input.resultSetCompletenessEvidence - module-owned result-set completeness evidence。
+   * @param {Object=} input.completionEvidence - source-specific usage解析に使った完了時raw CSV監査証跡。
    * @param {Object<string,Object>=} input.continuityBySourceId - source continuity evidence。
    * @returns {Object} repository result。
    */
@@ -1270,50 +1524,12 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const operationId = toTrimmedString(input.attributionOperationId);
     const materialUsages = Array.isArray(input.materialUsages) ? input.materialUsages : [];
     const requestedResultSetCompleteness = input.resultSetCompleteness === "complete" ? "complete" : "partial";
+    const completionEvidence = normalizeCompletionEvidence(input.completionEvidence);
     const planKey = `${printJobId}:${printPlan?.printPlanId || ""}`;
     const plannedSnapshots = (snapshotsByPlanKey.get(planKey) || [])
       .map((snapshot) => snapshot)
-      .sort((a, b) => {
-        const orderA = Number.isFinite(Number(a.order)) ? Number(a.order) : 0;
-        const orderB = Number.isFinite(Number(b.order)) ? Number(b.order) : 0;
-        return orderA - orderB;
-      });
-    const resultSetCompleteness = requestedResultSetCompleteness === "complete" &&
-      validateTrustedResultSetCompletenessEvidence(input.resultSetCompletenessEvidence, {
-        deviceId: printPlan?.deviceId,
-        printJobId,
-        printPlanId: printPlan?.printPlanId,
-        materialSourceIds: plannedSnapshots.map((snapshot) => snapshot.materialSourceId),
-      })
-      ? "complete"
-      : "partial";
+      .sort((a, b) => getSnapshotAuthorityOrder(a, 0) - getSnapshotAuthorityOrder(b, 0));
     const totalUsedLengthMm = normalizeNonNegativeMm(input.totalUsedLengthMm);
-    const digest = createOperationDigest("material-usage-attribution-operation", {
-      printJobId,
-      printPlanId: printPlan?.printPlanId || null,
-      completedAt,
-      resultSetCompleteness,
-      materialUsages,
-      totalUsedLengthMm,
-    });
-    const existing = operationRecords.get(operationId);
-    if (existing && existing.digest !== digest) {
-      return createResult({
-        ok: false,
-        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.BLOCKED,
-        action: "conflict",
-        reasons: ["usage-attribution-operation-payload-conflict"],
-      });
-    }
-    if (existing && existing.digest === digest) {
-      return createResult({
-        ...existing.result,
-        ok: true,
-        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.IDEMPOTENT,
-        action: "idempotent",
-      });
-    }
-
     const reasons = [];
     if (!printPlan || typeof printPlan !== "object" || Array.isArray(printPlan)) {
       reasons.push("print-plan-required");
@@ -1350,6 +1566,60 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         source: "firmware-total-single-source",
       });
       usageResolution.sourceSpecificTotalMm = totalUsedLengthMm;
+    }
+    const completenessScope = {
+      deviceId: printPlan?.deviceId,
+      printJobId,
+      printPlanId: printPlan?.printPlanId,
+      materialSourceIds: plannedSnapshots.map((snapshot) => snapshot.materialSourceId),
+    };
+    let resultSetCompletenessEvidence = input.resultSetCompletenessEvidence;
+    if (requestedResultSetCompleteness === "complete" &&
+        createTrustedResultSetCompletenessEvidence &&
+        !validateTrustedResultSetCompletenessEvidence(resultSetCompletenessEvidence, completenessScope)) {
+      const observedSourceIds = plannedSnapshots
+        .filter((snapshot) => usageResolution.entriesBySnapshotId.has(snapshot.snapshotId))
+        .map((snapshot) => snapshot.materialSourceId);
+      try {
+        resultSetCompletenessEvidence = createTrustedResultSetCompletenessEvidence({
+          ...completenessScope,
+          observedSourceIds,
+          observedAt: completedAt,
+          source: "trusted-runtime-source-specific-result-set",
+        });
+      } catch {
+        resultSetCompletenessEvidence = input.resultSetCompletenessEvidence;
+      }
+    }
+    const resultSetCompleteness = requestedResultSetCompleteness === "complete" &&
+      validateTrustedResultSetCompletenessEvidence(resultSetCompletenessEvidence, completenessScope)
+      ? "complete"
+      : "partial";
+    const digest = createOperationDigest("material-usage-attribution-operation", {
+      printJobId,
+      printPlanId: printPlan?.printPlanId || null,
+      completedAt,
+      resultSetCompleteness,
+      completionEvidence,
+      materialUsages,
+      totalUsedLengthMm,
+    });
+    const existing = operationRecords.get(operationId);
+    if (existing && existing.digest !== digest) {
+      return createResult({
+        ok: false,
+        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.BLOCKED,
+        action: "conflict",
+        reasons: ["usage-attribution-operation-payload-conflict"],
+      });
+    }
+    if (existing && existing.digest === digest) {
+      return createResult({
+        ...existing.result,
+        ok: true,
+        status: MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS.IDEMPOTENT,
+        action: "idempotent",
+      });
     }
     const hasSourceSpecificUsage = usageResolution.entriesBySnapshotId.size > 0;
     const unattributedUsage = [];
@@ -1397,7 +1667,13 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
     const segments = plannedSnapshots.map((snapshot, index) => {
       const usageEntry = usageResolution.entriesBySnapshotId.get(snapshot.snapshotId) || null;
       const entryLength = getUsageEntryLengthMm(usageEntry);
-      const toolId = normalizeToolId(snapshot.toolId) ?? index;
+      const authority = snapshot.bindingAuthority || {};
+      const debitAuthority = getSnapshotDebitAuthority(snapshot);
+      const toolId = normalizeToolId(authority?.tool?.toolId ?? snapshot.toolId) ?? index;
+      const protocolToolAlias = toTrimmedString(authority?.tool?.protocolToolAlias || snapshot.protocolToolAlias) || null;
+      const materialSourceId = toTrimmedString(authority?.source?.materialSourceId || snapshot?.materialSourceId);
+      const mountId = toTrimmedString(authority?.mount?.mountId || snapshot?.mountId);
+      const spoolId = toTrimmedString(authority?.mount?.spoolId || snapshot?.spoolId);
       const usageState = entryLength !== null
         ? (entryLength > 0 ? "observed-used" : "confirmed-unused")
         : (resultSetCompleteness === "complete" ? "confirmed-unused" : "unknown");
@@ -1405,9 +1681,9 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
         ? entryLength
         : (usageState === "confirmed-unused" ? 0 : null);
       const evidence = usedLengthMm !== null && snapshot
-        ? createShadowSourceSpecificMaterialUsageEvidence({
-          materialSourceId: snapshot.materialSourceId,
-          mountId: snapshot.mountId,
+        ? createSourceSpecificUsageEvidence({
+          materialSourceId,
+          mountId,
           snapshotId: snapshot.snapshotId,
           printJobId,
           deviceId: printPlan.deviceId,
@@ -1424,36 +1700,51 @@ export function createMaterialAccountingPrintBindingRepositoryWithIssuer(depende
           ]),
         })
         : null;
-      const debit = {
+      let debit = {
         status: "blocked",
         canDebit: false,
         reasons: ["shadow-only-attribution-not-debit-authority"],
       };
+      if (evidence?.trusted === true && snapshot?.trusted === true) {
+        debit = evaluateMaterialDebitEligibility({
+          mount: debitAuthority.mount,
+          materialSource: debitAuthority.materialSource,
+          usageEvidence: evidence,
+          printStartSnapshot: snapshot,
+          continuity: input.continuityBySourceId?.[materialSourceId] || {},
+        });
+      }
       if (evidence) {
         usageEvidence.push(evidence);
       }
+      const segmentEvidence = evidence
+        ? {
+          usageEvidenceId: evidence.evidenceId,
+          ...(completionEvidence ? { completionEvidence: cloneJsonValue(completionEvidence) } : {}),
+        }
+        : (completionEvidence ? { completionEvidence: cloneJsonValue(completionEvidence) } : {});
       return {
         schemaVersion: MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
         segmentId: createPrinterCoreV3DeterministicId("material-accounting-job-segment", [
           printJobId,
           printPlan.printPlanId,
           toolId,
-          snapshot.materialSourceId,
+          materialSourceId,
         ]),
         printJobId,
         printPlanId: printPlan.printPlanId,
         deviceId: printPlan.deviceId,
         toolId,
-        protocolToolAlias: snapshot.protocolToolAlias,
-        materialSourceId: snapshot?.materialSourceId || null,
-        mountId: snapshot?.mountId || null,
-        spoolId: snapshot?.spoolId || null,
+        protocolToolAlias,
+        materialSourceId: materialSourceId || null,
+        mountId: mountId || null,
+        spoolId: spoolId || null,
         usedLengthMm,
         usageState,
         confidence: evidence?.confidence || "unknown",
         sourceSnapshotId: snapshot?.snapshotId || null,
-        order: Number.isFinite(Number(snapshot.order)) ? Number(snapshot.order) : index,
-        evidence: evidence ? { usageEvidenceId: evidence.evidenceId } : {},
+        order: getSnapshotAuthorityOrder(snapshot, index),
+        evidence: segmentEvidence,
         debit: {
           status: debit.status,
           canDebit: Boolean(debit.canDebit && usedLengthMm > 0),

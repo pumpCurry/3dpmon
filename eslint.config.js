@@ -2,6 +2,61 @@ import js from '@eslint/js';
 import jsdoc from 'eslint-plugin-jsdoc';
 import prettierConfig from 'eslint-config-prettier';
 
+const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS = [
+  {
+    regex: '(^|/)dashboard_material_accounting_contract\\.js$',
+    importNames: ['createTrustedPrintStartMaterialAccountingPrintBindingRepository'],
+    message: 'Trusted print binding repository factory is runtime-internal; import it only from dashboard_material_accounting_print_binding_runtime.js.',
+  },
+  {
+    regex: '(^|/)dashboard_material_accounting_print_binding_repository\\.js$',
+    importNames: ['createMaterialAccountingPrintBindingRepositoryWithIssuer'],
+    message: 'Issuer-injected print binding repository is contract-internal; import it only from dashboard_material_accounting_contract.js.',
+  },
+  {
+    regex: '(^|/)dashboard_material_accounting_print_binding_runtime\\.js$',
+    importNames: ['createMaterialAccountingPrintBindingRuntimeForTest'],
+    message: 'Test-only print binding runtime factory must not be imported by production modules.',
+  },
+  {
+    regex: '(^|/)dashboard_itemkeeper_source_usage_projection_certification\\.js$',
+    importNames: [
+      'clearItemKeeperSourceUsageProjectionCertificationsForTest',
+      'registerItemKeeperSourceUsageProjectionCertificationForTest',
+    ],
+    message: 'ItemKeeper source usage projection test issuer must not be imported by production modules.',
+  },
+];
+
+const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_CONTRACT = TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS
+  .filter((restriction) => !restriction.importNames.includes('createMaterialAccountingPrintBindingRepositoryWithIssuer'));
+
+const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_RUNTIME = TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS
+  .filter((restriction) => !restriction.importNames.includes('createTrustedPrintStartMaterialAccountingPrintBindingRepository'));
+
+const TRUSTED_PRINT_BINDING_DYNAMIC_IMPORT_RESTRICTIONS = [
+  {
+    selector: 'ImportExpression:not([source.type="Literal"])',
+    message: 'Production dynamic imports must use a string literal so authority-module restrictions remain enforceable.',
+  },
+  {
+    selector: 'ImportExpression[source.value=/dashboard_material_accounting_contract\\.js$/]',
+    message: 'Trusted print binding contract module must not be dynamically imported by production modules; use the static allowlisted runtime path.',
+  },
+  {
+    selector: 'ImportExpression[source.value=/dashboard_material_accounting_print_binding_repository\\.js$/]',
+    message: 'Issuer-injected print binding repository module must not be dynamically imported by production modules; use the static allowlisted contract path.',
+  },
+  {
+    selector: 'ImportExpression[source.value=/dashboard_material_accounting_print_binding_runtime\\.js$/]',
+    message: 'Test-only print binding runtime module must not be dynamically imported by production modules.',
+  },
+  {
+    selector: 'ImportExpression[source.value=/dashboard_itemkeeper_source_usage_projection_certification\\.js$/]',
+    message: 'ItemKeeper source usage projection test issuer module must not be dynamically imported by production modules.',
+  },
+];
+
 export default [
   js.configs.recommended,
   jsdoc.configs['flat/recommended'],
@@ -87,6 +142,26 @@ export default [
       // --- 初期導入のため一部ルールを緩和 ---
       'no-prototype-builtins': 'off',
       'no-fallthrough': 'warn',
+      'no-restricted-syntax': ['error', ...TRUSTED_PRINT_BINDING_DYNAMIC_IMPORT_RESTRICTIONS],
+      'no-restricted-imports': ['error', {
+        patterns: TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS,
+      }],
+    },
+  },
+  {
+    files: ['3dp_lib/printer_core/dashboard_material_accounting_contract.js'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_CONTRACT,
+      }],
+    },
+  },
+  {
+    files: ['3dp_lib/printer_core/dashboard_material_accounting_print_binding_runtime.js'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_RUNTIME,
+      }],
     },
   },
   {

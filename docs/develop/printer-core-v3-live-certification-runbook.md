@@ -1,6 +1,6 @@
 # Printer Core v3 Live Certification Runbook
 
-Last updated: 2026-08-28
+Last updated: 2026-09-02
 
 This runbook defines the operator-controlled steps for the remaining physical
 evidence gates. It intentionally separates dry-run evidence, live command
@@ -100,6 +100,178 @@ Observation checklist:
 
 Restart recovery can be code/tooling closed before this live run, but production
 print-start authority remains blocked until this physical evidence is attached.
+
+## Gate 18.9I: K2/CFS Shadow Accounting Certification
+
+Goal: prove that a K2/CFS print can be linked to the 3DPmon-managed spool
+mounted on each MaterialSource, without writing managed remaining, legacy
+`usageHistory`, or ItemKeeper debit authority.
+
+Read-only export analysis:
+
+```powershell
+node scripts/analyze_material_accounting_export.mjs `
+  --export D:\Users\pcb\Downloads\3dpmon_export_YYYYMMDD-hhmmss.json `
+  --certification D:\Users\pcb\Downloads\K2Pro-69E7-cfs-certification.json `
+  --output tmp\material-accounting-export-report.json `
+  --pretty
+```
+
+Use this before and after a live accounting run. The analyzer must remain
+read-only: it reports observed MaterialSources, legacy `hostSpoolMap`
+compatibility, Universal `SpoolMount` coverage, print-start snapshots, and
+`JobMaterialSegment` counts, but it must not migrate mounts, debit spools, or
+enable physical CFS commands.
+For review, `sourceSpecificUsageCount` only proves that a segment references the
+source. Gate evidence uses the stricter
+`itemKeeperDigestConsistentUsageCount` / `itemKeeperDigestConsistentSegmentCount`
+values. Those digest-consistent counts are scoped to the target multi-source
+device and require a matching print-start snapshot, same `printJobId`, same
+`deviceId`, a resolved `spoolId`, debit eligibility, finite non-negative usage,
+and a digest-consistent projection receipt in the export. The read-only analyzer
+cannot prove process-local runtime registry membership, so
+`canProjectItemKeeperSourceUsage` remains false unless a later production issuer
+exports runtime-certified evidence.
+Gate 18.9J-2 adds the reviewed fixture registry scaffold, but its production
+registry intentionally remains empty until a K2 live fixture is captured and
+reviewed. Caller-supplied fixture receipts, reviewed commits, or capture hashes
+must still report `reviewed-live-fixture-registry-entry-required` until that
+module-owned immutable registry entry is added.
+The analyzer also reports `gate18_9J2` readiness. This is stricter than the
+Gate 18.9I evidence check: it requires a K2/CFS target, at least two loaded CFS
+sources, source-aware managed mounts for every loaded source in the fixture,
+trusted print-start snapshots, source-specific `JobMaterialSegment` records,
+at least one observed-used segment, at least one explicit `confirmed-unused`
+0mm segment, reviewable source-aware projection digest candidates, and a
+matching CFS Debug / Certification panel export. Even when
+`gate18_9J2.readyForFixtureReview` is true, it does not enable production
+ItemKeeper projection or reviewed registry registration by itself.
+Gate 18.9J-2 readiness is scoped to the certification target device when the
+panel export contains a concrete device ID. Other monitored K2 printers in the
+same all-data export must not make the target fixture fail. The candidate job
+must also contain raw K2 `materialUsed` CSV either from the target machine
+history or from the same job's `JobMaterialSegment.evidence.completionEvidence`
+fallback when print history retention has already removed the machine history
+row. The CSV source count must match both the print-start snapshot count and the
+`JobMaterialSegment` count, and each parsed CSV value must equal the matching
+segment's `usedLengthMm` in print-start binding order. If the certification
+panel export carries a concrete session ID, that ID must match the candidate
+print-start/session evidence before the job can be marked ready for fixture
+review.
+The certification export manifest carries `manifest.deviceCorrelation` and
+`manifest.sessionCorrelation` evidence as `{algorithm,salt,value}` records. The
+analyzer/builder recomputes the local identity/session correlation and compares
+that evidence directly. Missing or mismatched evidence fails fixture readiness
+with reasons such as `certification-device-correlation-missing`,
+`certification-device-id-mismatch`, `certification-session-correlation-missing`,
+or their session mismatch counterparts, because the export could otherwise bind
+one printer's panel evidence to another printer's history row or bind a stale
+session to a fresh print.
+When both the target machine history row and durable segment completion evidence
+contain raw K2 `materialUsed` CSV for the same job, the history row remains the
+canonical raw source, but the durable segment raw must match it exactly; a
+mismatch or mixed segment raw values keeps the fixture rejected. Stored
+`historyCoverage.activeAnchorComplete:true` is also only a current-process fetch
+proof. After app restart, storage restore, disconnect, or reconnect, it must be
+treated as re-probe-required until a new printer history fetch covers the
+current active anchor (`oldestPrintJobId <= anchorSinceJobId <= newestPrintJobId`)
+and records that same anchor in `anchorSinceJobIds`. A `sinceJobId:0` mount is
+not treated as covered by recent-history fetch alone: `unknown` intervals keep
+their anchor value without retroactive debit, while `known` intervals need
+positive total-lifetime authority before historical jobs can be debited.
+Restored `totalLifetimeComplete:true` is demoted unless a future trusted issuer
+proof is present. That proof is trusted only when a module-owned registry
+recognizes the proof object; saved/imported JSON fields such as `trusted:true`
+are not authority. Manual history filament edits keep the cached remaining length
+and show a warning when total-history completeness has no positive authority;
+their completeness scan is limited to hosts that actually reference the target
+spool. Durable completionEvidence fallback also requires sourceCount/partCount
+metadata in addition to parser/profile metadata.
+
+Required sequence:
+
+- Mount 3DPmon-managed spools to every CFS source that may be used by the test
+  print. The external spool source and every CFS slot remain separate sources.
+- Start a K2/CFS print through the guarded print-start flow so the app creates a
+  MaterialBindingPlan before transport send and moves it to submitted only after
+  local transport success.
+- Confirm the app observes a new machine print start after submission. A
+  baseline job already present before send must not bind to the pending plan.
+- Keep K2 material topology fresh through the print interval. Provider
+  disconnect/reconnect, source disappearance, alias conflict, or event-log
+  coverage gap must keep the segment out of managed debit eligibility.
+- Confirm completed history appears with source-specific `materialUsed`
+  evidence. If print history retention removes the row before fixture build,
+  confirm the same raw CSV is preserved in
+  `JobMaterialSegment.evidence.completionEvidence`; otherwise confirm the result
+  is left pending/unattributed when only total usage or incomplete source counts
+  are available.
+- Confirm the filament manager shows each source segment as read-only usage
+  evidence beside the mounted 3DPmon spool. It may show estimated remaining, but
+  must not write managed remaining or legacy K1-style usage records yet.
+- Confirm ItemKeeper export/projection includes only read-only source-specific
+  evidence that has a trusted print-start snapshot and matching completion
+  usage. Unused sources require explicit result-set completeness evidence before
+  they can be marked confirmed-unused.
+- Confirm `gate18_9I.status:"evidence-present"` is based on the target
+  multi-source device's own print-start snapshot plus eligible source-specific
+  segment evidence. A segment from another device, or a source-specific segment
+  without ItemKeeper eligibility, is not enough.
+
+Pass criteria:
+
+- The saved print-start snapshot contains device, session, generation, print
+  job, source, spool, and local receipt evidence.
+- Source-specific usage such as `T1A -> CFS 1A = 3210mm` and
+  `T1B -> CFS 1B = 6543mm` is preserved as separate JobMaterialSegment records,
+  and the raw `materialUsed` CSV parses to the same values in the same
+  print-start binding order.
+- A source that was mounted but not reported as used remains pending or
+  unconfirmed unless result-set completeness evidence explicitly proves zero
+  usage.
+- No managed spool remaining debit occurs during this certification gate.
+- `scripts/analyze_material_accounting_export.mjs` reports
+  `gate18_9I.status:"evidence-present"` only after source-specific segment
+  evidence exists. A K2/CFS export that still has only legacy `hostSpoolMap`
+  receives `legacy-single-spool-map-present-for-multi-source-device` and
+  `loaded-source-managed-mount-missing` warnings instead of being silently
+  treated as source-aware.
+- `scripts/analyze_material_accounting_export.mjs` reports
+  `gate18_9J2.status:"candidate-ready-for-fixture-review"` only when the same
+  export also contains the stricter fixture-review inputs described above.
+  `gate18_9J2.canRegisterReviewedFixtureEntry` and
+  `gate18_9J2.canProjectItemKeeperSourceUsage` remain false until a later
+  module-owned reviewed registry entry and issuer activation are implemented.
+
+Fixture artifact build:
+
+```powershell
+node scripts/build_itemkeeper_source_usage_fixture.mjs `
+  --export D:\Users\pcb\Downloads\3dpmon_export_POST.json `
+  --certification D:\Users\pcb\Downloads\K2Pro-69E7-cfs-certification_POST.json `
+  --device-id serial:<k2-device-id> `
+  --print-job-id <target-print-job-id> `
+  --reviewed-commit <full-git-sha-used-for-capture> `
+  --operator-action-id operator:k2-j2-capture-001 `
+  --firmware-version <observed-firmware-version> `
+  --output-dir tmp\gate18-9j2-capture-001 `
+  --pretty
+```
+
+This builder is read-only. It creates `fixture-evidence.json`,
+`fixture-receipt.json`, `projection-digests.json`, and
+`capture-manifest.json` from the exported stores. A rejected receipt is still a
+useful artifact because it records the missing snapshot, segment, raw CSV,
+order, parity, or usage-state evidence without mutating 3DPmon storage,
+ItemKeeper, or the reviewed production registry. The builder resolves raw
+history from the target machine only, using the requested `deviceId` and
+`printJobId` plus `printPlanId` when available. If that row is absent because of
+print history retention, the builder may use the same job's
+`JobMaterialSegment.evidence.completionEvidence.rawMaterialUsed` fallback, but
+conflicting fallback values, history/durable raw mismatches, or CSV/segment
+usage mismatches keep the fixture rejected. Device metadata is anchored to the 3DPmon export target/machine;
+certification JSON and CLI metadata may fill missing fields, but conflicts are
+reported as `fixture-review-not-ready` review blockers.
 
 ## Gate 10: K2 CFS Topology Certification
 

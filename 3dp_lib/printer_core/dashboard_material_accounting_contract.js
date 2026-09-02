@@ -23,7 +23,9 @@
  * - {@link createSourceSpecificMaterialUsageEvidence}：未信頼のsource-specific usage evidence shapeを生成
  * - {@link createMaterialResultSetCompletenessEvidence}：未信頼のresult-set completeness evidence shapeを生成
  * - {@link createTrustedMaterialResultSetCompletenessRegistry}：trusted result-set completeness 検証用registryを生成
+ * - {@link createMaterialAccountingPrintBindingStoreDigest}：print binding store digestを生成
  * - {@link createMaterialAccountingPrintBindingRepository}：print binding repositoryを生成
+ * - {@link createTrustedPrintStartMaterialAccountingPrintBindingRepository}：runtime内部用trusted print-start issuer注入済みrepositoryを生成
  * - {@link createMaterialSourceAccountingView}：UI用 read model contract を生成
  * - {@link canTransitionMaterialAccountingMigrationStatus}：migration lifecycle遷移可否を判定
  * - {@link validateFilamentUnit}：FilamentUnit record を検証
@@ -32,9 +34,9 @@
  * - {@link validateMaterialAccountingCutover}：cutover record を検証
  * - {@link evaluateMaterialDebitEligibility}：source-aware debit 可否を判定
  *
- * @version 1.390.1522 (PR #438)
+ * @version 1.390.1629 (PR #440)
  * @since   1.390.1490 (PR #438)
- * @lastModified 2026-08-31 16:58:00
+ * @lastModified 2026-09-02 08:35:23
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9B で JobMaterialSegment / FilamentLedger repository と接続する
@@ -42,17 +44,26 @@
 
 "use strict";
 
-import { createPrinterCoreV3DeterministicId } from "./dashboard_data_schema_v3.js";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "./dashboard_data_schema_v3.js";
+import {
+  createPrintStartMaterialBindingAuthority,
+  createPrintStartMaterialBindingAuthorityDigest,
+} from "./dashboard_material_accounting_print_binding_authority.js";
 import {
   MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
   createMaterialAccountingPrintBindingRepositoryWithIssuer,
+  createMaterialAccountingPrintBindingStoreDigest,
   normalizeStoredMaterialAccountingPrintBindingStore,
 } from "./dashboard_material_accounting_print_binding_repository.js";
 
 export {
   MATERIAL_ACCOUNTING_PRINT_BINDING_SCHEMA_VERSION,
   MATERIAL_ACCOUNTING_PRINT_BINDING_STATUS,
+  createMaterialAccountingPrintBindingStoreDigest,
   normalizeStoredMaterialAccountingPrintBindingStore,
 };
 
@@ -916,8 +927,58 @@ function createPrintStartMaterialSnapshotSignature(snapshot) {
     snapshot.materialSourceId,
     snapshot.mountId,
     snapshot.spoolId,
+    snapshot.mountOpenedAt,
+    snapshot.toolId,
+    snapshot.protocolToolAlias,
+    snapshot.order,
+    snapshot.bindingAuthorityDigest,
     snapshot.capturedAt,
+    stableStringifyPrinterCoreV3Value(snapshot.issuanceEvidence || null),
   ]);
+}
+
+/**
+ * print-start snapshotのcanonical binding authorityが署名対象semanticと一致するか検証する。
+ *
+ * 【詳細説明】
+ * - nested `spoolMount` / `materialSource` は診断用payloadとして扱い、trusted debit判定のauthorityにはしない。
+ * - top-level fieldと`bindingAuthority`が一致しないsnapshotは、attestationがあってもtrusted rootへ戻さない。
+ *
+ * @private
+ * @function isPrintStartMaterialBindingAuthorityConsistent
+ * @param {Object|null|undefined} snapshot - print-start snapshot候補。
+ * @returns {boolean} canonical authorityが一貫している場合true。
+ */
+function isPrintStartMaterialBindingAuthorityConsistent(snapshot) {
+  const authority = snapshot?.bindingAuthority;
+  if (!authority || typeof authority !== "object" || Array.isArray(authority)) {
+    return false;
+  }
+  if (snapshot.bindingAuthorityDigest !== createPrintStartMaterialBindingAuthorityDigest(authority)) {
+    return false;
+  }
+  const authorityMountOpenedAt = normalizeOptionalIsoTime(authority?.mount?.openedAt);
+  if (normalizeOptionalIsoTime(snapshot.mountOpenedAt) !== authorityMountOpenedAt) {
+    return false;
+  }
+  const authorityToolId = toFiniteNumberOrNull(authority?.tool?.toolId);
+  const snapshotToolId = toFiniteNumberOrNull(snapshot.toolId);
+  if (authorityToolId !== snapshotToolId) {
+    return false;
+  }
+  if (toTrimmedString(authority?.tool?.protocolToolAlias) !== toTrimmedString(snapshot.protocolToolAlias || snapshot.toolAlias)) {
+    return false;
+  }
+  const authorityOrder = toFiniteNumberOrNull(authority?.tool?.order);
+  const snapshotOrder = toFiniteNumberOrNull(snapshot.order);
+  if (authorityOrder !== snapshotOrder) {
+    return false;
+  }
+  return toTrimmedString(authority?.source?.materialSourceId) === toTrimmedString(snapshot.materialSourceId) &&
+    toTrimmedString(authority?.source?.deviceId) === toTrimmedString(snapshot.deviceId) &&
+    toTrimmedString(authority?.mount?.mountId) === toTrimmedString(snapshot.mountId) &&
+    toTrimmedString(authority?.mount?.materialSourceId) === toTrimmedString(snapshot.materialSourceId) &&
+    toTrimmedString(authority?.mount?.spoolId) === toTrimmedString(snapshot.spoolId);
 }
 
 /**
@@ -1319,6 +1380,7 @@ function createTrustedSourceSpecificMaterialUsageEvidence(input = {}) {
  * @param {string} input.materialSourceId - MaterialSource ID。
  * @param {string} input.mountId - SpoolMount ID。
  * @param {string} input.spoolId - Spool ID。
+ * @param {string=} input.mountOpenedAt - print-start時点で署名対象にするSpoolMount開始時刻。
  * @param {string} input.capturedAt - print-start capture time。
  * @param {Object=} input.materialSource - MaterialSource snapshot。
  * @param {Object=} input.spoolMount - SpoolMount snapshot。
@@ -1326,6 +1388,7 @@ function createTrustedSourceSpecificMaterialUsageEvidence(input = {}) {
  * @param {string=} input.protocolToolAlias - print-start時点のprotocol tool alias。
  * @param {number|string=} input.order - print-start時点のassignment order。
  * @param {string=} input.bindingOperationId - binding operation ID。
+ * @param {Object=} input.issuanceEvidence - runtimeが観測した発行文脈。
  * @returns {Object} trusted print-start snapshot。
  * @throws {TypeError} 必須値不足や時刻不正の場合。
  * @example
@@ -1342,6 +1405,7 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
   if (!capturedAt) {
     throw new TypeError("Material accounting contract requires a valid snapshot.capturedAt.");
   }
+  const mountOpenedAt = normalizeOptionalIsoTime(input.mountOpenedAt || input.spoolMount?.openedAt || input.mount?.openedAt);
   const snapshotId = toTrimmedString(input.snapshotId) ||
     createPrinterCoreV3DeterministicId("material-print-start-snapshot", [
       deviceId,
@@ -1350,6 +1414,23 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
       materialSourceId,
       mountId,
     ]);
+  const toolId = toFiniteNumberOrNull(input.toolId);
+  const protocolToolAlias = toTrimmedString(input.protocolToolAlias || input.toolAlias) || null;
+  const order = toFiniteNumberOrNull(input.order);
+  const bindingAuthority = createPrintStartMaterialBindingAuthority({
+    ...input,
+    deviceId,
+    printJobId,
+    printPlanId,
+    materialSourceId,
+    mountId,
+    spoolId,
+    mountOpenedAt,
+    toolId,
+    protocolToolAlias,
+    order,
+  });
+  const bindingAuthorityDigest = createPrintStartMaterialBindingAuthorityDigest(bindingAuthority);
   const snapshot = {
     schemaVersion: MATERIAL_ACCOUNTING_CONTRACT_VERSION,
     snapshotId,
@@ -1359,13 +1440,17 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
     materialSourceId,
     mountId,
     spoolId,
-    toolId: toFiniteNumberOrNull(input.toolId),
-    protocolToolAlias: toTrimmedString(input.protocolToolAlias || input.toolAlias) || null,
-    order: toFiniteNumberOrNull(input.order),
+    mountOpenedAt,
+    toolId,
+    protocolToolAlias,
+    order,
+    bindingAuthority,
+    bindingAuthorityDigest,
     capturedAt,
     materialSource: cloneJsonValue(input.materialSource || null),
     spoolMount: cloneJsonValue(input.spoolMount || null),
     bindingOperationId: toTrimmedString(input.bindingOperationId) || null,
+    issuanceEvidence: cloneJsonValue(input.issuanceEvidence || null),
     trusted: true,
     authority: {
       mode: "trusted-print-start-material-snapshot",
@@ -1380,6 +1465,34 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
   const frozenSnapshot = deepFreezeJson(snapshot);
   TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS.add(frozenSnapshot);
   return frozenSnapshot;
+}
+
+/**
+ * print-start snapshotが現在processで発行されたtrusted evidenceかを検査する。
+ *
+ * 【詳細説明】
+ * - repository保存時にJSON cloneされたsnapshotはWeakSet object identityを失うため、
+ *   同一process内で生成されたattestationが再計算できる場合だけtrusted rootへ戻す。
+ * - `SOURCE_SPECIFIC_USAGE_EVIDENCE_SECRET`はprocess lifetime secretなので、restart/importを跨いだ
+ *   旧snapshotはここを通過せず、Gate20のrevalidationまで自動debitできない。
+ *
+ * @private
+ * @function isTrustedPrintStartMaterialSnapshot
+ * @param {Object|null|undefined} snapshot - print-start snapshot候補。
+ * @returns {boolean} trusted snapshotとして扱える場合true。
+ */
+function isTrustedPrintStartMaterialSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return false;
+  }
+  if (TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS.has(snapshot)) {
+    return true;
+  }
+  return snapshot.trusted === true &&
+    snapshot?.authority?.canBindUsage === true &&
+    isPrintStartMaterialBindingAuthorityConsistent(snapshot) &&
+    snapshot?.provenance?.source === "printer-core-material-binding-repository" &&
+    snapshot?.provenance?.attestation === createPrintStartMaterialSnapshotSignature(snapshot);
 }
 
 /**
@@ -1399,7 +1512,34 @@ function createTrustedPrintStartMaterialSnapshot(input = {}) {
  */
 export function createMaterialAccountingPrintBindingRepository(initialStore = {}) {
   return createMaterialAccountingPrintBindingRepositoryWithIssuer({
+    createSourceSpecificMaterialUsageEvidence,
+    validateTrustedResultSetCompletenessEvidence,
+    evaluateMaterialDebitEligibility,
+    validateMaterialSource,
+    validateSpoolMount,
+  }, initialStore);
+}
+
+/**
+ * trusted print-start snapshot issuer注入済みprint binding repositoryを生成する。
+ *
+ * 【詳細説明】
+ * - Gate18.9I production runtimeだけが使う入口として、契約モジュールprivateの
+ *   trusted print-start snapshot issuerをrepositoryへ注入する。
+ * - public shadow repositoryは従来どおりtrusted snapshotをmintしないため、read-only検証や
+ *   fixture比較用途のtrust boundaryを維持できる。
+ *
+ * @function createTrustedPrintStartMaterialAccountingPrintBindingRepository
+ * @param {Object=} initialStore - 復元用store。
+ * @returns {Object} trusted print-start issuer注入済みrepository API。
+ * @example
+ * const repository = createTrustedPrintStartMaterialAccountingPrintBindingRepository(store);
+ */
+export function createTrustedPrintStartMaterialAccountingPrintBindingRepository(initialStore = {}) {
+  return createMaterialAccountingPrintBindingRepositoryWithIssuer({
     createTrustedSourceSpecificMaterialUsageEvidence,
+    createPrintStartMaterialSnapshot: createTrustedPrintStartMaterialSnapshot,
+    createTrustedResultSetCompletenessEvidence,
     validateTrustedResultSetCompletenessEvidence,
     evaluateMaterialDebitEligibility,
     validateMaterialSource,
@@ -1750,12 +1890,7 @@ function validatePrintStartSnapshotForDebit(snapshot, mount, materialSource) {
   if (!snapshotCapturedAt) {
     reasons.push("print-start-snapshot-time-required");
   }
-  if (!TRUSTED_PRINT_START_MATERIAL_SNAPSHOTS.has(snapshot)) {
-    reasons.push("untrusted-print-start-snapshot");
-  } else if (
-    snapshot?.provenance?.source !== "printer-core-material-binding-repository" ||
-    snapshot?.provenance?.attestation !== createPrintStartMaterialSnapshotSignature(snapshot)
-  ) {
+  if (!isTrustedPrintStartMaterialSnapshot(snapshot)) {
     reasons.push("untrusted-print-start-snapshot");
   }
   return reasons;
@@ -1901,6 +2036,9 @@ export function evaluateMaterialDebitEligibility(input = {}) {
   }
   if (continuity.sourceContinuity === false) {
     pending.push("source-continuity-required");
+  }
+  if (continuity?.eventCoverage?.ok === false && toTrimmedString(continuity.eventCoverage.reason)) {
+    pending.push(toTrimmedString(continuity.eventCoverage.reason));
   }
 
   const identityStrengthValues = enumValues(MATERIAL_IDENTITY_STRENGTH);

@@ -8,6 +8,10 @@
  * - weightFromLength / lengthFromWeight
  * - getMaterialDensity
  * - buildSpoolAnalytics
+ *
+ * @version 1.390.1624 (PR #440)
+ * @since   1.390.0 (Initial)
+ * @lastModified 2026-09-02 07:45:00
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -16,7 +20,31 @@ vi.mock('../../3dp_lib/dashboard_data.js', () => ({
   monitorData: {
     machines: {},
     filamentSpools: [],
+    usageHistory: [],
+    mountHistory: [],
+    mountHistorySeq: 0,
+    filamentEventContext: {},
     hostSpoolMap: {},
+    materialAccountingSpoolMountStore: {
+      schemaVersion: 1,
+      authority: "material-accounting-spool-mount-store",
+      storeRevision: 0,
+      storeDigest: "",
+      spoolMounts: [],
+      events: [],
+      conflicts: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        operatorManaged: true,
+        deviceObservationWrites: false,
+        physicalCommandWrites: false,
+        legacyHostSpoolMapWrites: false,
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        filamentLedgerWrites: false,
+        printBindingWrites: false,
+      },
+    },
   },
   setStoredDataForHost: vi.fn(),
 }));
@@ -69,6 +97,10 @@ import {
   countAttributionIssuesForHost,
   updateSpool,
   addSpool,
+  deleteSpool,
+  revertInferredSpool,
+  setCurrentSpoolId,
+  getSpoolMountedLocationLabels,
 } from '../../3dp_lib/dashboard_spool.js';
 import { monitorData } from '../../3dp_lib/dashboard_data.js';
 import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.js';
@@ -76,6 +108,355 @@ import { loadHistory, saveHistory } from '../../3dp_lib/dashboard_printmanager.j
 const {
   buildInferredLedgerReconciliationReport
 } = await import('../../3dp_lib/dashboard_inferred_reconciliation.js');
+const {
+  createSpoolMountRecord,
+  SPOOL_MOUNT_STATUS,
+  SPOOL_MOUNT_VERIFICATION,
+  MATERIAL_IDENTITY_STRENGTH,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_contract.js');
+const {
+  reserveUniversalSpoolAssignment,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_spool_assignment_guard.js');
+const {
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js');
+
+/**
+ * Universal OPEN SpoolMountとcreation eventを同時に設定する。
+ *
+ * 【詳細説明】
+ * - Gate 18.9HではOPEN mountをactive authorityへ復元するために、
+ *   operator-confirmed mount本体だけでなく、対応するcreation operation eventも必須にする。
+ * - legacy hostSpoolMapとの排他テストでは、production store normalization後もOPEN mountが
+ *   有効に残るfixtureを使う必要があるため、mount/eventを常にペアで作る。
+ *
+ * @function setUniversalOpenMount
+ * @param {string} spoolId - 3DPmon管理スプールID。
+ * @param {Object=} options - fixtureオプション。
+ * @param {string=} options.materialSourceId - MaterialSource ID。
+ * @param {string=} options.mountId - mount ID。
+ * @param {string=} options.mountOperationId - mount operation ID。
+ * @param {string=} options.openedAt - mount開始時刻。
+ * @returns {Object} 作成したSpoolMount record。
+ */
+function setUniversalOpenMount(spoolId, options = {}) {
+  const materialSourceId = options.materialSourceId || 'source:k2:cfs:1a';
+  const mountId = options.mountId || `mount:k2:1a:${spoolId}`;
+  const mountOperationId = options.mountOperationId || `operation:k2:1a:${spoolId}`;
+  const operatorActionId = options.operatorActionId || `action:k2:1a:${spoolId}`;
+  const mount = createSpoolMountRecord({
+    mountId,
+    materialSourceId,
+    spoolId,
+    status: SPOOL_MOUNT_STATUS.OPEN,
+    openedAt: options.openedAt || '2026-09-01T04:00:00.000Z',
+    mountOperationId,
+    verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+    sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+  });
+  const payload = {
+    kind: 'operator-mount',
+    operatorActionId,
+    operationId: mountOperationId,
+    materialSourceId,
+    spoolId,
+  };
+  monitorData.materialAccountingSpoolMountStore.spoolMounts = [mount];
+  monitorData.materialAccountingSpoolMountStore.events = [{
+    eventId: `event:${operatorActionId}`,
+    kind: 'operator-mount',
+    operatorActionId,
+    operationId: mountOperationId,
+    payload,
+    payloadDigest: createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+    recordRefs: [mount.mountId, mount.mountOperationId],
+    createdAt: mount.openedAt,
+    actor: 'operator',
+  }];
+  return mount;
+}
+
+// =============================================
+// legacy hostSpoolMap と Universal SpoolMount の排他
+// =============================================
+describe('legacy hostSpoolMap と Universal SpoolMount の排他', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    monitorData.machines = {};
+    monitorData.filamentSpools = [
+      { id: 'S1', name: 'Spool 1', remainingLengthMm: 300000, totalLengthMm: 330000 },
+    ];
+    monitorData.usageHistory = [];
+    monitorData.mountHistory = [];
+    monitorData.mountHistorySeq = 0;
+    monitorData.filamentEventContext = {};
+    monitorData.hostSpoolMap = {};
+    monitorData.materialAccountingSpoolMountStore = {
+      schemaVersion: 1,
+      authority: "material-accounting-spool-mount-store",
+      storeRevision: 0,
+      storeDigest: "",
+      spoolMounts: [],
+      events: [],
+      conflicts: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        operatorManaged: true,
+        deviceObservationWrites: false,
+        physicalCommandWrites: false,
+        legacyHostSpoolMapWrites: false,
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        filamentLedgerWrites: false,
+        printBindingWrites: false,
+      },
+    };
+  });
+
+  it('Universal OPEN mount済みspoolはlegacy setCurrentSpoolIdで二重装着しない', () => {
+    setUniversalOpenMount('S1');
+
+    const ok = setCurrentSpoolId('S1', 'K1Max-4A1B');
+
+    expect(ok).toBe(false);
+    expect(monitorData.hostSpoolMap).toEqual({});
+  });
+
+  it('Universal CLOSED mount履歴だけならlegacy setCurrentSpoolIdを妨げない', () => {
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+      ...createSpoolMountRecord({
+        mountId: 'mount:k2:closed:S1',
+        materialSourceId: 'source:k2:cfs:1a',
+        spoolId: 'S1',
+        status: SPOOL_MOUNT_STATUS.CLOSED,
+        openedAt: '2026-09-01T03:00:00.000Z',
+        closedAt: '2026-09-01T03:30:00.000Z',
+        mountOperationId: 'operation:k2:1a:S1',
+        closeOperationId: 'operation:k2:1a:S1:close',
+        verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+        sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+      }),
+    }];
+
+    const ok = setCurrentSpoolId('S1', 'K1Max-4A1B');
+
+    expect(ok).toBe(true);
+    expect(monitorData.hostSpoolMap).toEqual({ 'K1Max-4A1B': 'S1' });
+  });
+
+  it('Universal OPEN mount済みspoolはdeleteSpoolで廃棄しない', () => {
+    setUniversalOpenMount('S1');
+
+    deleteSpool('S1');
+
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
+  });
+
+  it('Universal reservation中のspoolはdeleteSpoolで廃棄しない', () => {
+    const reservation = reserveUniversalSpoolAssignment({
+      spoolId: 'S1',
+      ownerId: 'operation:k2:pending',
+      materialSourceId: 'source:k2:cfs:1a',
+    });
+    expect(reservation.ok).toBe(true);
+
+    try {
+      deleteSpool('S1');
+    } finally {
+      reservation.release();
+    }
+
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
+  });
+
+  it('Universal OPEN mount済みinferred spoolはrevertInferredSpoolで廃棄しない', () => {
+    monitorData.filamentSpools = [{
+      id: 'S1',
+      name: 'Inferred Spool',
+      inferred: true,
+      remainingLengthMm: 300000,
+      totalLengthMm: 330000,
+      hostname: 'K2Pro-69E7',
+      isActive: true,
+      isInUse: true,
+    }];
+    monitorData.hostSpoolMap = { 'K2Pro-69E7': 'S1' };
+    setUniversalOpenMount('S1');
+
+    const restored = revertInferredSpool('S1');
+
+    expect(restored).toBeNull();
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
+    expect(monitorData.hostSpoolMap).toEqual({ 'K2Pro-69E7': 'S1' });
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts[0].status).toBe(SPOOL_MOUNT_STATUS.OPEN);
+  });
+
+  it('revertInferredSpoolはsuperseded旧spoolがUniversal OPEN mount中ならlegacyへ再装着しない', () => {
+    monitorData.filamentSpools = [
+      {
+        id: 'OLD',
+        name: 'Confirmed old spool',
+        remainingLengthMm: 250000,
+        totalLengthMm: 330000,
+        hostname: null,
+        isActive: false,
+        isInUse: false,
+      },
+      {
+        id: 'NEW',
+        name: 'Inferred replacement spool',
+        inferred: true,
+        remainingLengthMm: 300000,
+        totalLengthMm: 330000,
+        hostname: 'K1Max-4A1B',
+        isActive: true,
+        isInUse: true,
+        _supersedes: {
+          spoolId: 'OLD',
+          host: 'K1Max-4A1B',
+          prevRemaining: 250000,
+          printID: 100,
+        },
+      },
+    ];
+    monitorData.hostSpoolMap = { 'K1Max-4A1B': 'NEW' };
+    setUniversalOpenMount('OLD');
+
+    const restored = revertInferredSpool('NEW');
+
+    expect(restored).toBeNull();
+    expect(monitorData.hostSpoolMap).toEqual({ 'K1Max-4A1B': 'NEW' });
+    expect(monitorData.filamentSpools[0]).toMatchObject({
+      id: 'OLD',
+      isActive: false,
+      isInUse: false,
+      hostname: null,
+    });
+    expect(monitorData.filamentSpools[1]).toMatchObject({
+      id: 'NEW',
+      inferred: true,
+      isActive: true,
+      isInUse: true,
+      hostname: 'K1Max-4A1B',
+    });
+    expect(monitorData.filamentSpools[1].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[1].isDeleted).toBeFalsy();
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts[0].status).toBe(SPOOL_MOUNT_STATUS.OPEN);
+  });
+
+  it('revertInferredSpoolはsuperseded旧spoolがUniversal reservation中ならlegacyへ再装着しない', () => {
+    monitorData.filamentSpools = [
+      {
+        id: 'OLD',
+        name: 'Confirmed old spool',
+        remainingLengthMm: 250000,
+        totalLengthMm: 330000,
+        hostname: null,
+        isActive: false,
+        isInUse: false,
+      },
+      {
+        id: 'NEW',
+        name: 'Inferred replacement spool',
+        inferred: true,
+        remainingLengthMm: 300000,
+        totalLengthMm: 330000,
+        hostname: 'K1Max-4A1B',
+        isActive: true,
+        isInUse: true,
+        _supersedes: {
+          spoolId: 'OLD',
+          host: 'K1Max-4A1B',
+          prevRemaining: 250000,
+          printID: 100,
+        },
+      },
+    ];
+    monitorData.hostSpoolMap = { 'K1Max-4A1B': 'NEW' };
+    const reservation = reserveUniversalSpoolAssignment({
+      spoolId: 'OLD',
+      ownerId: 'operation:k2:pending-old',
+      materialSourceId: 'source:k2:cfs:1a',
+    });
+    expect(reservation.ok).toBe(true);
+
+    try {
+      const restored = revertInferredSpool('NEW');
+
+      expect(restored).toBeNull();
+      expect(monitorData.hostSpoolMap).toEqual({ 'K1Max-4A1B': 'NEW' });
+      expect(monitorData.filamentSpools[0]).toMatchObject({
+        id: 'OLD',
+        isActive: false,
+        isInUse: false,
+        hostname: null,
+      });
+      expect(monitorData.filamentSpools[1]).toMatchObject({
+        id: 'NEW',
+        inferred: true,
+        isActive: true,
+        isInUse: true,
+        hostname: 'K1Max-4A1B',
+      });
+      expect(monitorData.filamentSpools[1].deleted).toBeFalsy();
+      expect(monitorData.filamentSpools[1].isDeleted).toBeFalsy();
+    } finally {
+      reservation.release();
+    }
+  });
+
+  it('Universal OPEN mount済みspoolはupdateSpoolのdeleted patchで廃棄しない', () => {
+    setUniversalOpenMount('S1');
+
+    updateSpool('S1', { deleted: true, isDeleted: true, name: 'Renamed safely' });
+
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].name).toBe('Renamed safely');
+  });
+
+  it('Universal OPEN mount済みspoolはupdateSpoolのid patchで識別子を変更しない', () => {
+    setUniversalOpenMount('S1');
+
+    updateSpool('S1', { id: 'S1-renamed', spoolId: 'S1-renamed', name: 'Name can change' });
+
+    expect(monitorData.filamentSpools[0].id).toBe('S1');
+    expect(monitorData.filamentSpools[0].spoolId).toBeUndefined();
+    expect(monitorData.filamentSpools[0].name).toBe('Name can change');
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts[0].spoolId).toBe('S1');
+  });
+
+  it('Universal OPEN mount済みspoolはupdateSpoolの未確定lifecycle flagへ戻さない', () => {
+    setUniversalOpenMount('S1');
+
+    updateSpool('S1', { inferred: true, isPending: true, name: 'Still confirmed' });
+
+    expect(monitorData.filamentSpools[0].inferred).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isPending).toBeFalsy();
+    expect(monitorData.filamentSpools[0].name).toBe('Still confirmed');
+  });
+
+  it('Universal reservation中のspoolはupdateSpoolのdeleted patchで廃棄しない', () => {
+    const reservation = reserveUniversalSpoolAssignment({
+      spoolId: 'S1',
+      ownerId: 'operation:k2:pending',
+      materialSourceId: 'source:k2:cfs:1a',
+    });
+    expect(reservation.ok).toBe(true);
+
+    try {
+      updateSpool('S1', { deleted: true, isDeleted: true });
+    } finally {
+      reservation.release();
+    }
+
+    expect(monitorData.filamentSpools[0].deleted).toBeFalsy();
+    expect(monitorData.filamentSpools[0].isDeleted).toBeFalsy();
+  });
+});
 
 // =============================================
 // getSpoolState
@@ -96,6 +477,31 @@ describe('getSpoolState', () => {
 
   it('isActive=true → MOUNTED', () => {
     expect(getSpoolState({ isActive: true })).toBe(SPOOL_STATE.MOUNTED);
+  });
+
+  it('Universal OPEN mount中のスプールは装着中として扱う', () => {
+    monitorData.machines = {
+      'K2Pro-69E7': {
+        storedData: { hostname: { rawValue: 'K2Pro-69E7' } },
+        runtimeData: {
+          printerCoreV3Shadow: {
+            deviceId: 'serial:k2pro-69e7',
+          },
+        },
+      },
+    };
+    const mount = setUniversalOpenMount('S1', { materialSourceId: 'cfs:1:slot:0' });
+    monitorData.materialAccountingSpoolMountStore.spoolMounts = [{
+      ...mount,
+      sourceBindingAtOpen: {
+        deviceId: 'serial:k2pro-69e7',
+        materialSourceId: 'cfs:1:slot:0',
+        locator: { kind: 'cfs-slot', boxId: 1, slotIndex: 0, protocolSlotId: '1A' },
+      },
+    }];
+
+    expect(getSpoolState({ id: 'S1', remainingLengthMm: 300000 })).toBe(SPOOL_STATE.MOUNTED);
+    expect(getSpoolMountedLocationLabels({ id: 'S1' })).toEqual(['K2Pro-69E7 / 1A']);
   });
 
   it('負残量でも装着中ライフサイクル状態は MOUNTED のまま保持する', () => {

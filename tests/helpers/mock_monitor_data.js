@@ -1,7 +1,31 @@
 /**
- * monitorData モック生成ヘルパー
- * テスト用に monitorData 構造を再現し、各テストケースで独立した状態を提供する
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 monitorData mock helper モジュール
+ * @file mock_monitor_data.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module mock_monitor_data
+ *
+ * 【機能内容サマリ】
+ * - テスト用にmonitorData構造を再現する
+ * - テスト用machine / spool / status message fixtureを生成する
+ *
+ * 【公開関数一覧】
+ * - {@link createMockMonitorData}：monitorData mockを生成
+ * - {@link createMockMachine}：machine entry mockを生成
+ * - {@link createMockSpool}：spool mockを生成
+ * - {@link createMockStatusMessage}：WebSocket status message mockを生成
+ *
+ * @version 1.390.1582 (PR #440)
+ * @since   1.390.0 (Initial)
+ * @lastModified 2026-09-01 15:42:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
+
+let mockSpoolSequence = 0;
 
 /**
  * テスト用 monitorData を生成
@@ -49,8 +73,9 @@ export function createMockMachine(hostname, storedDataOverrides = {}) {
  * @returns {Object} spool オブジェクト
  */
 export function createMockSpool(overrides = {}) {
+  mockSpoolSequence += 1;
   return {
-    id: `spool_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    id: `spool_${String(mockSpoolSequence).padStart(6, "0")}`,
     serialNo: 1,
     presetId: null,
     name: 'Test PLA',

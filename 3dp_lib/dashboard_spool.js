@@ -30,9 +30,9 @@
  * - {@link autoCorrectCurrentSpool}：履歴から残量補正
  * - {@link mountNewSpoolFromPreset}：新品開封＋装着（リレー子対応の複合操作）
  *
-* @version 1.390.1281 (PR #427)
-* @since   1.390.193 (PR #86)
-* @lastModified 2026-08-04 15:22:00
+ * @version 1.390.1588 (PR #440)
+ * @since   1.390.193 (PR #86)
+ * @lastModified 2026-09-01 18:35:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -68,6 +68,10 @@ import {
   getIrreversibleFilamentRemaining,
   IRREVERSIBLE_REMAINING_ACTION
 } from "./dashboard_filament_remaining_model.js";
+import {
+  findUniversalSpoolAssignmentConflict,
+  listCurrentOpenUniversalSpoolMounts,
+} from "./printer_core/dashboard_material_accounting_spool_assignment_guard.js";
 
 /**
  * リレー子クライアント（satellite/readonly）として動作中かを判定する。
@@ -167,6 +171,187 @@ export const SPOOL_BALANCE_STATE = Object.freeze({
 const EXHAUSTED_THRESHOLD_MM = 100;
 
 /**
+ * Universal SpoolMountのlocatorを利用者向けsource名へ変換する。
+ *
+ * 【詳細説明】
+ * - CFS slotは `1A` などのprotocolSlotIdを優先する。
+ * - external/directはsource種別を崩さず、スプール一覧の装着先補足として読める粒度に留める。
+ *
+ * @private
+ * @function formatUniversalSpoolMountSourceLabel
+ * @param {Object|null|undefined} locator - sourceBindingAtOpen.locator。
+ * @param {string} fallback - locatorが不足した場合のfallback。
+ * @returns {string} 表示用source名。
+ */
+function formatUniversalSpoolMountSourceLabel(locator, fallback) {
+  const protocolSlotId = String(locator?.protocolSlotId || "").trim();
+  if (protocolSlotId) {
+    return protocolSlotId;
+  }
+  const kind = String(locator?.kind || "").trim();
+  if (kind === "external") {
+    return "external";
+  }
+  if (kind === "direct") {
+    return "direct";
+  }
+  return String(fallback || "").trim() || "--";
+}
+
+/**
+ * Universal SpoolMountが占有しているスプールへの破壊的ライフサイクル変更を検査する。
+ *
+ * 【詳細説明】
+ * - MaterialSource別の3DPmon管理割当は、legacy `deleted/isDeleted` とは別のauthorityで
+ *   OPEN区間を保持する。OPEN mountまたはin-flight reservationがあるスプールをlegacy側から
+ *   廃棄・ID変更すると、Universal storeだけが古いspool IDを参照し続ける壊れた状態になる。
+ * - `deleteSpool()`、`revertInferredSpool()`、`updateSpool()`のように経路が異なっても
+ *   同じ不変条件を適用できるよう、この検査を共通化する。
+ *
+ * @private
+ * @function findManagedSpoolDestructiveLifecycleConflict
+ * @param {string} spoolId - 変更対象のmanaged spool ID。
+ * @param {string} action - 呼び出し元操作名。
+ * @returns {Object|null} 衝突情報。衝突が無い場合はnull。
+ */
+function findManagedSpoolDestructiveLifecycleConflict(spoolId, action) {
+  const id = String(spoolId || "").trim();
+  if (!id) {
+    return null;
+  }
+  const universalConflict = findUniversalSpoolAssignmentConflict({
+    spoolId: id,
+    store: monitorData.materialAccountingSpoolMountStore,
+  });
+  if (!universalConflict) {
+    return null;
+  }
+  console.warn(
+    `[${action}] Universal MaterialSourceで装着中または予約中のためスプールの破壊的変更を拒否: ` +
+    `id=${id} reason=${universalConflict.reason || universalConflict.type || "conflict"}`
+  );
+  return universalConflict;
+}
+
+/**
+ * managed spoolをlegacy hostへ装着する前のUniversal/legacy衝突を検査する。
+ *
+ * 【詳細説明】
+ * - `setCurrentSpoolId()`の通常装着だけでなく、`revertInferredSpool()`が
+ *   superseded旧spoolをlegacyへ戻す経路でも同じ不変条件を使う。
+ * - Universal MaterialSourceのOPEN mount / in-flight reservation中のspoolを
+ *   legacy hostへ再claimすると、K2/CFS sourceとK1 direct spoolが同一spoolを
+ *   同時に所有するため、ここでfail-closedにする。
+ *
+ * @private
+ * @function findManagedSpoolLegacyAssignmentConflict
+ * @param {string} spoolId - legacyへ装着しようとしているmanaged spool ID。
+ * @param {string} hostname - 装着先legacy host。
+ * @param {string} action - 呼び出し元操作名。
+ * @returns {Object|null} 衝突情報。衝突が無い場合はnull。
+ */
+function findManagedSpoolLegacyAssignmentConflict(spoolId, hostname, action) {
+  const id = String(spoolId || "").trim();
+  const host = String(hostname || "").trim();
+  if (!id || !host) {
+    return null;
+  }
+  const universalConflict = findUniversalSpoolAssignmentConflict({
+    spoolId: id,
+    store: monitorData.materialAccountingSpoolMountStore,
+  });
+  if (universalConflict) {
+    console.warn(
+      `[${action}] Universal MaterialSourceで装着中または予約中のためlegacy装着を拒否: ` +
+      `id=${id} host=${host} reason=${universalConflict.reason || universalConflict.type || "conflict"}`
+    );
+    return universalConflict;
+  }
+  for (const [assignedHost, assignedSpoolId] of Object.entries(monitorData.hostSpoolMap || {})) {
+    if (String(assignedSpoolId || "").trim() === id && String(assignedHost || "").trim() !== host) {
+      const machine = monitorData.machines?.[assignedHost] || {};
+      const displayName = machine.storedData?.hostname?.rawValue || assignedHost;
+      const conflict = {
+        spoolId: id,
+        host: assignedHost,
+        reason: "legacy-spool-already-mounted",
+      };
+      console.warn(`[${action}] spool ${id} is already mounted on ${displayName}`);
+      return conflict;
+    }
+  }
+  return null;
+}
+
+/**
+ * deviceIdから現在の表示用プリンタ名を解決する。
+ *
+ * 【詳細説明】
+ * - Universal SpoolMountはhost名ではなくdeviceIdへbindするため、現在接続中のmachineから
+ *   同じdeviceIdを持つhostを探して、人間が見慣れた表示名へ変換する。
+ * - 一致するhostが無い場合はdeviceId自体を返し、履歴の証跡を隠さない。
+ *
+ * @private
+ * @function resolveDisplayNameForUniversalDeviceId
+ * @param {string} deviceId - Universal MaterialSourceのdevice ID。
+ * @returns {string} 表示用プリンタ名。
+ */
+function resolveDisplayNameForUniversalDeviceId(deviceId) {
+  const expectedDeviceId = String(deviceId || "").trim();
+  if (!expectedDeviceId) {
+    return "";
+  }
+  for (const [host, machine] of Object.entries(monitorData.machines || {})) {
+    const shadowRecord = machine?.runtimeData?.printerCoreV3Shadow || {};
+    const observedDeviceId = String(
+      shadowRecord.deviceId ||
+      shadowRecord.lastState?.identity?.deviceId ||
+      ""
+    ).trim();
+    if (observedDeviceId === expectedDeviceId) {
+      return String(machine?.storedData?.hostname?.rawValue || host).trim();
+    }
+  }
+  return expectedDeviceId;
+}
+
+/**
+ * スプールの現在装着先ラベルを列挙する。
+ *
+ * 【詳細説明】
+ * - legacy `hostSpoolMap` / `sp.hostname` と Universal SpoolMount の両方をread-onlyで表示へ投影する。
+ * - 同一ラベルは重複排除し、Universal側はOPEN mountだけを現在装着先として扱う。
+ *
+ * @function getSpoolMountedLocationLabels
+ * @param {Object|null|undefined} spool - スプールオブジェクト。
+ * @returns {Array<string>} 表示用装着先ラベル一覧。
+ * @example
+ * const labels = getSpoolMountedLocationLabels(spool);
+ */
+export function getSpoolMountedLocationLabels(spool) {
+  const spoolId = String(spool?.id || spool?.spoolId || "").trim();
+  if (!spoolId) {
+    return [];
+  }
+  const labels = [];
+  if (spool?.isActive && spool?.hostname) {
+    const host = String(spool.hostname).trim();
+    const machine = monitorData.machines?.[host] || {};
+    labels.push(String(machine.storedData?.hostname?.rawValue || host).trim());
+  }
+  for (const mount of listCurrentOpenUniversalSpoolMounts(monitorData.materialAccountingSpoolMountStore)) {
+    if (String(mount?.spoolId || "").trim() !== spoolId) {
+      continue;
+    }
+    const binding = mount.sourceBindingAtOpen || {};
+    const deviceName = resolveDisplayNameForUniversalDeviceId(binding.deviceId);
+    const sourceName = formatUniversalSpoolMountSourceLabel(binding.locator, mount.materialSourceId);
+    labels.push([deviceName, sourceName].filter(Boolean).join(" / "));
+  }
+  return labels.filter((label, index, list) => label && list.indexOf(label) === index);
+}
+
+/**
  * スプールオブジェクトの現在のライフサイクル状態を返す。
  * 既存のブーリアンフラグ群から状態を導出する。
  *
@@ -177,6 +362,12 @@ export function getSpoolState(spool) {
   if (!spool) return SPOOL_STATE.INVENTORY;
   if (spool.deleted || spool.isDeleted) return SPOOL_STATE.DISCARDED;
   if (spool.isActive) return SPOOL_STATE.MOUNTED;
+  const spoolId = String(spool.id || spool.spoolId || "").trim();
+  if (spoolId) {
+    if (getSpoolMountedLocationLabels(spool).length > 0) {
+      return SPOOL_STATE.MOUNTED;
+    }
+  }
   if (spool.removedAt) {
     return (spool.remainingLengthMm ?? 0) <= EXHAUSTED_THRESHOLD_MM
       ? SPOOL_STATE.EXHAUSTED
@@ -838,13 +1029,8 @@ export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
   if (_isRelayChildSpool()) {
     // 既に他ホストへ装着済みかは同期済みデータでローカル検査し、即時フィードバックする
     // （親側でも同じ検証が再実行される）
-    if (id) {
-      for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
-        if (spId === id && h !== hostname) {
-          console.warn(`setCurrentSpoolId(relay): spool ${id} is already mounted on ${h}`);
-          return false;
-        }
-      }
+    if (id && findManagedSpoolLegacyAssignmentConflict(id, hostname, "setCurrentSpoolId(relay)")) {
+      return false;
     }
     return sendRelayFilament(
       id ? "mount" : "unmount",
@@ -873,13 +1059,8 @@ export function setCurrentSpoolId(id, hostname, { operationId } = {}) {
 
   // 同じスプールが別ホストに既に装着されていないかチェック
   if (id && host && newSpool) {
-    for (const [h, spId] of Object.entries(monitorData.hostSpoolMap)) {
-      if (spId === id && h !== host) {
-        const m = monitorData.machines[h] || {};
-        const displayName = m.storedData?.hostname?.rawValue || h;
-        console.warn(`setCurrentSpoolId: spool ${id} is already mounted on ${displayName}`);
-        return false;
-      }
+    if (findManagedSpoolLegacyAssignmentConflict(id, host, "setCurrentSpoolId")) {
+      return false;
     }
   }
 
@@ -1340,9 +1521,16 @@ export function revertInferredSpool(id) {
   }
   const inferred = monitorData.filamentSpools.find(sp => sp.id === id);
   if (!inferred) return null;
+  if (findManagedSpoolDestructiveLifecycleConflict(id, "revertInferredSpool")) {
+    return null;
+  }
   const sup = inferred._supersedes;
   const host = sup?.host || inferred.hostname || null;
   const nowTs = Date.now();
+  const old = sup?.spoolId ? monitorData.filamentSpools.find(sp => sp.id === sup.spoolId) : null;
+  if (old && host && findManagedSpoolLegacyAssignmentConflict(old.id, host, "revertInferredSpool")) {
+    return null;
+  }
 
   // #3 以降に inferred へ帰属した消費（= 物理的には同一リールの消費）を算出
   let inferredUsed = 0;
@@ -1365,7 +1553,6 @@ export function revertInferredSpool(id) {
   inferred.currentPrintID = ""; inferred.currentJobStartLength = null;
   inferred.hostname = null;
 
-  const old = sup?.spoolId ? monitorData.filamentSpools.find(sp => sp.id === sup.spoolId) : null;
   if (!old || !host) {
     // 復元対象なし → inferred を外すだけ
     if (host && monitorData.hostSpoolMap[host] === id) monitorData.hostSpoolMap[host] = null;
@@ -1432,6 +1619,22 @@ export function updateSpool(id, patch) {
   const remainingAdjustmentActor = applied.remainingAdjustmentActor;
   delete applied.remainingAdjustmentReason;
   delete applied.remainingAdjustmentActor;
+  const changesDeletedState = applied.deleted === true || applied.isDeleted === true;
+  const changesStableId = (
+    Object.prototype.hasOwnProperty.call(applied, "id") && String(applied.id || "").trim() !== String(id || "").trim()
+  ) || (
+    Object.prototype.hasOwnProperty.call(applied, "spoolId") && String(applied.spoolId || "").trim() !== String(s.spoolId || s.id || "").trim()
+  );
+  const changesUnconfirmedLifecycle = applied.inferred === true || applied.isPending === true;
+  if ((changesDeletedState || changesStableId || changesUnconfirmedLifecycle) &&
+      findManagedSpoolDestructiveLifecycleConflict(id, "updateSpool")) {
+    delete applied.deleted;
+    delete applied.isDeleted;
+    delete applied.id;
+    delete applied.spoolId;
+    delete applied.inferred;
+    delete applied.isPending;
+  }
   const beforeRemaining = Number(s.remainingLengthMm);
   Object.assign(s, applied);
   if ("remainingLengthMm" in applied) {
@@ -1462,6 +1665,9 @@ export function deleteSpool(id, hostname) {
   });
   if (!discardGate.ok) {
     console.warn(`[deleteSpool] confirmed 残量を検証できないため廃棄を拒否: id=${id} reason=${discardGate.reason}`);
+    return;
+  }
+  if (findManagedSpoolDestructiveLifecycleConflict(id, "deleteSpool")) {
     return;
   }
   if (host && Array.isArray(s.printIdRanges) && s.printIdRanges.length) {

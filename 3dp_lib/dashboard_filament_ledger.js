@@ -26,16 +26,47 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1279 (PR #426)
+ * @version 1.390.1669 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-08-04 11:50:46
+ * @lastModified 2026-09-02 20:03:58
  * -----------------------------------------------------------
  */
 
 "use strict";
 
-import { monitorData } from "./dashboard_data.js";
+import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { wallNowMs, randomEventId } from "./dashboard_time.js";
+
+/**
+ * module-owned total-lifetime proofのprocess-local registry。
+ *
+ * 【詳細説明】
+ * - `totalLifetimeProof.trusted === true` のような保存可能JSONだけではcallerがauthorityを偽造できるため、
+ *   registryに登録済みの同一object identityだけをtrusted proofとして扱う。
+ * - production issuerはまだ未実装であり、現時点でこのregistryへ登録する公開production APIは用意しない。
+ *
+ * @constant {WeakSet<object>}
+ */
+let TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS = new WeakSet();
+
+/**
+ * unit test runtimeかどうかを判定する。
+ *
+ * 【詳細説明】
+ * - test-only issuerはproduction moduleからexportされているため、広い `NODE_ENV=test` だけを
+ *   authority境界にしない。
+ * - Vitestがmoduleへ注入する `import.meta.vitest` を主判定にし、テスト対象moduleへ注入されない
+ *   runnerではVitest worker固有の環境変数だけを補助的に許可する。
+ *
+ * @private
+ * @function _isTrustedTotalLifetimeCoverageTestRuntime
+ * @returns {boolean} Vitest上のテスト実行時だけtrue。
+ */
+function _isTrustedTotalLifetimeCoverageTestRuntime() {
+  const vitestWorkerId = typeof process !== "undefined" ? process.env?.VITEST_WORKER_ID : "";
+  const vitestFlag = typeof process !== "undefined" ? process.env?.VITEST : "";
+  return Boolean(import.meta?.vitest || vitestWorkerId || vitestFlag === "true");
+}
 
 /**
  * 値を [min, max] の範囲にクランプする。
@@ -95,6 +126,218 @@ function _historyForHost(host) {
   const machine = monitorData.machines?.[host];
   const hist = machine?.printStore?.history;
   return Array.isArray(hist) ? hist : [];
+}
+
+/**
+ * 指定hostの履歴が台帳authorityとして不完全か判定する。
+ *
+ * 【詳細説明】
+ * - IndexedDB障害時などにlocalStorageのbounded recovery backupから復元した履歴は、
+ *   画面表示用の近傍snapshotであり、全消費履歴のauthorityではない。
+ * - この状態で自動deriveや手動総量再計算を行うと、欠落分が「未使用だった」ように扱われて
+ *   残量が増えるため、ledger処理側でfail-closedに使う。
+ *
+ * @private
+ * @function _isHistoryAuthorityIncomplete
+ * @param {string} host - ホスト名。
+ * @returns {boolean} 不完全な履歴authorityならtrue。
+ */
+function _isHistoryAuthorityIncomplete(host) {
+  const printStore = monitorData.machines?.[host]?.printStore;
+  if (!printStore) return false;
+  return printStore.historyAuthorityIncomplete === true ||
+    printStore.historyCoverage?.activeAnchorComplete !== true;
+}
+
+/**
+ * 総履歴complete proofがmodule-owned issuerから発行されたものか判定する。
+ *
+ * 【詳細説明】
+ * - JSON shape一致だけでは復元・import・caller supplied objectをtrusted扱いできないため、
+ *   WeakSet registry membershipを必須にする。
+ * - 将来production issuerを追加する場合も、この関数を唯一の検証境界として使う。
+ *
+ * @function isTrustedTotalLifetimeCoverageProof
+ * @param {*} proof - 総履歴complete proof候補。
+ * @returns {boolean} module-owned registryに登録されたproofならtrue。
+ */
+export function isTrustedTotalLifetimeCoverageProof(proof) {
+  return Boolean(proof && typeof proof === "object" && TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS.has(proof));
+}
+
+/**
+ * unit test専用に総履歴complete proofを発行する。
+ *
+ * 【詳細説明】
+ * - production issuerはGate未通過のため提供しない。
+ * - Vitest環境以外では常にblocked proofを返し、外部callerがこの関数経由でauthorityをmintできないようにする。
+ *
+ * @function createTrustedTotalLifetimeCoverageProofForTest
+ * @param {Object=} input - テスト用proofに含める追加情報。
+ * @returns {Object} テスト環境ではWeakSet登録済みproof、それ以外ではblocked proof。
+ */
+export function createTrustedTotalLifetimeCoverageProofForTest(input = {}) {
+  const isTestRuntime = _isTrustedTotalLifetimeCoverageTestRuntime();
+  const proof = Object.freeze({
+    ...input,
+    issuer: "3dpmon-total-lifetime-coverage:v1",
+    scope: "spool-lifetime",
+    trusted: Boolean(isTestRuntime),
+    authority: isTestRuntime
+      ? "module-owned-total-lifetime-coverage-test-registry"
+      : "total-lifetime-coverage-production-issuer-unavailable"
+  });
+  if (isTestRuntime) {
+    TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS.add(proof);
+  }
+  return proof;
+}
+
+/**
+ * unit test用に総履歴complete proof registryを初期化する。
+ *
+ * 【詳細説明】
+ * - WeakSetはclear()を持たないため、新しいtest processでは自然に空になる。
+ * - 既存API形状との対称性を保つため、no-opの明示フックとして提供する。
+ *
+ * @function clearTrustedTotalLifetimeCoverageProofsForTest
+ * @returns {void}
+ */
+export function clearTrustedTotalLifetimeCoverageProofsForTest() {
+  if (_isTrustedTotalLifetimeCoverageTestRuntime()) {
+    TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS = new WeakSet();
+  }
+}
+
+/**
+ * 総履歴complete proofを台帳authorityとして信頼してよいか判定する。
+ *
+ * 【詳細説明】
+ * - `totalLifetimeComplete:true` というboolean単体は、古いbuildやrestore由来の残留値でも作れるため、
+ *   productionの手動総量再計算ではissuer/scope/trustedを含むproof objectを同時に要求する。
+ * - 現時点では正式issuerは未activationのため、テストfixtureまたは将来のissuerだけがこの条件を満たす。
+ *
+ * @private
+ * @function _isTrustedTotalLifetimeCoverage
+ * @param {?Object} coverage - printStore.historyCoverage。
+ * @returns {boolean} 総履歴complete proofを信頼してよい場合true。
+ */
+function _isTrustedTotalLifetimeCoverage(coverage) {
+  const proof = coverage?.totalLifetimeProof;
+  return Boolean(
+    coverage?.totalLifetimeComplete === true &&
+    isTrustedTotalLifetimeCoverageProof(proof)
+  );
+}
+
+/**
+ * active anchor区間の履歴被覆が明示的に証明されているか判定する。
+ *
+ * 【詳細説明】
+ * - K1/K2のprint idは連番ではなくepoch秒などが使われるため、merged historyの最小IDや
+ *   `sinceJobId + 1`から欠落有無を推定しない。
+ * - storageがretention前のfetch windowから`activeAnchorComplete:true`を記録した場合だけ
+ *   verified/debit authorityの根拠として扱う。
+ *
+ * @private
+ * @function _isActiveAnchorCoverageProven
+ * @param {string} host - ホスト名。
+ * @param {number} sinceJobId - mount anchorのprint job id。
+ * @returns {boolean} active anchor coverageが明示証明済みならtrue。
+ */
+function _isActiveAnchorCoverageProven(host, sinceJobId) {
+  const since = Number(sinceJobId);
+  const coverage = monitorData.machines?.[host]?.printStore?.historyCoverage;
+  if (!(since > 0)) {
+    return coverage?.activeAnchorComplete === true &&
+      _isTrustedTotalLifetimeCoverage(coverage);
+  }
+  const anchorSinceJobIds = Array.isArray(coverage?.anchorSinceJobIds)
+    ? coverage.anchorSinceJobIds.map((id) => Number(id)).filter(Number.isFinite)
+    : [];
+  const oldestPrintJobId = Number(coverage?.oldestPrintJobId);
+  const newestPrintJobId = Number(coverage?.newestPrintJobId);
+  return coverage?.activeAnchorComplete === true &&
+    anchorSinceJobIds.includes(since) &&
+    Number.isFinite(oldestPrintJobId) &&
+    Number.isFinite(newestPrintJobId) &&
+    oldestPrintJobId <= since &&
+    since <= newestPrintJobId;
+}
+
+/**
+ * いずれかのhostに不完全な履歴authorityがあるか判定する。
+ *
+ * 【詳細説明】
+ * - 手動総量再計算は全hostの明示帰属履歴を合算するため、1hostでもbounded復元履歴が混ざると
+ *   合算母集団が欠落し得る。対象spoolを絞るより安全側で全体を停止する。
+ *
+ * @private
+ * @function _hasAnyIncompleteHistoryAuthority
+ * @param {?Set<string>} [relevantHosts=null] - 検査対象host集合。nullなら全host。
+ * @returns {boolean} 不完全履歴が存在する場合true。
+ */
+function _hasAnyIncompleteHistoryAuthority(relevantHosts = null) {
+  if (relevantHosts instanceof Set) {
+    for (const host of relevantHosts) {
+      if (!host || host === PLACEHOLDER_HOSTNAME) continue;
+      const printStore = monitorData.machines?.[host]?.printStore;
+      if (!printStore) return true;
+      if (
+        printStore.historyAuthorityIncomplete === true ||
+        printStore.historyCoverage?.activeAnchorComplete !== true
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return Object.entries(monitorData.machines || {}).some(([host, machine]) => {
+    if (host === PLACEHOLDER_HOSTNAME) return false;
+    const printStore = machine?.printStore;
+    return Boolean(printStore) && (
+      printStore.historyAuthorityIncomplete === true ||
+      printStore.historyCoverage?.activeAnchorComplete !== true
+    );
+  });
+}
+
+/**
+ * 全履歴を前提にした総量再計算authorityが不完全なhostを含むか判定する。
+ *
+ * 【詳細説明】
+ * - 明示retention済み履歴はactive anchor deriveには使えるが、履歴全体を合算する
+ *   `recomputeSpoolFromManualEdit()` の母集団としては不完全になる。
+ * - bounded recoveryの不完全履歴は従来どおり両方を停止し、この関数でも不完全扱いにする。
+ *
+ * @private
+ * @function _hasAnyIncompleteTotalHistoryAuthority
+ * @param {?Set<string>} [relevantHosts=null] - 検査対象host集合。nullなら全host。
+ * @returns {boolean} 総量再計算に使えない履歴が存在する場合true。
+ */
+function _hasAnyIncompleteTotalHistoryAuthority(relevantHosts = null) {
+  if (relevantHosts instanceof Set) {
+    for (const host of relevantHosts) {
+      if (!host || host === PLACEHOLDER_HOSTNAME) continue;
+      const printStore = monitorData.machines?.[host]?.printStore;
+      if (!printStore) return true;
+      if (
+        printStore.historyAuthorityIncomplete === true ||
+        !_isTrustedTotalLifetimeCoverage(printStore.historyCoverage)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return Object.entries(monitorData.machines || {}).some(([host, machine]) => {
+    if (host === PLACEHOLDER_HOSTNAME) return false;
+    const printStore = machine?.printStore;
+    return Boolean(printStore) && (
+      printStore.historyAuthorityIncomplete === true ||
+      !_isTrustedTotalLifetimeCoverage(printStore.historyCoverage)
+    );
+  });
 }
 
 /**
@@ -651,9 +894,9 @@ export function getOpenMountInterval(spoolId, host) {
  * - totalLengthMm からの再計算（total − Σ全区間）も printIdRanges からの区間捏造も**行わない**。
  *   → 別スプール／重複区間に引きずられて過去を巻き込む事故を構造的に排除。
  *
- * 被覆チェック（安全側フラグのみ）: 最新区間 host の printStore.history の最小 printId O が
- *   当該区間 sinceJobId より新しい（O > sinceJobId + 1 相当）なら取りこぼしの可能性 →
- *   verified=false。ただし remaining は引き続きアンカー基準で計算する（過剰減算しない）。
+ * 被覆チェック（安全側フラグのみ）: 最新区間 host の履歴fetch windowが当該区間の
+ *   sinceJobIdを跨いだことをstorage側coverage metadataで証明できる場合だけ
+ *   verified=trueにする。printIdの連番性は仮定しない。
  *
  * 区間が空（mountHistory に mount 記録なし）→ spool.remainingLengthMm（現在値）をそのまま返す
  *   （mode:"none", verified:false）。勝手に total へリセットしない。
@@ -699,6 +942,17 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
 
   // アンカー区間 = 唯一の open（無ければ最終区間）
   const anchorIv = openIvs[0] || activeIvs[activeIvs.length - 1];
+  const since = anchorIv.sinceJobId;
+
+  if (_isHistoryAuthorityIncomplete(anchorIv.host) || !_isActiveAnchorCoverageProven(anchorIv.host, since)) {
+    const remaining = _capLedgerRemaining(_base - (Number(liveUsedMm) || 0), _cap);
+    return {
+      remainingMm: remaining,
+      verified: false,
+      mode: "halt-incomplete-history",
+      usedMm: 0
+    };
+  }
 
   // ★ レビュー指摘(P0-1): 境界不明("unknown")区間では履歴の遡及減算をしない。
   //   境界を証明できない状態（例: mountHistory 欠落 → idle 種付けで sinceJobId=0）で
@@ -707,15 +961,9 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
   //   そのまま残量とし、ライブ消費のオーバーレイのみ適用する。
   const boundaryUnknown = anchorIv.boundaryStatus === "unknown";
 
-  // 当該区間の帰属消費 Σ と、被覆チェック用の最小 printId
+  // 当該区間の帰属消費 Σ。
   const hist = _historyForHost(anchorIv.host);
   let used = 0;
-  let minPrintId = Infinity;
-  for (const job of hist) {
-    const pid = _jobId(job);
-    if (!Number.isFinite(pid)) continue;
-    if (pid < minPrintId) minPrintId = pid;
-  }
   const _excl = excludeJobId != null ? String(excludeJobId) : null;
   if (!boundaryUnknown) {
     for (const job of hist) {
@@ -731,15 +979,10 @@ export function deriveSpoolRemaining(spoolId, { liveUsedMm = 0, excludeJobId = n
     }
   }
 
-  // 被覆チェック: 最新区間 host の最小 printId O が sinceJobId より「新しい」なら未検証
-  // （O > sinceJobId + 1 相当 ⇒ since と O の間に取りこぼしジョブがありうる）。
-  // verified=false でも remaining はアンカー基準で計算（安全側＝過剰減算しない）。
-  const since = anchorIv.sinceJobId;
-  const O = minPrintId;
+  // 被覆チェック: fetch window由来のcoverage証明だけを使う。
+  // printIdはepoch秒になり得るため、since+1やmerged history最古IDでは証明しない。
   let verified = true;
-  if (since > 0 && Number.isFinite(O) && O > since + 1) {
-    verified = false;
-  }
+  if (!_isActiveAnchorCoverageProven(anchorIv.host, since)) verified = false;
   // 境界不明区間は常に未検証（減算しない＝アンカー値を維持）。
   if (boundaryUnknown) verified = false;
 
@@ -803,6 +1046,54 @@ function _isExplicitlyAttributed(job, spoolId) {
   if (job.filamentId === spoolId) return true;
   const info = Array.isArray(job.filamentInfo) ? job.filamentInfo : null;
   return !!(info && info.some(fi => fi && fi.spoolId === spoolId));
+}
+
+/**
+ * 手動総量再計算でcompletenessを要求するhost集合を収集する。
+ *
+ * 【詳細説明】
+ * - 手動総量再計算は当該spoolに関係する履歴だけを合算するため、無関係な実機hostの
+ *   一時的な未証明coverageで対象spoolの編集を過剰に止めない。
+ * - 関係hostは、mount interval、legacy hostSpoolMap、履歴内の明示帰属、または呼び出し元が指定した
+ *   requiredHostsから収集する。
+ *
+ * @private
+ * @function _collectManualRecomputeAuthorityHosts
+ * @param {string} spoolId - 対象スプールID。
+ * @param {Iterable<string>|string=} requiredHosts - 履歴編集元など、現在の帰属から外れても検査必須のhost。
+ * @returns {Set<string>} 対象spoolに関係するhost集合。
+ */
+function _collectManualRecomputeAuthorityHosts(spoolId, requiredHosts = []) {
+  const hosts = new Set();
+  const addHost = (host) => {
+    const normalized = String(host || "").trim();
+    if (normalized && normalized !== PLACEHOLDER_HOSTNAME) {
+      hosts.add(normalized);
+    }
+  };
+  const required = typeof requiredHosts === "string" ? [requiredHosts] : requiredHosts;
+  if (required && typeof required[Symbol.iterator] === "function") {
+    for (const host of required) {
+      addHost(host);
+    }
+  }
+  for (const interval of getSpoolIntervals(spoolId)) {
+    addHost(interval?.host);
+  }
+  for (const [host, mountedSpoolId] of Object.entries(monitorData.hostSpoolMap || {})) {
+    if (mountedSpoolId === spoolId) {
+      addHost(host);
+    }
+  }
+  for (const [host, machine] of Object.entries(monitorData.machines || {})) {
+    if (!host || host === PLACEHOLDER_HOSTNAME) continue;
+    const history = machine?.printStore?.history;
+    if (!Array.isArray(history)) continue;
+    if (history.some((job) => _isExplicitlyAttributed(job, spoolId))) {
+      hosts.add(host);
+    }
+  }
+  return hosts;
 }
 
 /**
@@ -922,11 +1213,12 @@ function _recordManualRemainingAdjustment(spool, beforeMm, afterMm, options = {}
  * @param {string} spoolId - スプールID
  * @param {Object} [opts]
  * @param {number} [opts.ts] - 更新時刻 ms（updatedAt と新規 mount の ts）
+ * @param {Iterable<string>|string=} [opts.requiredHosts] - 履歴編集元など、現在の帰属から外れても検査必須のhost。
  * @returns {?{before:number, after:number, used:number, mode:string, skipped?:boolean}}
  *   再計算結果。スプール未発見時は null。mode は "total"（総量基準）／"skip"（印刷中）／
  *   reconcileSpool 由来（total 不明フォールバック時）。
  */
-export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
+export function recomputeSpoolFromManualEdit(spoolId, { ts, requiredHosts } = {}) {
   const spool = (monitorData.filamentSpools || []).find(s => s.id === spoolId);
   if (!spool) return null;
   const before = Number(spool.remainingLengthMm);
@@ -938,6 +1230,34 @@ export function recomputeSpoolFromManualEdit(spoolId, { ts } = {}) {
   if (!(total > 0)) {
     // 総量不明 → 総量基準が不能。アンカー方式へフォールバック。
     return reconcileSpool(spoolId, { ts });
+  }
+  const authorityHosts = _collectManualRecomputeAuthorityHosts(spoolId, requiredHosts);
+  if (authorityHosts.size === 0) {
+    return {
+      before,
+      after: before,
+      used: 0,
+      mode: "halt-no-authority-host",
+      skipped: true
+    };
+  }
+  if (_hasAnyIncompleteHistoryAuthority(authorityHosts)) {
+    return {
+      before,
+      after: before,
+      used: 0,
+      mode: "halt-incomplete-history",
+      skipped: true
+    };
+  }
+  if (_hasAnyIncompleteTotalHistoryAuthority(authorityHosts)) {
+    return {
+      before,
+      after: before,
+      used: 0,
+      mode: "halt-incomplete-total-history",
+      skipped: true
+    };
   }
   // 全ホストの履歴を走査し、当該スプールに明示帰属する完了ジョブの消費を合算
   let used = 0;

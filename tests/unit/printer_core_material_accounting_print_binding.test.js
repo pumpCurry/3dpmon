@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1523 (PR #438)
+ * @version 1.390.1629 (PR #440)
  * @since   1.390.1516 (PR #438)
- * @lastModified 2026-08-31 16:16:00
+ * @lastModified 2026-09-02 08:35:23
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -232,6 +232,76 @@ describe("MaterialSource print binding repository", () => {
     ]);
   });
 
+  it("print-start snapshotはmount open時刻をtop-levelのsemantic fieldとして保存する", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:snapshot-mount-opened-at",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:snapshot-mount-opened-at",
+    });
+
+    expect(start.ok).toBe(true);
+    expect(start.snapshots.map((snapshot) => snapshot.mountOpenedAt)).toEqual([
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+    ]);
+    expect(repository.toJSON().printStartSnapshots.map((snapshot) => snapshot.mountOpenedAt)).toEqual([
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+      "2026-08-31T04:30:00.000Z",
+    ]);
+  });
+
+  it("print-start snapshotはdebit用canonical bindingAuthorityを保存する", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const printPlan = createPlan(deviceId, materialSources, spoolMounts);
+    const repository = createMaterialAccountingPrintBindingRepository();
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:snapshot-binding-authority",
+      materialSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:snapshot-binding-authority",
+    });
+
+    expect(start.ok).toBe(true);
+    expect(start.snapshots[0].bindingAuthority).toMatchObject({
+      schemaVersion: 1,
+      tool: {
+        toolId: 0,
+        protocolToolAlias: "T1A",
+        order: 0,
+      },
+      source: {
+        materialSourceId: materialSources[0].materialSourceId,
+        deviceId,
+        kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+      },
+      mount: {
+        mountId: spoolMounts[0].mountId,
+        materialSourceId: materialSources[0].materialSourceId,
+        spoolId: "spool:1a",
+        openedAt: "2026-08-31T04:30:00.000Z",
+        verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      },
+    });
+    expect(start.snapshots[0].bindingAuthorityDigest).toMatch(/^material-print-start-binding-authority:/u);
+    expect(repository.toJSON().printStartSnapshots[0].bindingAuthorityDigest).toBe(
+      start.snapshots[0].bindingAuthorityDigest
+    );
+  });
+
   it("print-start時にMaterialSourceがPrintPlanと別deviceならbindingを拒否する", () => {
     const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
     const printPlan = createPlan(deviceId, materialSources, spoolMounts);
@@ -287,6 +357,60 @@ describe("MaterialSource print binding repository", () => {
       ok: false,
       status: "blocked",
       reasons: ["spool-mount-ambiguous-at-print-start"],
+    });
+    expect(repository.toJSON().printStartSnapshots).toEqual([]);
+  });
+
+  it("MaterialSource aliasが複数canonical sourceへ衝突する場合は履歴順に依存せずbindingを拒否する", () => {
+    const { deviceId, materialSources, spoolMounts } = createCfsFixtures();
+    const sharedAlias = "source:k2:cfs:shared-1a";
+    const ambiguousSources = materialSources.map((source, index) => (
+      index === 0 || index === 1
+        ? createMaterialSourceRecord({
+          deviceId: source.deviceId,
+          unitId: source.unitId,
+          kind: source.kind,
+          locator: source.locator,
+          identity: source.identity,
+          identityStrength: source.identityStrength,
+          displayLabel: source.displayLabel,
+          aliases: [sharedAlias],
+        })
+        : source
+    ));
+    const printPlan = createMulticolorCfsPrintPlan({
+      deviceId,
+      asset: createAsset("alias_collision.gcode", [0, 1]),
+      toolAssignments: [
+        {
+          toolId: 0,
+          protocolToolAlias: "T1A",
+          materialSourceId: sharedAlias,
+          spoolId: spoolMounts[0].spoolId,
+        },
+        {
+          toolId: 1,
+          protocolToolAlias: "T1B",
+          materialSourceId: materialSources[1].materialSourceId,
+          spoolId: spoolMounts[1].spoolId,
+        },
+      ],
+    });
+    const repository = createMaterialAccountingPrintBindingRepository();
+
+    const start = repository.recordPrintStartBindings({
+      printPlan,
+      printJobId: "job:alias-collision",
+      materialSources: ambiguousSources,
+      spoolMounts,
+      capturedAt: "2026-08-31T05:00:00.000Z",
+      bindingOperationId: "binding:alias-collision",
+    });
+
+    expect(start).toMatchObject({
+      ok: false,
+      status: "blocked",
+      reasons: ["ambiguous-material-source-alias"],
     });
     expect(repository.toJSON().printStartSnapshots).toEqual([]);
   });

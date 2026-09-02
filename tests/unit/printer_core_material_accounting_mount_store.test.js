@@ -1,0 +1,615 @@
+/**
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 MaterialAccounting SpoolMount store 単体テスト
+ * @file printer_core_material_accounting_mount_store.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module printer_core_material_accounting_mount_store_test
+ *
+ * 【機能内容サマリ】
+ * - Gate 18.9H-1a のproduction SpoolMount store正規化contractを検証
+ * - durable authorityにoperationsByIdを保存しない境界を固定
+ * - conflict / corrupt recordをactive authorityから隔離する
+ *
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1624 (PR #440)
+ * @since   1.390.1575 (PR #440)
+ * @lastModified 2026-09-02 08:28:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
+ */
+
+import { describe, expect, it } from "vitest";
+
+import {
+  MATERIAL_IDENTITY_STRENGTH,
+  SPOOL_MOUNT_STATUS,
+  SPOOL_MOUNT_VERIFICATION,
+  createSpoolMountRecord,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
+import {
+  MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_AUTHORITY,
+  MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION,
+  createMaterialAccountingSpoolMountStoreDigest,
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
+  normalizeStoredMaterialAccountingSpoolMountStore,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
+
+/**
+ * テスト用SpoolMount recordを生成する。
+ *
+ * @function createMount
+ * @param {Object} overrides - 上書き値。
+ * @returns {Object} SpoolMount record。
+ */
+function createMount(overrides = {}) {
+  return createSpoolMountRecord({
+    materialSourceId: "material-source:k2:1a",
+    spoolId: "spool:silver-pla",
+    mountOperationId: "mount-op:001",
+    openedAt: "2026-09-01T00:00:00.000Z",
+    openedBy: "operator",
+    verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+    sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    ...overrides,
+  });
+}
+
+/**
+ * テスト用operation eventを生成する。
+ *
+ * @function createEvent
+ * @param {Object} overrides - 上書き値。
+ * @returns {Object} operation event。
+ */
+function createEvent(overrides = {}) {
+  const operationId = overrides.operationId || "mount-op:001";
+  const payload = overrides.payload || {
+    kind: "operator-mount",
+    operatorActionId: "action:mount:1",
+    operationId,
+    materialSourceId: "material-source:k2:1a",
+    spoolId: "spool:silver-pla",
+  };
+  return {
+    eventId: overrides.eventId || "event:mount:1",
+    kind: overrides.kind || "operator-mount",
+    operatorActionId: overrides.operatorActionId || "action:mount:1",
+    operationId,
+    payloadDigest: overrides.payloadDigest || createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+    payload,
+    recordRefs: Object.prototype.hasOwnProperty.call(overrides, "recordRefs")
+      ? overrides.recordRefs
+      : ["mount-op:001"],
+    createdAt: overrides.createdAt || "2026-09-01T00:00:00.000Z",
+    actor: overrides.actor || "operator",
+  };
+}
+
+describe("MaterialAccountingSpoolMountStore", () => {
+  it("空storeをproduction mount authority shapeへ正規化する", () => {
+    const store = normalizeStoredMaterialAccountingSpoolMountStore(null);
+
+    expect(store).toMatchObject({
+      schemaVersion: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION,
+      authority: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_AUTHORITY,
+      storeRevision: 0,
+      spoolMounts: [],
+      events: [],
+      conflicts: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        operatorManaged: true,
+        deviceObservationWrites: false,
+        physicalCommandWrites: false,
+        legacyHostSpoolMapWrites: false,
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        filamentLedgerWrites: false,
+        printBindingWrites: false,
+      },
+    });
+    expect(store.storeDigest).toMatch(/^fnv1a128:/);
+    expect(store.operationsById).toBeUndefined();
+  });
+
+  it("valid mount recordとeventを保持しstoreDigestを再計算する", () => {
+    const mount = createMount();
+    const stored = {
+      schemaVersion: 1,
+      authority: "material-accounting-spool-mount-store",
+      storeRevision: 12,
+      storeDigest: "tampered",
+      spoolMounts: [mount],
+      events: [createEvent({ operationId: mount.mountOperationId, recordRefs: [mount.mountOperationId] })],
+    };
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore(stored);
+
+    expect(store.storeRevision).toBe(12);
+    expect(store.spoolMounts).toEqual([mount]);
+    expect(store.events).toEqual(stored.events);
+    expect(store.storeDigest).toBe(createMaterialAccountingSpoolMountStoreDigest(store));
+    expect(store.storeDigest).not.toBe("tampered");
+  });
+
+  it("future schemaVersionを名乗るstoreは中身を現行authorityへ復元せず丸ごと隔離する", () => {
+    const mount = createMount();
+    const stored = {
+      schemaVersion: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION + 1,
+      authority: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_AUTHORITY,
+      storeRevision: 12,
+      spoolMounts: [mount],
+      events: [createEvent({ operationId: mount.mountOperationId, recordRefs: [mount.mountOperationId] })],
+    };
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore(stored);
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.events).toEqual([]);
+    expect(store.storeRevision).toBe(0);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMountStore",
+        reason: "unsupported-store-schema-version",
+        record: stored,
+      }),
+    ]));
+  });
+
+  it("wrong authorityを名乗るstoreは中身を現行authorityへ復元せず丸ごと隔離する", () => {
+    const mount = createMount();
+    const stored = {
+      schemaVersion: MATERIAL_ACCOUNTING_SPOOL_MOUNT_STORE_SCHEMA_VERSION,
+      authority: "foreign-material-accounting-store",
+      storeRevision: 12,
+      spoolMounts: [mount],
+      events: [createEvent({ operationId: mount.mountOperationId, recordRefs: [mount.mountOperationId] })],
+    };
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore(stored);
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.events).toEqual([]);
+    expect(store.storeRevision).toBe(0);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMountStore",
+        reason: "unsupported-store-authority",
+        record: stored,
+      }),
+    ]));
+  });
+
+  it("creation eventがないmountはrestart idempotency authorityへ戻さず隔離する", () => {
+    const mount = createMount();
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "missing-creation-operation-event",
+        record: mount,
+      }),
+    ]));
+  });
+
+  it("operator-mountのevent operationIdがmountOperationIdと異なる場合はcreation evidenceにしない", () => {
+    const mount = createMount();
+    const mismatchedOperationId = "mount-op:other";
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [
+        createEvent({
+          eventId: "event:mismatched-operation",
+          operationId: mismatchedOperationId,
+          recordRefs: [mount.mountId],
+          payload: {
+            kind: "operator-mount",
+            operatorActionId: "action:mount:1",
+            operationId: mismatchedOperationId,
+            materialSourceId: mount.materialSourceId,
+            spoolId: mount.spoolId,
+          },
+        }),
+      ],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "missing-creation-operation-event",
+        record: mount,
+      }),
+    ]));
+  });
+
+  it("operator-replaceのeventがnew mountIdだけを参照する場合はcreation evidenceにしない", () => {
+    const mount = createMount({
+      mountId: "mount:replace:new",
+      materialSourceId: "material-source:k2:1b",
+      spoolId: "spool:replacement",
+      mountOperationId: "mount-op:replace-open:new",
+    });
+    const payload = {
+      kind: "operator-replace",
+      operatorActionId: "action:replace:1",
+      operationId: "mount-op:replace:parent",
+      materialSourceId: mount.materialSourceId,
+      spoolId: "spool:old",
+      newSpoolId: mount.spoolId,
+    };
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [{
+        eventId: "event:replace:parent",
+        kind: "operator-replace",
+        operatorActionId: payload.operatorActionId,
+        operationId: payload.operationId,
+        payloadDigest: createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+        payload,
+        recordRefs: [mount.mountId],
+        createdAt: "2026-09-01T00:00:00.000Z",
+        actor: "operator",
+      }],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "missing-creation-operation-event",
+        record: mount,
+      }),
+    ]));
+  });
+
+  it("operator-confirmedではないOPEN mountはactive authorityへ戻さず隔離する", () => {
+    const unverifiedMount = createMount({
+      mountOperationId: "mount-op:unverified",
+      verification: SPOOL_MOUNT_VERIFICATION.UNVERIFIED,
+    });
+    const legacyMount = createMount({
+      materialSourceId: "material-source:k2:1b",
+      spoolId: "spool:legacy",
+      mountOperationId: "mount-op:legacy",
+      verification: SPOOL_MOUNT_VERIFICATION.LEGACY_PROJECTED,
+    });
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [unverifiedMount, legacyMount],
+      events: [
+        createEvent({
+          eventId: "event:unverified",
+          operatorActionId: "action:mount:unverified",
+          operationId: unverifiedMount.mountOperationId,
+          recordRefs: [unverifiedMount.mountOperationId],
+          payload: {
+            kind: "operator-mount",
+            operatorActionId: "action:mount:unverified",
+            operationId: unverifiedMount.mountOperationId,
+            materialSourceId: unverifiedMount.materialSourceId,
+            spoolId: unverifiedMount.spoolId,
+          },
+        }),
+        createEvent({
+          eventId: "event:legacy",
+          operatorActionId: "action:mount:legacy",
+          operationId: legacyMount.mountOperationId,
+          recordRefs: [legacyMount.mountOperationId],
+          payload: {
+            kind: "operator-mount",
+            operatorActionId: "action:mount:legacy",
+            operationId: legacyMount.mountOperationId,
+            materialSourceId: legacyMount.materialSourceId,
+            spoolId: legacyMount.spoolId,
+          },
+        }),
+      ],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "spoolMount", reason: "unsupported-active-mount-verification", record: unverifiedMount }),
+      expect.objectContaining({ kind: "spoolMount", reason: "unsupported-active-mount-verification", record: legacyMount }),
+    ]));
+  });
+
+  it("invalid eventはoperation index authorityに残さずretainedUnsupportedEntriesへ隔離する", () => {
+    const mount = createMount();
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [
+        createEvent({ operationId: mount.mountOperationId, recordRefs: [mount.mountOperationId] }),
+        { eventId: "event:bad", kind: "operator-mount", payloadDigest: "tampered" },
+      ],
+    });
+
+    expect(store.events).toHaveLength(1);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", reason: expect.stringContaining("invalid") }),
+    ]));
+  });
+
+  it("orphan event recordRefはactive eventから隔離する", () => {
+    const mount = createMount();
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [
+        createEvent({
+          eventId: "event:orphan",
+          operationId: "mount-op:orphan",
+          recordRefs: ["mount-op:orphan"],
+        }),
+      ],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", reason: "orphan-event-record-ref" }),
+    ]));
+  });
+
+  it("operator eventのrecordRefsが空ならphantom receiptとして隔離する", () => {
+    const mount = createMount();
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [
+        createEvent({
+          eventId: "event:phantom",
+          operationId: mount.mountOperationId,
+          recordRefs: [],
+        }),
+      ],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", reason: expect.stringContaining("missing-event-record-refs") }),
+    ]));
+  });
+
+  it("event外側とpayloadのkind/action/operationIdが不一致なら隔離する", () => {
+    const mount = createMount();
+    const mismatched = createEvent({
+      eventId: "event:mismatched",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+      payload: {
+        kind: "operator-mount",
+        operatorActionId: "action:other",
+        operationId: mount.mountOperationId,
+        materialSourceId: "material-source:k2:1a",
+        spoolId: "spool:silver-pla",
+      },
+    });
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [mismatched],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", reason: expect.stringContaining("payload-operatorActionId-mismatch") }),
+    ]));
+  });
+
+  it("同じeventIdでpayload差異がある場合はfirst-winせず双方を隔離する", () => {
+    const mount = createMount();
+    const first = createEvent({
+      eventId: "event:duplicate",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+    });
+    const second = createEvent({
+      eventId: "event:duplicate",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+      payload: {
+        kind: "operator-mount",
+        operatorActionId: "action:mount:1",
+        operationId: mount.mountOperationId,
+        materialSourceId: "material-source:k2:1a",
+        spoolId: "spool:changed",
+      },
+    });
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [first, second],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "event-id-payload-conflict",
+        reason: "same-event-id-different-payload",
+      }),
+    ]));
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", record: first }),
+      expect.objectContaining({ kind: "event", record: second }),
+    ]));
+  });
+
+  it("同じoperation semantic keyでpayload差異がある場合はfirst-winせず双方を隔離する", () => {
+    const mount = createMount();
+    const first = createEvent({
+      eventId: "event:semantic:first",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+    });
+    const second = createEvent({
+      eventId: "event:semantic:second",
+      operationId: mount.mountOperationId,
+      recordRefs: [mount.mountOperationId],
+      payload: {
+        kind: "operator-mount",
+        operatorActionId: "action:mount:1",
+        operationId: mount.mountOperationId,
+        materialSourceId: "material-source:k2:1a",
+        spoolId: "spool:changed",
+      },
+    });
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [mount],
+      events: [second, first],
+    });
+
+    expect(store.events).toEqual([]);
+    expect(store.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "operation-semantic-payload-conflict",
+        reason: "same-operation-semantic-key-different-payload",
+      }),
+    ]));
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "event", record: first }),
+      expect.objectContaining({ kind: "event", record: second }),
+    ]));
+  });
+
+  it("invalid mount recordはactive authorityから外しretainedUnsupportedEntriesへ隔離する", () => {
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [{ mountId: "", materialSourceId: "material-source:k2:1a" }],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.retainedUnsupportedEntries).toEqual([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: expect.stringContaining("invalid"),
+      }),
+    ]);
+  });
+
+  it("同時open conflictはfirst-winせず衝突集合をactive authorityから外す", () => {
+    const first = createMount({ mountOperationId: "mount-op:source-a", spoolId: "spool:a" });
+    const second = createMount({ mountOperationId: "mount-op:source-b", spoolId: "spool:b" });
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [first, second],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.conflicts).toEqual([
+      expect.objectContaining({
+        type: "source-open-mount-conflict",
+        reason: "material-source-already-has-open-mount",
+      }),
+    ]);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "spoolMount", record: first }),
+      expect.objectContaining({ kind: "spoolMount", record: second }),
+    ]));
+  });
+
+  it("closed adjacent intervalは復元し、overlapした衝突集合はactive authorityから外す", () => {
+    const closed = createMount({
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      closedAt: "2026-09-01T01:00:00.000Z",
+      closedBy: "operator",
+      closeOperationId: "close-op:001",
+      closeReason: "operator-replace",
+    });
+    const adjacent = createMount({
+      mountOperationId: "mount-op:adjacent",
+      spoolId: "spool:black-pla",
+      openedAt: "2026-09-01T01:00:00.000Z",
+    });
+    const overlap = createMount({
+      mountOperationId: "mount-op:overlap",
+      spoolId: "spool:white-pla",
+      openedAt: "2026-09-01T00:30:00.000Z",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      closedAt: "2026-09-01T02:00:00.000Z",
+    });
+
+    const store = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [closed, adjacent, overlap],
+    });
+
+    expect(store.spoolMounts).toEqual([]);
+    expect(store.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "source-interval-overlap-conflict",
+        reason: "material-source-mount-interval-overlap",
+      }),
+    ]));
+    expect(store.conflicts).toHaveLength(2);
+    expect(store.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "spoolMount", record: closed }),
+      expect.objectContaining({ kind: "spoolMount", record: adjacent }),
+      expect.objectContaining({ kind: "spoolMount", record: overlap }),
+    ]));
+    expect(store.retainedUnsupportedEntries.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("連鎖したinterval conflictは入力順に依存せずconnected component全体を隔離する", () => {
+    const first = createMount({
+      mountId: "mount:chain:a",
+      mountOperationId: "mount-op:chain:a",
+      spoolId: "spool:a",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      openedAt: "2026-09-01T00:00:00.000Z",
+      closedAt: "2026-09-01T01:00:00.000Z",
+      closedBy: "operator",
+      closeOperationId: "close-op:chain:a",
+    });
+    const bridge = createMount({
+      mountId: "mount:chain:b",
+      mountOperationId: "mount-op:chain:b",
+      spoolId: "spool:b",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      openedAt: "2026-09-01T00:30:00.000Z",
+      closedAt: "2026-09-01T01:30:00.000Z",
+      closedBy: "operator",
+      closeOperationId: "close-op:chain:b",
+    });
+    const third = createMount({
+      mountId: "mount:chain:c",
+      mountOperationId: "mount-op:chain:c",
+      spoolId: "spool:c",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      openedAt: "2026-09-01T01:00:00.000Z",
+      closedAt: "2026-09-01T02:00:00.000Z",
+      closedBy: "operator",
+      closeOperationId: "close-op:chain:c",
+    });
+
+    const forward = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [first, bridge, third],
+    });
+    const reverse = normalizeStoredMaterialAccountingSpoolMountStore({
+      spoolMounts: [third, bridge, first],
+    });
+
+    expect(forward.spoolMounts).toEqual([]);
+    expect(reverse.spoolMounts).toEqual([]);
+    expect(forward.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "source-interval-overlap-conflict" }),
+    ]));
+    expect(reverse.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "source-interval-overlap-conflict" }),
+    ]));
+    expect(forward.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "spoolMount", record: first }),
+      expect.objectContaining({ kind: "spoolMount", record: bridge }),
+      expect.objectContaining({ kind: "spoolMount", record: third }),
+    ]));
+    expect(reverse.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "spoolMount", record: first }),
+      expect.objectContaining({ kind: "spoolMount", record: bridge }),
+      expect.objectContaining({ kind: "spoolMount", record: third }),
+    ]));
+  });
+});

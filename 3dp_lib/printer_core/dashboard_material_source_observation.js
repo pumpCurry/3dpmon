@@ -19,9 +19,9 @@
  * - {@link rekeyMaterialSourceObservationDevice}：provisional device観測をstable device IDへ安全に昇格
  * - {@link deriveMaterialSourceObservationFreshness}：保存snapshotから現在のfresh/stale表示状態を導出
  *
- * @version 1.390.1461 (PR #435)
+ * @version 1.390.1609 (PR #440)
  * @since   1.390.1422 (PR #435)
- * @lastModified 2026-08-28 17:18:49
+ * @lastModified 2026-09-01 22:16:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19のexpected-state correlationで参照する場合もcommand authorityへ直接入力しない境界を維持する
@@ -103,6 +103,47 @@ function toIsoDateTimeString(value) {
   const date = value instanceof Date ? value : new Date(value || Date.now());
   const time = date.getTime();
   return Number.isFinite(time) ? date.toISOString() : new Date().toISOString();
+}
+
+/**
+ * 任意の日時候補を任意ISO文字列へ正規化する。
+ *
+ * 【詳細説明】
+ * - source固有coverageのようなfail-closed証跡は、不正値を現在時刻へ化けさせると
+ *   「観測できていた」証明に誤変換されるため、壊れた値はnullとして扱う。
+ *
+ * @private
+ * @function normalizeOptionalIsoDateTimeString
+ * @param {*} value - 日時候補。
+ * @returns {string|null} 有効なISO 8601日時、またはnull。
+ */
+function normalizeOptionalIsoDateTimeString(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+/**
+ * 2つのISO時刻のうち遅い方を返す。
+ *
+ * 【詳細説明】
+ * - bounded event logをtrimした場合、source固有coverageは保持範囲の先頭より前へ戻せない。
+ * - 既存sourceの初回観測時刻とdevice log保持開始時刻のうち、より保守的な遅い時刻を採用する。
+ *
+ * @private
+ * @function pickLaterIsoDateTimeString
+ * @param {string|null|undefined} left - 時刻候補。
+ * @param {string|null|undefined} right - 時刻候補。
+ * @returns {string|null} 遅いISO 8601日時、またはnull。
+ */
+function pickLaterIsoDateTimeString(left, right) {
+  const leftIso = normalizeOptionalIsoDateTimeString(left);
+  const rightIso = normalizeOptionalIsoDateTimeString(right);
+  if (!leftIso) return rightIso;
+  if (!rightIso) return leftIso;
+  return Date.parse(leftIso) >= Date.parse(rightIso) ? leftIso : rightIso;
 }
 
 /**
@@ -337,6 +378,8 @@ function markRestoredObservationRecord(record, restoredAt) {
         snapshot.restoredFromStorage = true;
         snapshot.restoredAt = restoredAt;
         snapshot.authority = "observation-only";
+        snapshot.eventCoverageStartedAt = normalizeOptionalIsoDateTimeString(snapshot.eventCoverageStartedAt);
+        snapshot.eventCoverageTrimmedAt = normalizeOptionalIsoDateTimeString(snapshot.eventCoverageTrimmedAt);
       }
     }
   }
@@ -346,6 +389,13 @@ function markRestoredObservationRecord(record, restoredAt) {
   if (!restored.latestBySourceId || typeof restored.latestBySourceId !== "object" || Array.isArray(restored.latestBySourceId)) {
     restored.latestBySourceId = {};
   }
+  restored.eventCoverageStartedAt =
+    restored.eventCoverageStartedAt !== null &&
+    restored.eventCoverageStartedAt !== undefined &&
+    restored.eventCoverageStartedAt !== "" &&
+    isValidExplicitObservedAt(restored.eventCoverageStartedAt)
+    ? toIsoDateTimeString(restored.eventCoverageStartedAt)
+    : null;
   return restored;
 }
 
@@ -430,6 +480,7 @@ function ensureDeviceRecord(store, options) {
       latestBySourceId: {},
       events: [],
       firstObservedAt: options.observedAt,
+      eventCoverageStartedAt: options.observedAt,
       lastObservedAt: options.observedAt,
       lastChangedAt: options.observedAt,
       providerId: null,
@@ -642,6 +693,8 @@ function createSourceSnapshot(options) {
     },
     assignments: normalizeAssignmentsForSource(options.assignments, sourceId),
     firstObservedAt: previous?.firstObservedAt || options.observedAt,
+    eventCoverageStartedAt: normalizeOptionalIsoDateTimeString(previous?.eventCoverageStartedAt) || options.observedAt,
+    eventCoverageTrimmedAt: normalizeOptionalIsoDateTimeString(previous?.eventCoverageTrimmedAt),
     lastObservedAt: options.observedAt,
     lastChangedAt: previous?.lastChangedAt || options.observedAt,
     providerId: options.providerId || null,
@@ -696,6 +749,115 @@ function createSourceSnapshot(options) {
     }
   }
   return snapshot;
+}
+
+/**
+ * source snapshotごとのevent coverage開始時刻をtrim理由に応じて前進させる。
+ *
+ * 【詳細説明】
+ * - device全体のbounded log上限でeventが落ちた場合は、全sourceで保持範囲以前の
+ *   「eventが無い」証明を使えないため、全sourceを同じ境界へ前進させる。
+ * - source単位のbounded log上限でeventが落ちただけなら、そのsourceだけを前進させ、
+ *   無関係なsourceをfalse-negativeへ巻き込まない。
+ * - sourceが後から初観測された場合は、そのsource自身のcoverage開始時刻を優先し、device側の
+ *   早いcoverage開始で水増ししない。
+ *
+ * @private
+ * @function advanceSourceEventCoverageStarts
+ * @param {Object} record - device観測レコード。
+ * @param {string|null} deviceCoverageFromAt - device全体のcoverageが前進した場合の削除event最遅時刻。
+ * @param {Map<string,string|null>=} coverageFromBySourceId - source別coverageを前進させる削除event最遅時刻。
+ * @returns {void}
+ */
+function advanceSourceEventCoverageStarts(record, deviceCoverageFromAt, coverageFromBySourceId = new Map()) {
+  if (!record?.latestBySourceId || typeof record.latestBySourceId !== "object") {
+    return;
+  }
+  for (const [sourceId, snapshot] of Object.entries(record.latestBySourceId)) {
+    if (!snapshot || typeof snapshot !== "object") {
+      continue;
+    }
+    snapshot.eventCoverageStartedAt = pickLaterIsoDateTimeString(
+      snapshot.eventCoverageStartedAt,
+      deviceCoverageFromAt
+    );
+    snapshot.eventCoverageStartedAt = pickLaterIsoDateTimeString(
+      snapshot.eventCoverageStartedAt,
+      coverageFromBySourceId.get(sourceId)
+    );
+    const sourceCoverageFromAt = coverageFromBySourceId.get(sourceId);
+    const trimmedAt = pickLaterIsoDateTimeString(deviceCoverageFromAt, sourceCoverageFromAt);
+    if (trimmedAt) {
+      snapshot.eventCoverageTrimmedAt = pickLaterIsoDateTimeString(
+        snapshot.eventCoverageTrimmedAt,
+        trimmedAt
+      );
+    }
+  }
+}
+
+/**
+ * event配列から最も遅い観測時刻を取り出す。
+ *
+ * 【詳細説明】
+ * - bounded event logのcoverage watermarkは、保持されたeventではなく削除されたeventの最遅時刻を
+ *   基準にすることで、eventの挿入順とobservedAt順が逆転してもfail-openしない。
+ * - 削除eventに有効なobservedAtが無い場合は、呼び出し元が渡したfallbackで安全側へ倒す。
+ *
+ * @private
+ * @function pickLatestObservedAtFromEvents
+ * @param {Object[]} events - 観測時刻を調べるevent配列。
+ * @param {string|null=} fallbackAt - 有効な観測時刻が見つからない場合の保守的時刻。
+ * @returns {string|null} 最も遅いISO 8601日時、またはnull。
+ */
+function pickLatestObservedAtFromEvents(events, fallbackAt = null) {
+  let latestObservedAt = null;
+  for (const event of Array.isArray(events) ? events : []) {
+    latestObservedAt = pickLaterIsoDateTimeString(
+      latestObservedAt,
+      normalizeOptionalIsoDateTimeString(event?.observedAt)
+    );
+  }
+  return latestObservedAt || normalizeOptionalIsoDateTimeString(fallbackAt);
+}
+
+/**
+ * 削除されたeventをsource別coverage開始へ反映するwatermarkへ変換する。
+ *
+ * 【詳細説明】
+ * - source固有eventが落ちた場合、残ったeventの最古時刻ではなく、
+ *   削除されたeventの最遅時刻まで該当sourceのcoverageを前進させる。
+ * - event配列は監査用の挿入順を保持するためsortせず、coverage計算だけをobservedAt基準にする。
+ *
+ * @private
+ * @function createRemovedEventCoverageBySourceId
+ * @param {Object[]} removedEvents - trimで削除されたevent配列。
+ * @param {string|null} fallbackAt - 削除eventの時刻が壊れていた場合に使う保守的時刻。
+ * @returns {Map<string,string|null>} source ID別coverage開始時刻。
+ */
+function createRemovedEventCoverageBySourceId(removedEvents, fallbackAt) {
+  const removedLatestBySourceId = new Map();
+  const removedMissingObservedAt = new Set();
+  for (const event of Array.isArray(removedEvents) ? removedEvents : []) {
+    const sourceId = toNullableString(event?.sourceId);
+    if (!sourceId) {
+      continue;
+    }
+    const observedAt = normalizeOptionalIsoDateTimeString(event?.observedAt);
+    if (!observedAt) {
+      removedMissingObservedAt.add(sourceId);
+      continue;
+    }
+    removedLatestBySourceId.set(
+      sourceId,
+      pickLaterIsoDateTimeString(removedLatestBySourceId.get(sourceId), observedAt)
+    );
+  }
+  const coverageBySourceId = new Map();
+  for (const sourceId of new Set([...removedLatestBySourceId.keys(), ...removedMissingObservedAt.values()])) {
+    coverageBySourceId.set(sourceId, removedLatestBySourceId.get(sourceId) || normalizeOptionalIsoDateTimeString(fallbackAt));
+  }
+  return coverageBySourceId;
 }
 
 /**
@@ -767,6 +929,65 @@ function classifySourceMerge(existingSnapshot, incomingSnapshot) {
 }
 
 /**
+ * rekey merge時にsource snapshotのcoverage watermarkを単調に合成する。
+ *
+ * 【詳細説明】
+ * - snapshot本体はlastObservedAtが新しい側を採用しても、bounded event logのcoverageは
+ *   どちらか一方の古い値へ戻すと、削除済みeventを「存在しなかった」ように扱う危険がある。
+ * - そのためeventCoverageStartedAt / eventCoverageTrimmedAtは常に両snapshotの遅い方を保持する。
+ *
+ * @private
+ * @function mergeSourceCoverageWatermarks
+ * @param {Object|null|undefined} targetSnapshot - merge後に残すsource snapshot。
+ * @param {Object|null|undefined} leftSnapshot - 片方のsource snapshot。
+ * @param {Object|null|undefined} rightSnapshot - もう片方のsource snapshot。
+ * @returns {Object|null|undefined} coverageを合成したtargetSnapshot。
+ */
+function mergeSourceCoverageWatermarks(targetSnapshot, leftSnapshot, rightSnapshot) {
+  if (!targetSnapshot || typeof targetSnapshot !== "object") {
+    return targetSnapshot;
+  }
+  targetSnapshot.eventCoverageStartedAt = pickLaterIsoDateTimeString(
+    leftSnapshot?.eventCoverageStartedAt,
+    rightSnapshot?.eventCoverageStartedAt
+  );
+  targetSnapshot.eventCoverageTrimmedAt = pickLaterIsoDateTimeString(
+    leftSnapshot?.eventCoverageTrimmedAt,
+    rightSnapshot?.eventCoverageTrimmedAt
+  );
+  return targetSnapshot;
+}
+
+/**
+ * rekey merge時にdevice record全体のcoverage watermarkを単調に合成する。
+ *
+ * 【詳細説明】
+ * - stable/provisional recordを統合する時、どちらか片方でevent logがtrim済みなら、
+ *   統合後recordもそのtrim境界より前のevent coverageを主張してはいけない。
+ * - lastObservedAtやsource snapshotの勝者選択とは独立して、coverage証跡だけを遅い方へ進める。
+ *
+ * @private
+ * @function mergeRecordCoverageWatermarks
+ * @param {Object} targetRecord - merge後に残すdevice record。
+ * @param {Object|null|undefined} leftRecord - 片方のdevice record。
+ * @param {Object|null|undefined} rightRecord - もう片方のdevice record。
+ * @returns {void}
+ */
+function mergeRecordCoverageWatermarks(targetRecord, leftRecord, rightRecord) {
+  if (!targetRecord || typeof targetRecord !== "object") {
+    return;
+  }
+  targetRecord.eventCoverageStartedAt = pickLaterIsoDateTimeString(
+    leftRecord?.eventCoverageStartedAt,
+    rightRecord?.eventCoverageStartedAt
+  );
+  targetRecord.eventCoverageTrimmedAt = pickLaterIsoDateTimeString(
+    leftRecord?.eventCoverageTrimmedAt,
+    rightRecord?.eventCoverageTrimmedAt
+  );
+}
+
+/**
  * source change eventを作る。
  *
  * @private
@@ -811,19 +1032,53 @@ function createSourceChangeEvent(options) {
 function trimDeviceEvents(record, limits) {
   const maxPerSource = Math.max(1, Math.floor(toFiniteNumber(limits?.maxEventsPerSource, DEFAULT_MAX_EVENTS_PER_SOURCE) ?? DEFAULT_MAX_EVENTS_PER_SOURCE));
   const maxPerDevice = Math.max(1, Math.floor(toFiniteNumber(limits?.maxEventsPerDevice, DEFAULT_MAX_EVENTS_PER_DEVICE) ?? DEFAULT_MAX_EVENTS_PER_DEVICE));
+  const originalEvents = Array.isArray(record.events) ? record.events : [];
+  const originalLength = originalEvents.length;
   const sourceCounts = new Map();
   const keepBySource = [];
-  for (let index = record.events.length - 1; index >= 0; index -= 1) {
-    const event = record.events[index];
+  const removedBySourceLimit = [];
+  for (let index = originalEvents.length - 1; index >= 0; index -= 1) {
+    const event = originalEvents[index];
     const sourceId = event?.sourceId || "__device__";
     const count = sourceCounts.get(sourceId) || 0;
     if (count < maxPerSource) {
       keepBySource.push(event);
       sourceCounts.set(sourceId, count + 1);
+    } else {
+      removedBySourceLimit.push(event);
     }
   }
   keepBySource.reverse();
-  record.events = keepBySource.slice(Math.max(0, keepBySource.length - maxPerDevice));
+  const retainedEvents = keepBySource.slice(Math.max(0, keepBySource.length - maxPerDevice));
+  if (retainedEvents.length !== originalLength) {
+    const retainedSet = new Set(retainedEvents);
+    const removedByDeviceLimit = keepBySource.filter((event) => !retainedSet.has(event));
+    const removedEvents = [...removedBySourceLimit, ...removedByDeviceLimit];
+    const deviceCoverageEvents = [
+      ...removedByDeviceLimit,
+      ...removedBySourceLimit.filter((event) => !toNullableString(event?.sourceId)),
+    ];
+    const previousEventCoverageStartedAt = normalizeOptionalIsoDateTimeString(record.eventCoverageStartedAt);
+    const deviceRemovedLatestObservedAt = deviceCoverageEvents.length > 0
+      ? pickLatestObservedAtFromEvents(deviceCoverageEvents, record.lastObservedAt || null)
+      : null;
+    if (deviceRemovedLatestObservedAt) {
+      record.eventCoverageStartedAt = pickLaterIsoDateTimeString(
+        previousEventCoverageStartedAt,
+        deviceRemovedLatestObservedAt
+      ) || record.lastObservedAt || null;
+      record.eventCoverageTrimmedAt = pickLaterIsoDateTimeString(
+        record.eventCoverageTrimmedAt,
+        deviceRemovedLatestObservedAt || record.lastObservedAt || null
+      );
+    }
+    advanceSourceEventCoverageStarts(
+      record,
+      deviceRemovedLatestObservedAt,
+      createRemovedEventCoverageBySourceId(removedEvents, record.lastObservedAt || record.eventCoverageStartedAt || null)
+    );
+  }
+  record.events = retainedEvents;
 }
 
 /**
@@ -1079,6 +1334,9 @@ export function recordMaterialTopologyObservation(store, options = {}) {
     host: options.host || null,
     observedAt,
   });
+  if (!record.eventCoverageStartedAt || !isValidExplicitObservedAt(record.eventCoverageStartedAt)) {
+    record.eventCoverageStartedAt = observedAt;
+  }
 
   const topology = options.topology && typeof options.topology === "object" ? options.topology : {};
   const assignments = Array.isArray(topology.assignments) ? topology.assignments : [];
@@ -1156,6 +1414,44 @@ export function recordMaterialTopologyObservation(store, options = {}) {
 
   const nextRevision = Number(record.observationRevision || 0) + 1;
   const changes = [];
+  const previousProviderDisconnectedAt = record.providerDisconnectedAt || null;
+  const previousProviderGeneration = record.providerGeneration ? String(record.providerGeneration) : null;
+  const nextProviderId = options.providerId || topology.provider?.providerId || record.providerId || null;
+  const nextProviderGeneration = options.providerGeneration ? String(options.providerGeneration) : null;
+  const nextProviderDisconnectedAt = topology.cfs?.topologyState === "stale"
+    ? (topology.provider?.disconnectedAt || observedAt)
+    : null;
+  if (previousProviderGeneration && nextProviderGeneration && previousProviderGeneration !== nextProviderGeneration) {
+    changes.push(createSourceChangeEvent({
+      deviceId,
+      sourceId: null,
+      observedAt,
+      changeKind: "provider-generation-changed",
+      before: { providerGeneration: previousProviderGeneration },
+      after: { providerGeneration: nextProviderGeneration },
+      revision: nextRevision,
+      sessionId: options.sessionId || null,
+      providerId: nextProviderId,
+      providerGeneration: nextProviderGeneration,
+      sequence: options.sequence ?? null,
+    }));
+  }
+  if ((!previousProviderDisconnectedAt && nextProviderDisconnectedAt) ||
+      (previousProviderDisconnectedAt && !nextProviderDisconnectedAt)) {
+    changes.push(createSourceChangeEvent({
+      deviceId,
+      sourceId: null,
+      observedAt,
+      changeKind: nextProviderDisconnectedAt ? "provider-disconnected" : "provider-reconnected",
+      before: { providerDisconnectedAt: previousProviderDisconnectedAt },
+      after: { providerDisconnectedAt: nextProviderDisconnectedAt },
+      revision: nextRevision,
+      sessionId: options.sessionId || null,
+      providerId: nextProviderId,
+      providerGeneration: nextProviderGeneration,
+      sequence: options.sequence ?? null,
+    }));
+  }
   for (const [sourceId, snapshot] of Object.entries(nextSnapshots)) {
     const previous = record.latestBySourceId[sourceId] || null;
     const previousSignature = previous ? createSemanticSignature(previous) : null;
@@ -1203,13 +1499,11 @@ export function recordMaterialTopologyObservation(store, options = {}) {
   if (changes.length > 0) {
     record.lastChangedAt = observedAt;
   }
-  record.providerId = options.providerId || topology.provider?.providerId || record.providerId || null;
+  record.providerId = nextProviderId;
   record.sessionId = options.sessionId || record.sessionId || null;
   updateProviderGenerationLifecycle(record, record.providerId, options.providerGeneration || null);
   record.lastSequence = options.sequence ?? record.lastSequence ?? null;
-  record.providerDisconnectedAt = topology.cfs?.topologyState === "stale"
-    ? (topology.provider?.disconnectedAt || observedAt)
-    : null;
+  record.providerDisconnectedAt = nextProviderDisconnectedAt;
   if (record.providerId && record.providerStates?.[record.providerId]) {
     record.providerStates[record.providerId].lastObservedAt = observedAt;
     record.providerStates[record.providerId].lastSequence = record.lastSequence;
@@ -1286,11 +1580,11 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
       if (existingSnapshot) {
         const mergeAction = classifySourceMerge(existingSnapshot, snapshot);
         if (mergeAction === "replace") {
-          existing.latestBySourceId[sourceId] = {
+          existing.latestBySourceId[sourceId] = mergeSourceCoverageWatermarks({
             ...cloneJsonValue(snapshot),
             deviceId: toDeviceId,
             identityStrength: "stable",
-          };
+          }, existingSnapshot, snapshot);
           mergedSourceIds.push(sourceId);
           continue;
         }
@@ -1317,6 +1611,7 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
             sequence: existing.lastSequence ?? from.lastSequence ?? null,
           }));
         }
+        mergeSourceCoverageWatermarks(existingSnapshot, existingSnapshot, snapshot);
         continue;
       }
       existing.latestBySourceId[sourceId] = {
@@ -1344,6 +1639,7 @@ export function rekeyMaterialSourceObservationDevice(store, options = {}) {
     existing.providerId = existing.providerId || from.providerId || null;
     existing.sessionId = existing.sessionId || from.sessionId || null;
     existing.providerGeneration = existing.providerGeneration || from.providerGeneration || null;
+    mergeRecordCoverageWatermarks(existing, existing, from);
     mergeProviderStatesForRekey(existing, from);
     existing.retiredProviderGenerations = [...new Set([
       ...(Array.isArray(existing.retiredProviderGenerations) ? existing.retiredProviderGenerations : []),

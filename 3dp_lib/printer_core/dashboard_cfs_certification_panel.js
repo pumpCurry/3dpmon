@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1566 (PR #439)
+ * @version 1.390.1647 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 21:24:10
+ * @lastModified 2026-09-02 16:08:12
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -29,6 +29,11 @@
 "use strict";
 
 import { redactProtocolValue } from "./dashboard_protocol_recorder.js";
+import {
+  createCfsDeviceCorrelationEvidence,
+  createCfsSessionCorrelationEvidence,
+  createCfsSessionCorrelationSalt,
+} from "./dashboard_cfs_session_correlation.js";
 
 /**
  * CFS Certification パネルViewModelのschema version。
@@ -109,6 +114,44 @@ function cloneJson(value) {
   } catch (_error) {
     return null;
   }
+}
+
+/**
+ * redaction後bundle内の自由記述文字列から既知raw identity文字列を除去する。
+ *
+ * 【詳細説明】
+ * - Protocol Recorderは`sessionId`/`deviceId` keyの値は秘匿するが、preflight detailや
+ *   arm bindingのような自由記述/派生keyに埋め込まれたidentityはkey名だけでは検出できない。
+ * - Certification exportは対象identityを既に知っているため、既知のraw identity文字列だけを
+ *   対応するredacted tokenへ置換して、通常文言への過剰redactionを避ける。
+ *
+ * @private
+ * @function replaceKnownIdentityText
+ * @param {*} value - redaction後bundle値。
+ * @param {string} rawIdentity - export前のraw identity文字列。
+ * @param {string} replacement - redaction済みidentity token。
+ * @returns {*} raw identity文字列置換済み値。
+ */
+function replaceKnownIdentityText(value, rawIdentity, replacement) {
+  const identityText = toText(rawIdentity);
+  const replacementText = toText(replacement, "<IDENTITY>");
+  if (!identityText || value === null || value === undefined) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => replaceKnownIdentityText(entry, identityText, replacementText));
+  }
+  if (typeof value === "object") {
+    const result = {};
+    for (const [key, childValue] of Object.entries(value)) {
+      result[key] = replaceKnownIdentityText(childValue, identityText, replacementText);
+    }
+    return result;
+  }
+  if (typeof value !== "string") {
+    return value;
+  }
+  return value.split(identityText).join(replacementText);
 }
 
 /**
@@ -308,6 +351,82 @@ function createSelectionEvidencePreflightDetail(materialViewModel) {
 }
 
 /**
+ * printer idle preflightの詳細を生成する。
+ *
+ * 【詳細説明】
+ * - `idle` という表示ラベルがあっても、Gate 19のread-only probeがpartial / unknown-core-stateを示す場合は
+ *   物理操作可能なidle証明として扱わない。
+ * - 未観測はwarnとして残し、`createLiveSendReadiness()` 側で selected-source 以外のwarnをhard blockする。
+ *
+ * @private
+ * @function createPrinterIdlePreflightDetail
+ * @param {object|null|undefined} printer - printer/session情報
+ * @returns {{state:string, detail:string}} preflight表示
+ */
+function createPrinterIdlePreflightDetail(printer) {
+  const printerState = toText(printer?.printState || printer?.state, "");
+  const idleObservation = printer?.printerIdleObservation && typeof printer.printerIdleObservation === "object"
+    ? printer.printerIdleObservation
+    : null;
+  if (idleObservation) {
+    const status = toText(idleObservation.status, "").toLowerCase();
+    const expiresAtMs = Date.parse(toText(idleObservation.expiresAt, ""));
+    const nowMs = Date.now();
+    if (idleObservation.fresh !== true || !Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
+      return {
+        state: "fail",
+        detail: "idle未証明: stale",
+      };
+    }
+    if (!["observed", "assembled"].includes(status) ||
+        idleObservation.snapshotCompleteness !== "complete" ||
+        idleObservation.coreStateComplete !== true) {
+      return {
+        state: "fail",
+        detail: "idle未証明: incomplete",
+      };
+    }
+    if (idleObservation.idle !== true) {
+      return {
+        state: "fail",
+        detail: toText(idleObservation.activityState || printerState, "idle未証明"),
+      };
+    }
+  }
+  const probeStatus = toText(printer?.statusProbeStatus || printer?.printStatusProbeStatus, "");
+  const activityState = toText(printer?.printActivityState || printer?.activityState, "");
+  const incompleteReasons = [];
+  if (["partial", "timeout"].includes(probeStatus.toLowerCase())) {
+    incompleteReasons.push(probeStatus.toLowerCase());
+  }
+  if (["unknown-core-state", "active-without-core-state"].includes(activityState.toLowerCase())) {
+    incompleteReasons.push(activityState.toLowerCase());
+  }
+  if (printer?.coreStateComplete === false || printer?.printCoreStateComplete === false) {
+    if (!incompleteReasons.includes("unknown-core-state")) {
+      incompleteReasons.push("unknown-core-state");
+    }
+  }
+  if (incompleteReasons.length > 0) {
+    return {
+      state: "fail",
+      detail: `idle未証明: ${[...new Set(incompleteReasons)].join(" / ")}`,
+    };
+  }
+  if (!printerState) {
+    return {
+      state: "warn",
+      detail: "印刷状態未観測",
+    };
+  }
+  const printerIdle = ["idle", "standby", "ready"].includes(printerState.toLowerCase());
+  return {
+    state: printerIdle ? "ok" : "fail",
+    detail: printerState,
+  };
+}
+
+/**
  * 復旧ラッチblockerを表示用に正規化する。
  *
  * 【詳細説明】
@@ -360,9 +479,7 @@ function normalizeRecoveryBlockerForPanel(recoveryBlocker) {
  */
 function createPreflightItems({ printer, materialViewModel, targetSource, certificationStatus, execution, recoveryBlocker }) {
   const topologyState = toText(materialViewModel?.summary?.topologyState, "unobserved");
-  const printerState = toText(printer?.printState || printer?.state, "");
-  const printerIdleKnown = Boolean(printerState);
-  const printerIdle = ["idle", "standby", "ready", "completed", "complete"].includes(printerState.toLowerCase());
+  const printerIdle = createPrinterIdlePreflightDetail(printer);
   const selectedState = targetSource?.selected === true ? "ok" : "warn";
   const selectionEvidence = createSelectionEvidencePreflightDetail(materialViewModel);
   return [
@@ -381,8 +498,8 @@ function createPreflightItems({ printer, materialViewModel, targetSource, certif
     {
       key: "printer-idle",
       label: "Printer idle",
-      state: printerIdleKnown ? (printerIdle ? "ok" : "fail") : "warn",
-      detail: printerIdleKnown ? printerState : "印刷状態未観測",
+      state: printerIdle.state,
+      detail: printerIdle.detail,
     },
     {
       key: "target-loaded",
@@ -696,6 +813,13 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     transportKind: toText(options.printer?.transportKind, "ws9999"),
     active: isTrue(options.printer?.active),
     state: toText(options.printer?.state || options.printer?.printState, ""),
+    statusProbeStatus: toText(options.printer?.statusProbeStatus || options.printer?.printStatusProbeStatus, ""),
+    printActivityState: toText(options.printer?.printActivityState || options.printer?.activityState, ""),
+    coreStateComplete: options.printer?.coreStateComplete ?? options.printer?.printCoreStateComplete ?? null,
+    printerIdleObservation: options.printer?.printerIdleObservation &&
+      typeof options.printer.printerIdleObservation === "object"
+      ? { ...options.printer.printerIdleObservation }
+      : null,
   };
   const materialViewModel = options.materialViewModel || {};
   const targetSource = resolveTargetSource(materialViewModel, options.targetSource);
@@ -797,6 +921,7 @@ export function createCfsCertificationPanelViewModel(options = {}) {
     export: {
       captureId: toText(options.export?.captureId, ""),
       fixtureId: toText(options.export?.fixtureId, ""),
+      sessionCorrelationSalt: toText(options.export?.sessionCorrelationSalt, ""),
       jsonAvailable: true,
       ndjsonAvailable: true,
       zipAvailable: false,
@@ -881,6 +1006,13 @@ function formatProbeTargetSource(probeSummary) {
 export function createCfsCertificationExportBundle(viewModel) {
   const rawEvidence = cloneJson(viewModel?.evidence?.raw) || {};
   const protocolEvents = Array.isArray(rawEvidence.events) ? rawEvidence.events : [];
+  const correlationSalt = toText(viewModel?.export?.sessionCorrelationSalt) || createCfsSessionCorrelationSalt();
+  const sessionCorrelation = createCfsSessionCorrelationEvidence(viewModel?.printer?.sessionId, {
+    salt: correlationSalt,
+  });
+  const deviceCorrelation = createCfsDeviceCorrelationEvidence(viewModel?.printer?.deviceId, {
+    salt: correlationSalt,
+  });
   const probeSummaries = {
     before: extractProbeSummaryForExport(rawEvidence.beforeBoxsInfo),
     after: extractProbeSummaryForExport(rawEvidence.afterBoxsInfo),
@@ -896,6 +1028,8 @@ export function createCfsCertificationExportBundle(viewModel) {
       sourceId: viewModel?.command?.sourceId || "",
       displaySlot: viewModel?.command?.displaySlot || "",
       commandKind: viewModel?.command?.commandKind || "",
+      sessionCorrelation,
+      deviceCorrelation,
       dryRunStatus: viewModel?.dryRun?.status || "unknown",
       liveSendEnabled: viewModel?.liveSend?.enabled === true,
       redactionApplied: false,
@@ -914,7 +1048,17 @@ export function createCfsCertificationExportBundle(viewModel) {
     events: cloneJson(protocolEvents) || [],
     summaryTimeline: cloneJson(viewModel?.evidence?.timeline) || [],
   };
-  const redacted = redactProtocolValue(bundle);
+  const redactedBundle = redactProtocolValue(bundle);
+  const sessionRedacted = replaceKnownIdentityText(
+    redactedBundle,
+    viewModel?.printer?.sessionId,
+    redactedBundle?.manifest?.printer?.sessionId
+  );
+  const redacted = replaceKnownIdentityText(
+    sessionRedacted,
+    viewModel?.printer?.deviceId,
+    redactedBundle?.manifest?.printer?.deviceId
+  );
   redacted.manifest = {
     ...(redacted.manifest || {}),
     redactionApplied: true,

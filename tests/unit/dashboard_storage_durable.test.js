@@ -1,8 +1,54 @@
 /**
- * @fileoverview dashboard_storage.js の耐久保存 API テスト
- * O4 candidate 保存後に baseline commit へ進む前、IndexedDB flush 完了を待つ契約を検証する。
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 storage durable API 単体テスト
+ * @file dashboard_storage_durable.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_storage_durable_test
+ *
+ * 【機能内容サマリ】
+ * - IndexedDB flush完了を待つ耐久保存契約を検証
+ * - Gate 18.9H SpoolMount production storeのCAS commit境界を検証
+ * - Gate 18.9I PrintBinding shadow storeのCAS commit境界を検証
+ *
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1644 (PR #441)
+ * @since   1.390.1580 (PR #440)
+ * @lastModified 2026-09-02 14:10:41
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+import {
+  MATERIAL_IDENTITY_STRENGTH,
+  MATERIAL_SOURCE_KIND,
+  SPOOL_MOUNT_VERIFICATION,
+  createMaterialSourceIdentity,
+  createMaterialSourceLocator,
+  createMaterialSourceRecord,
+  createSpoolMountRecord,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_contract.js";
+import {
+  createEmptyMaterialAccountingSpoolMountStore,
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
+  normalizeStoredMaterialAccountingSpoolMountStore,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js";
+import {
+  createMaterialAccountingPrintBindingStoreDigest,
+  normalizeStoredMaterialAccountingPrintBindingStore,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_print_binding.js";
+import {
+  reserveUniversalSpoolAssignment,
+} from "../../3dp_lib/printer_core/dashboard_material_accounting_spool_assignment_guard.js";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "../../3dp_lib/printer_core/dashboard_data_schema_v3.js";
 
 class LocalStorageStub {
   constructor() { this._m = new Map(); }
@@ -56,13 +102,45 @@ const mocks = vi.hoisted(() => ({
         migrationJournalIsEvidenceOnly: true,
       },
     },
+    materialAccountingMigrationShadowStore: {},
+    materialAccountingPrintBindingStore: {},
+    materialAccountingSpoolMountStore: {
+      schemaVersion: 1,
+      authority: "material-accounting-spool-mount-store",
+      storeRevision: 0,
+      storeDigest: "",
+      spoolMounts: [],
+      events: [],
+      conflicts: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        operatorManaged: true,
+        deviceObservationWrites: false,
+        physicalCommandWrites: false,
+        legacyHostSpoolMapWrites: false,
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        filamentLedgerWrites: false,
+        printBindingWrites: false,
+      },
+    },
+    physicalCommandRecoveryLatch: {},
     hostSpoolMap: {},
     hostCameraToggle: {},
     spoolSerialCounter: 0
   },
   queueSharedWrite: vi.fn((key) => { mocks.events.push(`queue:${key}`); }),
   queueMachineWrite: vi.fn((host) => { mocks.events.push(`machine:${host}`); }),
-  flushIdb: vi.fn(async () => { mocks.events.push("flush"); })
+  flushIdb: vi.fn(async () => { mocks.events.push("flush"); }),
+  compareAndSwapSharedValue: vi.fn(async () => ({
+    ok: true,
+    casApplied: true,
+    backend: "indexedDB",
+    key: "materialAccountingSpoolMountStore",
+    reason: "cas-applied",
+    currentDigest: "digest:base",
+    nextDigest: "digest:next",
+  }))
 }));
 
 vi.mock("../../3dp_lib/dashboard_data.js", () => ({
@@ -73,7 +151,12 @@ vi.mock("../../3dp_lib/dashboard_data.js", () => ({
 vi.mock("../../3dp_lib/dashboard_filament_presets.js", () => ({ FILAMENT_PRESETS: [] }));
 vi.mock("../../3dp_lib/dashboard_log_util.js", () => ({ logManager: { add: vi.fn() } }));
 vi.mock("../../3dp_lib/dashboard_utils.js", () => ({ getCurrentTimestamp: () => 0 }));
-vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({ initLedgerAnchors: vi.fn(), quarantineInvalidMountEvents: vi.fn(() => 0) }));
+vi.mock("../../3dp_lib/dashboard_filament_ledger.js", () => ({
+  attributedUsed: () => 0,
+  getSpoolIntervals: () => [],
+  initLedgerAnchors: vi.fn(),
+  quarantineInvalidMountEvents: vi.fn(() => 0)
+}));
 vi.mock("../../3dp_lib/dashboard_target_identity.js", () => ({ parseDest: vi.fn(), isIpLiteral: vi.fn(), extractHost: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_storage_idb.js", () => ({
   initIdb: vi.fn(),
@@ -84,10 +167,18 @@ vi.mock("../../3dp_lib/dashboard_storage_idb.js", () => ({
   flushIdb: mocks.flushIdb,
   exportAllIdb: vi.fn(),
   importAllIdb: vi.fn(),
+  compareAndSwapSharedValue: mocks.compareAndSwapSharedValue,
   setIdbDbName: vi.fn()
 }));
 
-const { initStorage, saveUnifiedStorageDurably } = await import("../../3dp_lib/dashboard_storage.js");
+const {
+  initStorage,
+  importAllData,
+  restoreUnifiedStorage,
+  saveUnifiedStorageDurably,
+  commitMaterialAccountingPrintBindingStoreDurably,
+  commitMaterialAccountingSpoolMountStoreDurably,
+} = await import("../../3dp_lib/dashboard_storage.js");
 
 beforeEach(async () => {
   mocks.events.length = 0;
@@ -116,10 +207,27 @@ beforeEach(async () => {
       migrationJournalIsEvidenceOnly: true,
     },
   };
+  mocks.monitorData.materialAccountingMigrationShadowStore = {};
+  mocks.monitorData.materialAccountingPrintBindingStore = {};
+  mocks.monitorData.materialAccountingSpoolMountStore = createEmptyMaterialAccountingSpoolMountStore();
+  mocks.monitorData.physicalCommandRecoveryLatch = {};
+  mocks.monitorData.hostSpoolMap = {};
+  mocks.monitorData.usageHistory = [];
+  mocks.monitorData.filamentSpools = [];
   mocks.queueSharedWrite.mockClear();
   mocks.queueMachineWrite.mockClear();
   mocks.flushIdb.mockClear();
   mocks.flushIdb.mockImplementation(async () => { mocks.events.push("flush"); });
+  mocks.compareAndSwapSharedValue.mockClear();
+  mocks.compareAndSwapSharedValue.mockResolvedValue({
+    ok: true,
+    casApplied: true,
+    backend: "indexedDB",
+    key: "materialAccountingSpoolMountStore",
+    reason: "cas-applied",
+    currentDigest: "digest:base",
+    nextDigest: "digest:next",
+  });
   await initStorage();
 });
 
@@ -135,6 +243,8 @@ describe("saveUnifiedStorageDurably", () => {
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("hostObservationWatermark", mocks.monitorData.hostObservationWatermark);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialSourceObservations", mocks.monitorData.materialSourceObservations);
     expect(mocks.queueSharedWrite).toHaveBeenCalledWith("materialAccountingMigrationJournal", mocks.monitorData.materialAccountingMigrationJournal);
+    expect(mocks.queueSharedWrite).not.toHaveBeenCalledWith("materialAccountingPrintBindingStore", mocks.monitorData.materialAccountingPrintBindingStore);
+    expect(mocks.queueSharedWrite).not.toHaveBeenCalledWith("materialAccountingSpoolMountStore", mocks.monitorData.materialAccountingSpoolMountStore);
     expect(mocks.events.indexOf("queue:inferredCandidateStore")).toBeGreaterThanOrEqual(0);
     expect(mocks.events[mocks.events.length - 1]).toBe("flush");
   });
@@ -157,7 +267,9 @@ describe("saveUnifiedStorageDurably", () => {
     globalThis.localStorage.clear();
     mocks.monitorData.machines.k1.storedData = { forceWrite: "quota-case" };
     globalThis.localStorage.setItem = () => {
-      throw new DOMException("quota", "QuotaExceededError");
+      const error = new Error("quota");
+      error.name = "QuotaExceededError";
+      throw error;
     };
 
     try {
@@ -171,4 +283,712 @@ describe("saveUnifiedStorageDurably", () => {
       globalThis.localStorage.setItem = originalSetItem;
     }
   });
+
+  it("SpoolMount production commitはCAS成功後だけmonitorDataを更新する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: createDurablePreconditions(),
+    });
+
+    expect(result).toMatchObject({ ok: true, casApplied: true, reason: "cas-applied" });
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+      expectedDigest: baseStore.storeDigest,
+      nextValue: nextStore,
+    }));
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(nextStore);
+    expect(mocks.monitorData.hostSpoolMap).toEqual({});
+    expect(mocks.monitorData.usageHistory).toEqual([]);
+    expect(mocks.monitorData.filamentSpools).toEqual([{ id: "spool:a" }]);
+  });
+
+  it("SpoolMount production commitはmanaged spool preconditionが変わったらCAS前に拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a", isDeleted: true }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: {
+        ...createDurablePreconditions(),
+        managedSpool: {
+          spoolId: "spool:a",
+          digest: "fnv1a128:stale-managed-spool",
+          deleted: false,
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "managed-spool-precondition-changed" });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+  });
+
+  it("SpoolMount production commitはlegacy occupancy preconditionが変わったらCAS前に拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.hostSpoolMap = { "K1Max-4A1B": "spool:a" };
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: {
+        ...createDurablePreconditions(),
+        legacyOccupancy: {
+          spoolId: "spool:a",
+          expectedDeviceId: "device:k2",
+          occupied: false,
+          digest: "fnv1a128:no-legacy-occupancy",
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "legacy-occupancy-precondition-changed" });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+  });
+
+  it("SpoolMount production commitはCAS不一致ならメモリを更新しない", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
+    mocks.compareAndSwapSharedValue.mockResolvedValueOnce({
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingSpoolMountStore",
+      reason: "cas-mismatch",
+      currentDigest: "digest:other",
+      nextDigest: nextStore.storeDigest,
+    });
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: createDurablePreconditions(),
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "cas-mismatch" });
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+  });
+
+  it("SpoolMount production commitはlocalStorage fallbackでは成功扱いにしない", async () => {
+    mocks.idbAvailable = false;
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const operation = createMountOperationEvent();
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore: normalizeStoredMaterialAccountingSpoolMountStore({ events: [operation] }),
+      operation,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      casApplied: false,
+      reason: "production-cas-unavailable",
+    });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("PrintBinding shadow commitはCAS成功後だけmonitorDataを更新する", async () => {
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+    const nextStore = normalizeStoredMaterialAccountingPrintBindingStore({
+      ...baseStore,
+      unattributedUsage: [
+        {
+          printJobId: "job:shadow",
+          printPlanId: "plan:shadow",
+          deviceId: "device:k2",
+          usedLengthMm: 123,
+          reason: "unit-test",
+        },
+      ],
+    });
+    mocks.monitorData.materialAccountingPrintBindingStore = baseStore;
+    mocks.compareAndSwapSharedValue.mockImplementationOnce(async ({ expectedDigest, nextValue }) => {
+      expect(expectedDigest).toBe(createMaterialAccountingPrintBindingStoreDigest(baseStore));
+      expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(baseStore);
+      expect(nextValue.unattributedUsage).toHaveLength(1);
+      return {
+        ok: true,
+        casApplied: true,
+        backend: "indexedDB",
+        key: "materialAccountingPrintBindingStore",
+        reason: "cas-applied",
+        currentDigest: expectedDigest,
+        nextDigest: createMaterialAccountingPrintBindingStoreDigest(nextValue),
+      };
+    });
+
+    const result = await commitMaterialAccountingPrintBindingStoreDurably({
+      baseStoreDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+      nextStore,
+    });
+
+    expect(result).toMatchObject({ ok: true, casApplied: true, reason: "cas-applied" });
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingPrintBindingStore",
+      expectedDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+      nextValue: nextStore,
+    }));
+    expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(nextStore);
+  });
+
+  it("PrintBinding shadow commitはCAS不一致ならmonitorDataを更新しない", async () => {
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+    const nextStore = normalizeStoredMaterialAccountingPrintBindingStore({
+      ...baseStore,
+      unattributedUsage: [{ printJobId: "job:shadow", usedLengthMm: 123 }],
+    });
+    mocks.monitorData.materialAccountingPrintBindingStore = baseStore;
+    mocks.compareAndSwapSharedValue.mockResolvedValueOnce({
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingPrintBindingStore",
+      reason: "cas-mismatch",
+      currentDigest: "digest:other",
+      nextDigest: createMaterialAccountingPrintBindingStoreDigest(nextStore),
+    });
+
+    const result = await commitMaterialAccountingPrintBindingStoreDurably({
+      baseStoreDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+      nextStore,
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "cas-mismatch" });
+    expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(baseStore);
+  });
+
+  it("PrintBinding shadow commitはlocalStorage fallbackでは成功扱いにしない", async () => {
+    mocks.idbAvailable = false;
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+
+    const result = await commitMaterialAccountingPrintBindingStoreDurably({
+      baseStoreDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+      nextStore: normalizeStoredMaterialAccountingPrintBindingStore(null),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      casApplied: false,
+      reason: "production-cas-unavailable",
+    });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("PrintBinding importはCAS成功前にruntime storeへ反映しない", async () => {
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+    const incomingStore = normalizeStoredMaterialAccountingPrintBindingStore({
+      unattributedUsage: [
+        {
+          printJobId: "job:import",
+          printPlanId: "plan:import",
+          deviceId: "device:k2",
+          usedLengthMm: 321,
+          reason: "unit-test",
+        },
+      ],
+    });
+    mocks.monitorData.materialAccountingPrintBindingStore = baseStore;
+    mocks.compareAndSwapSharedValue.mockImplementationOnce(async ({ key, expectedDigest, nextValue }) => {
+      expect(key).toBe("materialAccountingPrintBindingStore");
+      expect(expectedDigest).toBe(createMaterialAccountingPrintBindingStoreDigest(baseStore));
+      expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(baseStore);
+      expect(nextValue.unattributedUsage).toHaveLength(1);
+      return {
+        ok: true,
+        casApplied: true,
+        backend: "indexedDB",
+        key,
+        reason: "cas-applied",
+        currentDigest: expectedDigest,
+        nextDigest: createMaterialAccountingPrintBindingStoreDigest(nextValue),
+      };
+    });
+
+    await importAllData({
+      materialAccountingPrintBindingStore: incomingStore,
+    });
+
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingPrintBindingStore",
+      expectedDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+    }));
+    expect(mocks.monitorData.materialAccountingPrintBindingStore.unattributedUsage).toEqual([
+      expect.objectContaining({ printJobId: "job:import", usedLengthMm: 321 }),
+    ]);
+  });
+
+  it("PrintBinding importのCAS不一致時はruntime storeを更新しない", async () => {
+    const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(null);
+    const incomingStore = normalizeStoredMaterialAccountingPrintBindingStore({
+      unattributedUsage: [
+        {
+          printJobId: "job:import-mismatch",
+          printPlanId: "plan:import-mismatch",
+          deviceId: "device:k2",
+          usedLengthMm: 654,
+          reason: "unit-test",
+        },
+      ],
+    });
+    mocks.monitorData.materialAccountingPrintBindingStore = baseStore;
+    mocks.compareAndSwapSharedValue.mockResolvedValueOnce({
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingPrintBindingStore",
+      reason: "cas-mismatch",
+      currentDigest: "digest:other",
+      nextDigest: createMaterialAccountingPrintBindingStoreDigest(incomingStore),
+    });
+
+    await importAllData({
+      materialAccountingPrintBindingStore: incomingStore,
+    });
+
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingPrintBindingStore",
+      expectedDigest: createMaterialAccountingPrintBindingStoreDigest(baseStore),
+    }));
+    expect(mocks.monitorData.materialAccountingPrintBindingStore).toEqual(baseStore);
+  });
+
+  it("SpoolMount production commitはmount/replace operationのprecondition欠落を拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "operation-preconditions-required" });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("SpoolMount production commitはoperationがactive nextStoreから復元できない場合に拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [{ ...operation, recordRefs: [] }],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture();
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: createDurablePreconditions(),
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "operation-not-active-in-next-store" });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("SpoolMount production commitはmaterial source preconditionが変わったらCAS前に拒否する", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const mount = createDurableMountFixture();
+    const operation = createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] });
+    const nextStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...baseStore,
+      storeRevision: 1,
+      spoolMounts: [mount],
+      events: [operation],
+    });
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.materialSourceObservations = createMaterialSourceObservationFixture({ identityStrength: "stable" });
+
+    const result = await commitMaterialAccountingSpoolMountStoreDurably({
+      baseStoreDigest: baseStore.storeDigest,
+      nextStore,
+      operation,
+      preconditions: createDurablePreconditions(),
+    });
+
+    expect(result).toMatchObject({ ok: false, casApplied: false, reason: "material-source-precondition-changed" });
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalled();
+  });
+
+  it("restore済みlegacy hostSpoolMapとのcross-backend reconcile結果はCAS保護storeへ専用書き戻しする", async () => {
+    const openMountStore = createDurableMountStoreFixture();
+    mocks.monitorData.materialAccountingSpoolMountStore = openMountStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.hostSpoolMap = { "K1Max-4A1B": "spool:a" };
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+    });
+
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "legacy-spool-backend-conflict",
+      }),
+    ]));
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+      expectedDigest: openMountStore.storeDigest,
+      nextValue: mocks.monitorData.materialAccountingSpoolMountStore,
+    }));
+    expect(mocks.queueSharedWrite).not.toHaveBeenCalledWith(
+      "materialAccountingSpoolMountStore",
+      expect.anything()
+    );
+  });
+
+  it("Universal OPEN mount中のspoolはhostSpoolMap importでlegacy側へ二重装着しない", async () => {
+    const openMountStore = createDurableMountStoreFixture();
+    mocks.monitorData.materialAccountingSpoolMountStore = openMountStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.hostSpoolMap = {};
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+      hostSpoolMap: { "K1Max-4A1B": "spool:a" },
+    });
+
+    expect(mocks.monitorData.hostSpoolMap).toEqual({});
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toHaveLength(1);
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+      nextValue: expect.objectContaining({ spoolMounts: [] }),
+    }));
+  });
+
+  it("Universal reservation中のspoolはhostSpoolMap importでlegacy側へ二重装着しない", async () => {
+    mocks.monitorData.materialAccountingSpoolMountStore = createEmptyMaterialAccountingSpoolMountStore();
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.hostSpoolMap = {};
+    const reservation = reserveUniversalSpoolAssignment({
+      spoolId: "spool:a",
+      ownerId: "operation:k2:1a",
+      materialSourceId: "material-source:serial-k2:cfs-1:slot-0",
+    });
+    expect(reservation.ok).toBe(true);
+
+    try {
+      await importAllData({
+        filamentSpools: [{ id: "spool:a" }],
+        hostSpoolMap: { "K1Max-4A1B": "spool:a" },
+      });
+    } finally {
+      reservation.release();
+    }
+
+    expect(mocks.monitorData.hostSpoolMap).toEqual({});
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+  });
+
+  it("SpoolMount importはCAS成功前にruntime storeへ反映しない", async () => {
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const importedMountStore = createDurableMountStoreFixture();
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.compareAndSwapSharedValue.mockImplementationOnce(async ({ expectedDigest, nextValue }) => {
+      expect(expectedDigest).toBe(baseStore.storeDigest);
+      expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+      expect(nextValue.spoolMounts).toHaveLength(1);
+      return {
+        ok: true,
+        casApplied: true,
+        backend: "indexedDB",
+        key: "materialAccountingSpoolMountStore",
+        reason: "cas-applied",
+        currentDigest: baseStore.storeDigest,
+        nextDigest: nextValue.storeDigest,
+      };
+    });
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+      materialAccountingSpoolMountStore: importedMountStore,
+    });
+
+    expect(mocks.compareAndSwapSharedValue).toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+      expectedDigest: baseStore.storeDigest,
+    }));
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toHaveLength(1);
+  });
+
+  it("SpoolMount importはCAS未使用環境ではruntime authorityへ反映しない", async () => {
+    mocks.idbAvailable = false;
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const importedMountStore = createDurableMountStoreFixture();
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+      materialAccountingSpoolMountStore: importedMountStore,
+    });
+
+    expect(mocks.compareAndSwapSharedValue).not.toHaveBeenCalledWith(expect.objectContaining({
+      key: "materialAccountingSpoolMountStore",
+    }));
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+  });
+
+  it("localStorage fallback restoreはSpoolMount storeをruntime authorityへ反映しない", () => {
+    mocks.idbAvailable = false;
+    const baseStore = createEmptyMaterialAccountingSpoolMountStore();
+    const restoredMountStore = createDurableMountStoreFixture();
+    mocks.monitorData.materialAccountingSpoolMountStore = baseStore;
+    globalThis.localStorage.setItem("3dpmon-global", JSON.stringify({
+      filamentSpools: [{ id: "spool:a" }],
+      materialAccountingSpoolMountStore: restoredMountStore,
+    }));
+
+    restoreUnifiedStorage();
+
+    expect(mocks.monitorData.materialAccountingSpoolMountStore).toEqual(baseStore);
+  });
+
+  it("incoming Universal OPEN mountだけではlegacy hostSpoolMap importを黙って捨てない", async () => {
+    const importedMountStore = createDurableMountStoreFixture();
+    mocks.monitorData.materialAccountingSpoolMountStore = createEmptyMaterialAccountingSpoolMountStore();
+    mocks.monitorData.filamentSpools = [{ id: "spool:a" }];
+    mocks.monitorData.hostSpoolMap = {};
+
+    await importAllData({
+      filamentSpools: [{ id: "spool:a" }],
+      hostSpoolMap: { "K1Max-4A1B": "spool:a" },
+      materialAccountingSpoolMountStore: importedMountStore,
+    });
+
+    expect(mocks.monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool:a" });
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+    expect(mocks.monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "spoolMount",
+        reason: "legacy-spool-backend-conflict",
+      }),
+    ]));
+  });
 });
+
+/**
+ * テスト用SpoolMount operation eventを生成する。
+ *
+ * @function createMountOperationEvent
+ * @param {Object} overrides - 上書き値。
+ * @returns {Object} operation event。
+ */
+function createMountOperationEvent(overrides = {}) {
+  const operationId = overrides.operationId || "operation:mount:test";
+  const payload = overrides.payload || {
+    kind: "operator-mount",
+    operatorActionId: "action:mount:test",
+    operationId,
+    materialSourceId: "source:k2:cfs:1a",
+    spoolId: "spool:a",
+  };
+  return {
+    eventId: overrides.eventId || "event:mount:test",
+    kind: overrides.kind || "operator-mount",
+    operatorActionId: overrides.operatorActionId || "action:mount:test",
+    operationId,
+    payload,
+    payloadDigest: overrides.payloadDigest || createMaterialAccountingSpoolMountOperationPayloadDigest(payload),
+    recordRefs: overrides.recordRefs || [],
+    createdAt: overrides.createdAt || "2026-09-01T04:40:00.000Z",
+    actor: overrides.actor || "operator",
+  };
+}
+
+/**
+ * durable commit test用のSpoolMount recordを生成する。
+ *
+ * @function createDurableMountFixture
+ * @returns {Object} SpoolMount record。
+ */
+function createDurableMountFixture() {
+  return createSpoolMountRecord({
+    mountId: "mount:k2:1a:spool-a",
+    materialSourceId: "source:k2:cfs:1a",
+    spoolId: "spool:a",
+    mountOperationId: "operation:mount:test",
+    openedAt: "2026-09-01T04:40:00.000Z",
+    openedBy: "operator",
+    verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+    sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+  });
+}
+
+/**
+ * durable commit test用のcreation event付きSpoolMount storeを生成する。
+ *
+ * @function createDurableMountStoreFixture
+ * @returns {Object} 正規化済みSpoolMount store。
+ */
+function createDurableMountStoreFixture() {
+  const mount = createDurableMountFixture();
+  return normalizeStoredMaterialAccountingSpoolMountStore({
+    spoolMounts: [mount],
+    events: [createMountOperationEvent({ recordRefs: [mount.mountId, mount.mountOperationId] })],
+  });
+}
+
+/**
+ * durable commit test用のMaterialSource観測storeを生成する。
+ *
+ * @function createMaterialSourceObservationFixture
+ * @param {Object=} overrides - 上書き値。
+ * @returns {Object} materialSourceObservations store。
+ */
+function createMaterialSourceObservationFixture(overrides = {}) {
+  return {
+    schemaVersion: 1,
+    byDeviceId: {
+      "device:k2": {
+        deviceId: "device:k2",
+        latestBySourceId: {
+          "source:k2:cfs:1a": {
+            sourceId: "source:k2:cfs:1a",
+            materialSourceId: "source:k2:cfs:1a",
+            kind: "cfs-slot",
+            unitId: "unit:k2:cfs:1",
+            unitIndex: 1,
+            boxId: 1,
+            slotId: 0,
+            identityStrength: overrides.identityStrength || "provisional",
+            materialSourceIdentityStrength: overrides.identityStrength || "provisional",
+          },
+        },
+      },
+    },
+  };
+}
+
+/**
+ * durable commit test用のprecondition群を生成する。
+ *
+ * @function createDurablePreconditions
+ * @returns {Object} precondition群。
+ */
+function createDurablePreconditions() {
+  const spool = { id: "spool:a" };
+  const noLegacyOccupancy = null;
+  const locator = createMaterialSourceLocator({
+    kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+    index: null,
+    unitIndex: 1,
+    boxId: 1,
+    slotIndex: 0,
+    protocolSlotId: "0",
+  });
+  const sourceIdentity = createMaterialSourceIdentity({
+    deviceId: "device:k2",
+    unitId: "unit:k2:cfs:1",
+    kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+    slotIndex: locator.slotIndex,
+    index: locator.index,
+  });
+  const sourceBinding = createMaterialSourceRecord({
+    deviceId: "device:k2",
+    unitId: "unit:k2:cfs:1",
+    kind: MATERIAL_SOURCE_KIND.CFS_SLOT,
+    locator,
+    identity: sourceIdentity,
+    identityStrength: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    displayLabel: "1A",
+    aliases: ["source:k2:cfs:1a"],
+  });
+  return {
+    materialSource: {
+      deviceId: "device:k2",
+      materialSourceId: sourceBinding.materialSourceId,
+      sourceIdentityDigest: createPrinterCoreV3DeterministicId("material-source-binding", [
+        sourceBinding.deviceId,
+        sourceBinding.materialSourceId,
+        sourceBinding.unitId,
+        sourceBinding.kind,
+        sourceBinding.identityStrength,
+        sourceBinding.identity,
+        sourceBinding.locator,
+      ]),
+    },
+    managedSpool: {
+      spoolId: "spool:a",
+      digest: `fnv1a128:${createPrinterCoreV3DeterministicId("material-accounting-managed-spool-precondition", [
+        stableStringifyPrinterCoreV3Value(spool),
+      ])}`,
+      deleted: false,
+    },
+    legacyOccupancy: {
+      spoolId: "spool:a",
+      expectedDeviceId: "device:k2",
+      occupied: false,
+      digest: `fnv1a128:${createPrinterCoreV3DeterministicId("material-accounting-legacy-occupancy-precondition", [
+        stableStringifyPrinterCoreV3Value(noLegacyOccupancy),
+      ])}`,
+    },
+  };
+}

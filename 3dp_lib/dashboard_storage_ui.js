@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし（DOMイベント経由で動作）
  *
- * @version 1.390.1424 (PR #435)
+ * @version 1.390.1653 (PR #440)
  * @since   1.390.198 (PR #89)
- * @lastModified 2026-08-28 01:50:17
+ * @lastModified 2026-09-02 16:50:21
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -33,7 +33,10 @@ import {
   exportAllData,
   importAllData,
   importHistoryOnly,
-  saveUnifiedStorage
+  saveUnifiedStorage,
+  resolvePrintHistoryRetentionLimit,
+  applyConfiguredPrintHistoryRetentionToAllMachines,
+  MAX_PRINT_HISTORY
 } from "./dashboard_storage.js";
 import { monitorData } from "./dashboard_data.js";
 import { setChartWindowMinutes } from "./dashboard_chart.js";
@@ -52,6 +55,28 @@ function panelToast(msg, isErr = false) {
   note.textContent = msg;
   panelBody.appendChild(note);
   setTimeout(() => note.remove(), 3000);
+}
+
+/**
+ * 現在の画面がリレー子ウィンドウとして動作しているかを判定する。
+ *
+ * 【詳細説明】
+ * - readonly / satellite の子ウィンドウは親から履歴・設定を受信する側であり、
+ *   印刷履歴保持設定をローカル確定すると親権威の履歴と子ローカル履歴が分岐する。
+ * - `window.getRelayMode()` を優先し、古い初期化経路で `_3dpmonRelayChild` だけが
+ *   立っている場合も子として扱う。ただし parent / standalone は明示的に除外する。
+ *
+ * @private
+ * @function isRelayChildStorageWindow
+ * @returns {boolean} リレー子なら true。
+ */
+function isRelayChildStorageWindow() {
+  const mode = typeof window !== "undefined" && typeof window.getRelayMode === "function"
+    ? window.getRelayMode()
+    : null;
+  if (mode === "readonly" || mode === "satellite") return true;
+  if (mode === "parent" || mode === "standalone") return false;
+  return typeof window !== "undefined" && window._3dpmonRelayChild === true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -131,13 +156,37 @@ export function initStorageUI() {
   // ※ これまで setting-log-max-lines は未配線（飾りだけ）だった。両者を即時保存で配線する。
   const elLogMax = document.getElementById("setting-log-max-lines");
   const elChartWin = document.getElementById("setting-chart-window-min");
+  const elPrintHistoryRetention = document.getElementById("setting-print-history-retention-enabled");
+  const elPrintHistoryMax = document.getElementById("setting-print-history-max-entries");
+  const elPrintHistoryStatus = document.getElementById("setting-print-history-retention-status");
   const elLogRaw = document.getElementById("setting-log-received-raw");
   const elNegativeRemaining = document.getElementById("setting-negative-remaining-display");
 
   /** 入力値を保存値で初期化する（モーダル展開時に呼ぶ） */
   const _syncRetentionInputs = () => {
+    const printHistoryLimit = resolvePrintHistoryRetentionLimit(monitorData.appSettings);
+    const relayChild = isRelayChildStorageWindow();
     if (elLogMax) elLogMax.value = String(monitorData.appSettings.logMaxLines ?? 1000);
     if (elChartWin) elChartWin.value = String(monitorData.appSettings.chartWindowMin ?? 15);
+    if (elPrintHistoryRetention) {
+      elPrintHistoryRetention.checked = printHistoryLimit > 0;
+      elPrintHistoryRetention.disabled = relayChild;
+    }
+    if (elPrintHistoryMax) {
+      elPrintHistoryMax.value = String(printHistoryLimit > 0 ? printHistoryLimit : MAX_PRINT_HISTORY);
+      elPrintHistoryMax.disabled = relayChild || printHistoryLimit <= 0;
+    }
+    if (elPrintHistoryStatus) {
+      if (relayChild) {
+        elPrintHistoryStatus.textContent = printHistoryLimit > 0
+          ? `親ウィンドウ設定を表示中: ${printHistoryLimit}件を超えた古い印刷履歴を親側で削除します。`
+          : "親ウィンドウ設定を表示中: 印刷履歴は件数上限では自動削除しません。";
+      } else {
+        elPrintHistoryStatus.textContent = printHistoryLimit > 0
+          ? `ON: ${printHistoryLimit}件を超えた古い印刷履歴を削除します。`
+          : "OFF: 印刷履歴は件数上限では自動削除しません。";
+      }
+    }
     if (elLogRaw) elLogRaw.checked = monitorData.appSettings.logReceivedRaw === true;
     if (elNegativeRemaining) {
       elNegativeRemaining.value = monitorData.appSettings.negativeRemainingDisplayMode === "clamp-zero"
@@ -145,6 +194,65 @@ export function initStorageUI() {
         : "show-negative";
     }
   };
+
+  /**
+   * 印刷履歴保持件数入力をstorage側と同じstrict規則で解釈する。
+   *
+   * 【詳細説明】
+   * - 削除上限は保存直後に既存履歴へ適用されるため、`parseInt("1e3", 10) === 1`のような
+   *   JavaScriptの途中解釈を許すと意図しない大量削除につながる。
+   * - 入力値は文字列のままstorage側normalizerへ渡し、十進整数として明確な値だけを採用する。
+   *
+   * @private
+   * @function _resolvePrintHistoryRetentionInput
+   * @returns {number} 1以上の保持上限。無効入力は0。
+   */
+  const _resolvePrintHistoryRetentionInput = () => resolvePrintHistoryRetentionLimit({
+    printHistoryMaxEntries: elPrintHistoryMax?.value ?? ""
+  });
+
+  const _savePrintHistoryRetention = () => {
+    if (!elPrintHistoryRetention) return;
+    if (isRelayChildStorageWindow()) {
+      _syncRetentionInputs();
+      panelToast("リレー子では印刷履歴保持設定を変更できません。親ウィンドウで変更してください。", true);
+      return;
+    }
+    if (elPrintHistoryRetention.checked) {
+      const limit = _resolvePrintHistoryRetentionInput();
+      if (limit <= 0) {
+        _syncRetentionInputs();
+        panelToast("印刷履歴保持件数は1以上の十進整数で入力してください。", true);
+        return;
+      }
+      monitorData.appSettings.printHistoryMaxEntries = limit;
+    } else {
+      monitorData.appSettings.printHistoryMaxEntries = 0;
+    }
+    _syncRetentionInputs();
+    const result = applyConfiguredPrintHistoryRetentionToAllMachines();
+    saveUnifiedStorage(true);
+    const limit = resolvePrintHistoryRetentionLimit(monitorData.appSettings);
+    panelToast(
+      limit > 0
+        ? `印刷履歴自動削除: ${limit}件（削除 ${result.removedJobs}件）`
+        : "印刷履歴自動削除: OFF"
+    );
+  };
+
+  if (elPrintHistoryRetention) {
+    elPrintHistoryRetention.addEventListener("change", _savePrintHistoryRetention);
+  }
+
+  if (elPrintHistoryMax) {
+    elPrintHistoryMax.addEventListener("change", () => {
+      if (!elPrintHistoryRetention?.checked) {
+        _syncRetentionInputs();
+        return;
+      }
+      _savePrintHistoryRetention();
+    });
+  }
 
   if (elLogRaw) {
     elLogRaw.addEventListener("change", () => {
@@ -194,6 +302,10 @@ export function initStorageUI() {
       }
     });
   }
+
+  // 初期表示時点でも親/子モードと保存値を反映する。モーダルが既に開いた状態で
+  // initStorageUI() された場合、MutationObserver だけでは同期されないため。
+  _syncRetentionInputs();
 
   /* ---------------- パネル開閉 / カスタムイベント ---------------- */
 

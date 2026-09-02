@@ -33,6 +33,7 @@ vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
   loadPrintVideos: vi.fn(() => []),
   savePrintVideos: vi.fn(),
   saveUnifiedStorage: vi.fn(),
+  applyPrintHistoryRetention: vi.fn((history) => history),
   MAX_PRINT_HISTORY: 100,
 }));
 vi.mock("../../3dp_lib/dashboard_utils.js", () => ({
@@ -219,6 +220,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
           state: "observed",
           deviceId: "serial:k2-pro-69e7",
           sessionId: "session:k2-pro-69e7:1",
+          connectionGeneration: 3,
           lastSequence: 44,
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,
@@ -310,6 +312,7 @@ describe("renderHistoryTable — 描画律速対策（lazy画像＋イベント�
           state: "observed",
           deviceId: "serial:k2-pro-69e7",
           sessionId: "session:k2-pro-69e7:1",
+          connectionGeneration: 3,
           lastSequence: 44,
           lastObservedAt: nowIso,
           materialProviderLastObservedAt: nowIso,

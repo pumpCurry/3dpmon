@@ -3,9 +3,9 @@
  * @description
  * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
  *
- * @version 1.390.1560 (PR #439)
+ * @version 1.390.1620 (PR #440)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-31 20:19:55
+ * @lastModified 2026-09-02 01:07:00
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -681,6 +681,177 @@ describe("Printer Core v3 command authority contract", () => {
     expect(completedStateResult.status).toBe("rejected");
     expect(completedStateResult.error.errors).toContain("cfs-control-printer-idle-not-confirmed");
     expect(completedStateTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandはidle表示でもpartial printer statusなら送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const partialStatusTransport = vi.fn();
+    const unknownCoreStateTransport = vi.fn();
+    const partialStatusResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {
+          source: {
+            snapshotCompleteness: "partial",
+          },
+          print: {
+            stateLabel: "idle",
+          },
+        },
+      }),
+      sendTransport: partialStatusTransport,
+    });
+    const unknownCoreStateResult = await dispatchPrinterCommand(request, {
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        observedState: {
+          print: {
+            stateLabel: "idle",
+            activityState: "unknown-core-state",
+            coreStateComplete: false,
+          },
+        },
+      }),
+      sendTransport: unknownCoreStateTransport,
+    });
+
+    expect(partialStatusResult.status).toBe("rejected");
+    expect(partialStatusResult.error.errors).toContain("cfs-control-printer-idle-observation-incomplete");
+    expect(partialStatusTransport).not.toHaveBeenCalled();
+    expect(unknownCoreStateResult.status).toBe("rejected");
+    expect(unknownCoreStateResult.error.errors).toContain("cfs-control-printer-idle-observation-incomplete");
+    expect(unknownCoreStateTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandはprinter idle observationが期限切れなら送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      contextTtlMs: 1000,
+      nowMs: () => Date.parse("2026-09-02T01:07:10.000+09:00"),
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        createdAt: "2026-09-02T01:07:10.000+09:00",
+        connectionGeneration: 7,
+        printerIdleObservation: {
+          status: "observed",
+          activityState: "idle",
+          coreStateComplete: true,
+          snapshotCompleteness: "complete",
+          observedAt: "2026-09-02T01:06:00.000+09:00",
+          receivedAt: "2026-09-02T01:06:00.000+09:00",
+          expiresAt: "2026-09-02T01:06:05.000+09:00",
+          sessionId: "session:1",
+          connectionGeneration: 7,
+          baselineSequence: 10,
+          lastAppliedSequence: 10,
+          appliedDeltaCount: 0,
+          fresh: false,
+          idle: true,
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-control-printer-idle-observation-stale");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandはprinter idle observationのsessionやgenerationが一致しなければ送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      nowMs: () => Date.parse("2026-09-02T01:07:10.000+09:00"),
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        createdAt: "2026-09-02T01:07:10.000+09:00",
+        connectionGeneration: 7,
+        printerIdleObservation: {
+          status: "observed",
+          activityState: "idle",
+          coreStateComplete: true,
+          snapshotCompleteness: "complete",
+          observedAt: "2026-09-02T01:07:09.000+09:00",
+          receivedAt: "2026-09-02T01:07:09.000+09:00",
+          expiresAt: "2026-09-02T01:07:15.000+09:00",
+          sessionId: "session:old",
+          connectionGeneration: 6,
+          baselineSequence: 10,
+          lastAppliedSequence: 10,
+          appliedDeltaCount: 0,
+          fresh: true,
+          idle: true,
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-control-printer-idle-session-mismatch");
+    expect(result.error.errors).toContain("cfs-control-printer-idle-generation-mismatch");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
+  it("CFS physical commandはpartial status deltaでもfresh assembled idle observationがあれば送信できる", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const result = await dispatchPrinterCommand(request, {
+      nowMs: () => Date.parse("2026-09-02T01:07:10.000+09:00"),
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        createdAt: "2026-09-02T01:07:10.000+09:00",
+        connectionGeneration: 7,
+        observedState: {
+          print: {
+            stateLabel: "idle",
+            snapshotCompleteness: "partial",
+            activityState: "unknown-core-state",
+            coreStateComplete: false,
+          },
+        },
+        printerIdleObservation: {
+          status: "assembled",
+          activityState: "idle",
+          coreStateComplete: true,
+          snapshotCompleteness: "complete",
+          observedAt: "2026-09-02T01:07:09.000+09:00",
+          receivedAt: "2026-09-02T01:07:09.000+09:00",
+          expiresAt: "2026-09-02T01:07:15.000+09:00",
+          sessionId: "session:1",
+          connectionGeneration: 7,
+          baselineSequence: 10,
+          lastAppliedSequence: 11,
+          appliedDeltaCount: 1,
+          fresh: true,
+          idle: true,
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("acknowledged");
+    expect(sendTransport).toHaveBeenCalledTimes(1);
   });
 
   it("CFS physical commandはtargetが選択済みと確認できなければ送信しない", async () => {

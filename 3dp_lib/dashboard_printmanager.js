@@ -22,9 +22,9 @@
  * - {@link saveVideos}：動画一覧保存
  * - {@link jobsToRaw}：内部モデル→生データ変換
  *
-* @version 1.390.1420 (PR #434)
+ * @version 1.390.1668 (PR #440)
 * @since   1.390.197 (PR #88)
-* @lastModified 2026-08-27 12:22:38
+* @lastModified 2026-09-02 19:52:10
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -39,7 +39,8 @@ import {
   loadPrintVideos,
   savePrintVideos,
   saveUnifiedStorage,
-  MAX_PRINT_HISTORY
+  applyPrintHistoryRetention,
+  recordPrintHistoryFetchCoverage
 } from "./dashboard_storage.js";
 
 import { formatEpochToDateTime, formatDuration, normalizeJobId } from "./dashboard_utils.js";
@@ -92,6 +93,15 @@ import {
   mergeCapabilitySets,
   PRINTER_CAPABILITIES
 } from "./printer_core/dashboard_capabilities.js";
+import {
+  forgetMaterialAccountingPrintStartRequest,
+  markMaterialAccountingPrintStartRequestSubmitted,
+  rememberMaterialAccountingPrintStartRequest,
+} from "./printer_core/dashboard_material_accounting_print_binding_live_bridge.js";
+import {
+  createMaterialBindingCommandBinding,
+  createMaterialBindingPlan,
+} from "./printer_core/dashboard_material_binding_plan.js";
 
 /**
  * 現在の使用量表示単位を返す。
@@ -273,18 +283,42 @@ function _patchHistoryFilament(raw, hostname) {
  * @private
  * @param {?string} spoolId - 再計算するスプールID（falsy なら何もしない）
  * @param {number} ts - 更新時刻 ms
- * @returns {void}
+ * @param {Object} [options] - 再計算文脈。
+ * @param {Iterable<string>|string=} [options.requiredHosts] - 現在の帰属から外れても検査必須のhost。
+ * @returns {Promise<?Object>} 再計算結果。HALT時も戻り値で通知済み状態を返す。
  */
-function _recomputeAndRefreshSpool(spoolId, ts) {
-  if (!spoolId) return;
+async function _recomputeAndRefreshSpool(spoolId, ts, options = {}) {
+  if (!spoolId) return null;
+  let result = null;
   try {
-    recomputeSpoolFromManualEdit(spoolId, { ts });
+    result = recomputeSpoolFromManualEdit(spoolId, { ts, requiredHosts: options.requiredHosts });
   } catch (e) {
     console.warn("[printmanager] recomputeSpoolFromManualEdit 失敗:", e?.message || e);
-    return;
+    return null;
+  }
+  if (
+    result?.mode === "halt-no-authority-host" ||
+    result?.mode === "halt-incomplete-history" ||
+    result?.mode === "halt-incomplete-total-history"
+  ) {
+    const message = result.mode === "halt-no-authority-host"
+      ? "対象スプールに紐づく履歴確認元がないため、フィラメント残量の総量再計算を保留しました。"
+      : (
+        result.mode === "halt-incomplete-total-history"
+          ? "印刷履歴全体の完全性を確認できないため、フィラメント残量の総量再計算を保留しました。"
+          : "印刷履歴の現在アンカー被覆を確認できないため、フィラメント残量の再計算を保留しました。"
+      );
+    pushLog(message, "warn", false);
+    try {
+      const { showAlert } = await import("./dashboard_notification_manager.js");
+      showAlert(message, "warn");
+    } catch (error) {
+      console.warn("[printmanager] recompute halt notification skipped:", error?.message || error);
+    }
+    return result;
   }
   const sp = getSpoolById(spoolId);
-  if (!sp) return;
+  if (!sp) return result;
   // 装着中ホストの残量表示を更新（dirty マーク → 次の描画サイクルで反映）
   const map = monitorData.hostSpoolMap || {};
   for (const [h, sid] of Object.entries(map)) {
@@ -292,6 +326,7 @@ function _recomputeAndRefreshSpool(spoolId, ts) {
       setStoredDataForHost(h, "filamentRemainingMm", sp.remainingLengthMm, true);
     }
   }
+  return result;
 }
 
 /**
@@ -351,6 +386,26 @@ const MERGE_IGNORE_ZERO_FIELDS = new Set([
   // 使用フィラメント量は印刷途中では 0 になるため保持値を優先
   "materialUsedMm"
 ]);
+
+/**
+ * source別materialUsed CSV候補をlossless保存用に正規化する。
+ *
+ * 【詳細説明】
+ * - K2/CFSはtotal使用量とは別に `materialUsed:"3210,6543"` のようなsource順CSVを返す。
+ * - 空文字や未観測値はnullにし、runtimeが「未観測」と「0mm」を混同しないようにする。
+ *
+ * @private
+ * @function normalizeMaterialUsedSourceCsv
+ * @param {*} value - materialUsed CSV候補
+ * @returns {string|null} 正規化済みCSV、またはnull
+ */
+function normalizeMaterialUsedSourceCsv(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const text = String(value).trim();
+  return text ? text : null;
+}
 
 // 最後に保存した JSON 文字列のキャッシュ（差分チェック用、per-host）
 const _lastSavedJsonMap = new Map();
@@ -1376,8 +1431,14 @@ function createK2CfsPrintStartRequestFromUi(options) {
       },
       startContext: {
         sessionId: shadowRecord.sessionId,
+        connectionGeneration: shadowRecord.connectionGeneration ?? shadowRecord.printerCoreV3ConnectionGeneration ?? null,
         uploadGeneration: fileIdentity.uploadGeneration,
         receiptId: null,
+        baselinePrintJobId: String(machine?.printStore?.current?.id || getCurrentPrintID(options.hostname) || "").trim() || null,
+        baselinePrintStartTime: machine?.printStore?.current?.startTime ||
+          machine?.printStore?.current?.firstObservedAt ||
+          machine?.storedData?.printStartTime?.rawValue ||
+          null,
       },
     },
     expectedState: [{
@@ -1392,6 +1453,41 @@ function createK2CfsPrintStartRequestFromUi(options) {
 }
 
 /**
+ * K2/CFS印刷開始の材料割当planをUI選択から構築する。
+ *
+ * 【詳細説明】
+ * - transport requestは実機へ送るremote file identityを持ち、MaterialBindingPlanは3DPmon内の
+ *   source/spool/tool対応をprint-start観測へbindするためだけに保持する。
+ * - 既存remote G-codeではPrintPlan用のG-code content/upload receiptを持てないため、
+ *   `validatePrintPlan()`を弱めず材料割当専用contractへ分離する。
+ *
+ * @private
+ * @function createK2CfsMaterialBindingPlanFromPrintStartRequest
+ * @param {object} request - K2/CFS print-start command request。
+ * @returns {object} MaterialBindingPlan。
+ */
+function createK2CfsMaterialBindingPlanFromPrintStartRequest(request) {
+  const payload = request?.payload || {};
+  return createMaterialBindingPlan({
+    deviceId: request.deviceId,
+    bindingPlanId: payload.printPlanId,
+    asset: {
+      path: payload.asset?.path,
+      fileHash: payload.asset?.fileHash,
+      uploadGeneration: payload.startContext?.uploadGeneration || null,
+    },
+    toolAssignments: payload.toolAssignments || [],
+    startContext: {
+      sessionId: request.sessionId,
+      connectionGeneration: payload.startContext?.connectionGeneration || request.connectionGeneration || null,
+      uploadGeneration: payload.startContext?.uploadGeneration || null,
+    },
+    commandBinding: createMaterialBindingCommandBinding(request),
+    createdAt: request.createdAt || null,
+  });
+}
+
+/**
  * K2/CFS印刷開始transportを送信する。
  *
  * 【詳細説明】
@@ -1402,15 +1498,20 @@ function createK2CfsPrintStartRequestFromUi(options) {
  * @private
  * @param {string} hostname - 対象ホスト名
  * @param {object} request - Printer Core command request風object
+ * @param {object=} options - 送信直前hook。
+ * @param {Function=} options.onBeforeTransportDispatch - transport plan検証後、実送信前に呼ぶhook。
  * @returns {Promise<object>} transport送信結果
  */
-async function sendK2CfsPrintStartRequest(hostname, request) {
+async function sendK2CfsPrintStartRequest(hostname, request, options = {}) {
   const dispatcher = createBoundPrinterCommandDispatcher({
     getSendTimeContext: (currentRequest) => createK2CfsPrintSendTimeContext(hostname, currentRequest),
     sendTransport: async (currentRequest) => {
       const plan = createK2CfsCommandTransportPlan(currentRequest);
       if (!plan.ok) {
         throw new Error(`k2-cfs-print-plan-rejected:${plan.reason}`);
+      }
+      if (typeof options.onBeforeTransportDispatch === "function") {
+        await options.onBeforeTransportDispatch({ request: currentRequest, transportPlan: plan });
       }
       const transportResponse = await sendK2CfsCommandTransportPlan(plan, async (frame, meta) => {
         await sendCommand(frame.method, frame.params, hostname);
@@ -1506,6 +1607,8 @@ function createMaterialPrintContext(hostname) {
  *   startTime:string,
  *   finishTime?:string|null,
  *   materialUsedMm:number,
+ *   materialUsedSourceCsv?:string|null,
+ *   materialUsedTotalObserved?:boolean,
  *   thumbUrl:string,
  *   startway?:number,
  *   size?:number,
@@ -1544,8 +1647,14 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
   const printfinish    = _finished
     ? (raw.printfinish != null ? Number(raw.printfinish) : (useTimeSec > 0 ? 1 : 0))
     : null;
-  // 材料使用量: 機器報告値をそのまま保持（丸めない）
-  const materialUsedMm = Number(raw.usagematerial || 0);
+  // 材料使用量: total報告とK2/CFS source別CSVは意味が違うため分離して保持する。
+  const materialUsedTotalObserved = raw.usagematerial !== undefined &&
+    raw.usagematerial !== null &&
+    raw.usagematerial !== "";
+  const materialUsedMm = materialUsedTotalObserved ? Number(raw.usagematerial) : 0;
+  const materialUsedSourceCsv = normalizeMaterialUsedSourceCsv(
+    raw.materialUsedSourceCsv ?? raw.materialUsed ?? raw.raw?.materialUsed
+  );
 
   // サムネイルURL: ホスト種別に応じて解決（Moonrakerはメタ/ファイル一覧キャッシュ由来、
   // 不明時はローカル代替。K1は従来の humbnail パス）。
@@ -1582,6 +1691,9 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
     finishTime,
     printfinish,
     materialUsedMm,
+    materialUsedSourceCsv,
+    materialUsed: materialUsedSourceCsv,
+    materialUsedTotalObserved,
     thumbUrl,
     startway,
     size,
@@ -1606,13 +1718,14 @@ export function parseRawHistoryEntry(raw, baseUrl, host) {
  * 生配列からフィルタ・ソート・制限をかけた履歴リストを返す
  * @param {Array<Object>} rawArray - 元データ配列
  * @param {string} baseUrl         - サムネイル取得用ベース URL
+ * @param {string} host            - 対象プリンタホスト名
  * @returns {Array<ReturnType<typeof parseRawHistoryEntry>>}
  * @description
  *  `filename` を持たない履歴エントリでも `filamentInfo` が存在する場合は
  *  フィルタを通過させ、スプール情報のみの更新を反映できるようにする。
  */
 export function parseRawHistoryList(rawArray, baseUrl, host) {
-  return rawArray
+  const parsed = rawArray
     // ★ ID:0/null 正規化: 無効ID（0/null/負数）のエントリは履歴として扱わない。
     //   電源投入直後の stale push 由来のゴースト（id=0 = epoch 1970）を
     //   パース境界で遮断する（過去バージョンで保存済みのゴーストも再パース時に消える）。
@@ -1622,8 +1735,9 @@ export function parseRawHistoryList(rawArray, baseUrl, host) {
       (Array.isArray(r.filamentInfo) && r.filamentInfo.length > 0)
     )
     .map(r => parseRawHistoryEntry(r, baseUrl, host))
-    .sort((a, b) => b.id - a.id)
-    .slice(0, MAX_PRINT_HISTORY);
+    .sort((a, b) => b.id - a.id);
+  recordPrintHistoryFetchCoverage(host, parsed);
+  return applyPrintHistoryRetention(parsed, undefined, { host });
 }
 
 // ---------------------- ストレージ操作 ----------------------
@@ -1739,6 +1853,9 @@ export function jobsToRaw(jobs) {
                          ? Math.max(0, finishEpoch - startEpoch)
                          : 0,  // ★ startEpoch=0 のとき finishEpoch がそのまま usagetime になるバグ防止
         usagematerial: job.materialUsedMm,
+        ...(job.materialUsedSourceCsv !== undefined && { materialUsedSourceCsv: job.materialUsedSourceCsv }),
+        ...(job.materialUsed !== undefined && { materialUsed: job.materialUsed }),
+        ...(job.materialUsedTotalObserved !== undefined && { materialUsedTotalObserved: job.materialUsedTotalObserved }),
         // ★ printfinish: finishTime(=完了)が無ければ未確定(null)。あれば明示値(1/0)をそのまま。
         //   印刷中ジョブ(finishTime なし)は保存値が誤って 0/1 でも表示で未確定(…)に矯正する
         //   （K1 履歴再取得の早すぎる result / マージ復元によるストアの誤確定を描画側で吸収）。
@@ -2074,9 +2191,11 @@ export async function refreshHistory(
       mergedMap.set(String(j.id), j);
     }
   });
-  const jobs = Array.from(mergedMap.values())
-    .sort((a, b) => Number(b.id) - Number(a.id))
-    .slice(0, MAX_PRINT_HISTORY);
+  const jobs = applyPrintHistoryRetention(
+    Array.from(mergedMap.values()).sort((a, b) => Number(b.id) - Number(a.id)),
+    undefined,
+    { host }
+  );
 
   let merged = false;
   const state = Number(machine?.runtimeData?.state ?? 0);
@@ -2143,9 +2262,11 @@ export async function refreshHistory(
       rawMap.set(j.id, jobsToRaw([j])[0]);
     }
   });
-  const mergedRaw = Array.from(rawMap.values())
-    .sort((a, b) => b.id - a.id)
-    .slice(0, MAX_PRINT_HISTORY);
+  const mergedRaw = applyPrintHistoryRetention(
+    Array.from(rawMap.values()).sort((a, b) => b.id - a.id),
+    undefined,
+    { host }
+  );
   renderHistoryTable(mergedRaw, baseUrl, host);
 }
 
@@ -2252,9 +2373,11 @@ export function updateHistoryList(
       merged = true;
     }
   });
-  const jobs = Array.from(mergedMap.values())
-    .sort((a, b) => Number(b.id) - Number(a.id))
-    .slice(0, MAX_PRINT_HISTORY);
+  const jobs = applyPrintHistoryRetention(
+    Array.from(mergedMap.values()).sort((a, b) => Number(b.id) - Number(a.id)),
+    undefined,
+    { host }
+  );
 
   // ★ 未完了ジョブ(終了時刻なし)は成否を確定しない＝printfinish=null（誤計上防止・タイミング非依存）。
   //   K1 は履歴再取得で印刷中エントリへ早すぎる printfinish=0 を付け(usagetime=0/finishTime=null)、
@@ -2787,8 +2910,8 @@ async function _handleHistorySpoolEdit(raw, baseUrl, hostname, sid) {
   // 保存済み履歴を直接更新（updateHistoryList の再パースでデータ破壊を防ぐ）
   _patchHistoryFilament(raw, hostname);
   const recoTs = Date.now();
-  _recomputeAndRefreshSpool(sid, recoTs);          // 旧スプール（帰属が外れた）
-  _recomputeAndRefreshSpool(newSp.id, recoTs);     // 新スプール（帰属が付いた）
+  await _recomputeAndRefreshSpool(sid, recoTs, { requiredHosts: [hostname] });      // 旧スプール（帰属が外れた）
+  await _recomputeAndRefreshSpool(newSp.id, recoTs, { requiredHosts: [hostname] }); // 新スプール（帰属が付いた）
   saveUnifiedStorage(true);
   const updatedSp = getSpoolById(newSp.id) || newSp;
   // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
@@ -2829,7 +2952,7 @@ async function _handleHistorySpoolAssign(raw, baseUrl, hostname) {
   _applyFilamentToRaw(raw, getSpoolById(newSp.id) || newSp);
   // 保存済み履歴を直接更新
   _patchHistoryFilament(raw, hostname);
-  _recomputeAndRefreshSpool(newSp.id, Date.now());
+  await _recomputeAndRefreshSpool(newSp.id, Date.now(), { requiredHosts: [hostname] });
   saveUnifiedStorage(true);
   const updatedSp = getSpoolById(newSp.id) || newSp;
   // 現在印刷中ジョブなら機器装着スプール・プレビューも連動
@@ -3236,6 +3359,7 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
   // 実際にプリントコマンドを送信
   const target = raw.rawFilename ?? raw.filename;
   if (useK2CfsPrintStart && k2CfsAssignmentModel) {
+    let commandIdForCleanup = null;
     try {
       const assignments = readK2CfsPrintAssignmentsFromDialog(k2CfsAssignmentModel);
       const request = createK2CfsPrintStartRequestFromUi({
@@ -3244,9 +3368,32 @@ async function handlePrintClick(raw, thumbUrl, hostname) {
         dialogModel: k2CfsAssignmentModel,
         assignments,
       });
-      await sendK2CfsPrintStartRequest(hostname, request);
+      commandIdForCleanup = request.commandId;
+      let pendingRegistered = false;
+      let submittedAt = null;
+      await sendK2CfsPrintStartRequest(hostname, request, {
+        onBeforeTransportDispatch: () => {
+          const materialBindingPlan = createK2CfsMaterialBindingPlanFromPrintStartRequest(request);
+          rememberMaterialAccountingPrintStartRequest({
+            hostname,
+            commandRequest: request,
+            materialBindingPlan,
+            preparedAt: new Date().toISOString(),
+          });
+          pendingRegistered = true;
+          submittedAt = new Date().toISOString();
+        },
+      });
+      if (pendingRegistered) {
+        await markMaterialAccountingPrintStartRequestSubmitted({
+          hostname,
+          commandId: request.commandId,
+          submittedAt,
+        });
+      }
       pushLog("K2/CFS印刷開始: colorMatch → multiColorPrint を送信しました", "send", false, hostname);
     } catch (error) {
+      forgetMaterialAccountingPrintStartRequest({ hostname, commandId: commandIdForCleanup });
       pushLog(`K2/CFS印刷開始を中止しました: ${error.message}`, "error", false, hostname);
       await showConfirmDialog({
         level: "error",

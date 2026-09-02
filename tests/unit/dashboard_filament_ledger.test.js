@@ -41,7 +41,10 @@ const {
   recordFilamentEvent,
   getOpenFilamentEvent,
   resolveFilamentEvent,
-  runoutGateHeld
+  runoutGateHeld,
+  isTrustedTotalLifetimeCoverageProof,
+  createTrustedTotalLifetimeCoverageProofForTest,
+  clearTrustedTotalLifetimeCoverageProofsForTest
 } = await import("../../3dp_lib/dashboard_filament_ledger.js");
 
 /**
@@ -59,9 +62,29 @@ function job(id, usedMm, extra = {}) {
   };
 }
 
-/** ヘルパー: ホストに printStore.history をセット */
-function setHistory(host, entries) {
-  mockMonitorData.machines[host] = { printStore: { history: entries } };
+/**
+ * ヘルパー: ホストに printStore.history をセットする。
+ * @param {string} host - 対象ホスト名。
+ * @param {Array<Object>} entries - printStore.historyへ入れる履歴。
+ * @param {Object} [coverageOverrides] - active anchor coverage fixtureの上書き。
+ */
+function setHistory(host, entries, coverageOverrides = {}) {
+  const ids = entries.map((entry) => Number(entry?.id)).filter(Number.isFinite);
+  mockMonitorData.machines[host] = {
+    printStore: {
+      history: entries,
+      historyCoverage: {
+        activeAnchorComplete: true,
+        totalLifetimeComplete: true,
+        totalLifetimeProof: createTrustedTotalLifetimeCoverageProofForTest({ host }),
+        source: "test-complete-history",
+        oldestPrintJobId: ids.length > 0 ? Math.min(...ids) : 0,
+        newestPrintJobId: ids.length > 0 ? Math.max(...ids) : 0,
+        anchorSinceJobIds: ids,
+        ...coverageOverrides
+      }
+    }
+  };
 }
 
 /** ヘルパー: スプールを登録 */
@@ -71,6 +94,7 @@ function addSpool(sp) {
 }
 
 function reset() {
+  clearTrustedTotalLifetimeCoverageProofsForTest();
   mockMonitorData.machines = {};
   mockMonitorData.filamentSpools = [];
   mockMonitorData.usageHistory = [];
@@ -120,6 +144,24 @@ describe("attributedUsed", () => {
 });
 
 // =====================================================================
+// 1.5. total lifetime coverage proof registry
+// =====================================================================
+describe("total lifetime coverage proof registry", () => {
+  beforeEach(reset);
+
+  it("test-only trusted proof registryはclearでobject identityを失効させる", () => {
+    const proof = createTrustedTotalLifetimeCoverageProofForTest({ host: "h" });
+
+    expect(isTrustedTotalLifetimeCoverageProof(proof)).toBe(true);
+
+    clearTrustedTotalLifetimeCoverageProofsForTest();
+
+    expect(isTrustedTotalLifetimeCoverageProof(proof)).toBe(false);
+    expect(isTrustedTotalLifetimeCoverageProof({ ...proof })).toBe(false);
+  });
+});
+
+// =====================================================================
 // 2. deriveSpoolRemaining 冪等性
 // =====================================================================
 describe("deriveSpoolRemaining 冪等性", () => {
@@ -141,6 +183,138 @@ describe("deriveSpoolRemaining 冪等性", () => {
     // anchor(100000) - (20000+30000) = 50000
     expect(first.remainingMm).toBe(50000);
     expect(first.mode).toBe("anchor");
+  });
+
+  it("truncated復元履歴では自動derive/reconcileを止めて現在残量を維持する", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.hostA = {
+      printStore: {
+        historyAuthorityIncomplete: true,
+        history: [job(10, 20000, { filamentId: "sp1" })]
+      }
+    };
+    appendMountEvent({ host: "hostA", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 0, ts: 1000 });
+
+    const derived = deriveSpoolRemaining("sp1");
+    expect(derived).toMatchObject({
+      remainingMm: 90000,
+      verified: false,
+      mode: "halt-incomplete-history",
+      usedMm: 0
+    });
+
+    const reconciled = reconcileSpool("sp1", { ts: 1234 });
+    expect(reconciled).toMatchObject({
+      before: 90000,
+      after: 90000,
+      verified: false,
+      mode: "halt-incomplete-history"
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+  });
+
+  it("active anchor coverageが未証明なら自動derive/reconcileを止めて現在残量を維持する", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.hostA = {
+      printStore: {
+        history: [job(101, 20000, { filamentId: "sp1" })],
+        historyCoverage: {
+          totalLifetimeComplete: true,
+          source: "print-history-restore-reprobe-required"
+        }
+      }
+    };
+    appendMountEvent({ host: "hostA", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 100, ts: 1000 });
+
+    const derived = deriveSpoolRemaining("sp1");
+    expect(derived).toMatchObject({
+      remainingMm: 90000,
+      verified: false,
+      mode: "halt-incomplete-history",
+      usedMm: 0
+    });
+
+    const reconciled = reconcileSpool("sp1", { ts: 1234 });
+    expect(reconciled).toMatchObject({
+      before: 90000,
+      after: 90000,
+      verified: false,
+      mode: "halt-incomplete-history"
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
+  it("active anchor coverageが別のanchorだけを証明している場合は自動derive/reconcileを止める", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.hostA = {
+      printStore: {
+        history: [job(101, 20000, { filamentId: "sp1" })],
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: true,
+          source: "print-history-fetch",
+          oldestPrintJobId: 90,
+          newestPrintJobId: 120,
+          anchorSinceJobIds: [99]
+        }
+      }
+    };
+    appendMountEvent({ host: "hostA", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 100, ts: 1000 });
+
+    const derived = deriveSpoolRemaining("sp1");
+    expect(derived).toMatchObject({
+      remainingMm: 90000,
+      verified: false,
+      mode: "halt-incomplete-history",
+      usedMm: 0
+    });
+
+    const reconciled = reconcileSpool("sp1", { ts: 1234 });
+    expect(reconciled).toMatchObject({
+      before: 90000,
+      after: 90000,
+      verified: false,
+      mode: "halt-incomplete-history"
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
+  it("active anchor coverageが現在anchorを含まないfetch windowなら自動derive/reconcileを止める", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.hostA = {
+      printStore: {
+        history: [job(101, 20000, { filamentId: "sp1" })],
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: true,
+          source: "print-history-fetch",
+          oldestPrintJobId: 80,
+          newestPrintJobId: 90,
+          anchorSinceJobIds: [100]
+        }
+      }
+    };
+    appendMountEvent({ host: "hostA", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 100, ts: 1000 });
+
+    const derived = deriveSpoolRemaining("sp1");
+    expect(derived).toMatchObject({
+      remainingMm: 90000,
+      verified: false,
+      mode: "halt-incomplete-history",
+      usedMm: 0
+    });
+
+    const reconciled = reconcileSpool("sp1", { ts: 1234 });
+    expect(reconciled).toMatchObject({
+      before: 90000,
+      after: 90000,
+      verified: false,
+      mode: "halt-incomplete-history"
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+    expect(sp._remainingVerified).not.toBe(true);
   });
 });
 
@@ -224,25 +398,30 @@ describe("オフラインギャップ（件数非依存）", () => {
 });
 
 // =====================================================================
-// 6. 被覆ギャップ(F2)：history 最古 printId > sinceJobId → verified=false かつ過剰減算しない
+// 6. 被覆ギャップ(F2)：printIdの大小では被覆を推定せず、storage coverage evidenceだけを見る
 // =====================================================================
 describe("被覆ギャップ F2", () => {
   beforeEach(reset);
 
-  it("history 最古 printId が sinceJobId より新しい → verified=false（remaining はアンカー基準）", () => {
-    // 装着 since=100 だが history 最古は id=500（O=500 > 100+1）→ 取りこぼし疑い
+  it("history 最古 printId が sinceJobId より新しくても明示coverageがあればverified=true", () => {
+    // K1/K2のprintIdは連番とは限らないため、id gapだけでは取りこぼし疑いにしない。
+    // storageがfetch windowでactive anchor coverageを証明した場合だけverified=trueにする。
     addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 60000 });
-    setHistory("h", [job(500, 4000), job(600, 5000)]);
+    setHistory("h", [job(500, 4000), job(600, 5000)], {
+      oldestPrintJobId: 90,
+      newestPrintJobId: 600,
+      anchorSinceJobIds: [100]
+    });
     appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 50000, sinceJobId: 100, ts: 100 });
 
     const r = deriveSpoolRemaining("sp1");
-    expect(r.verified).toBe(false);
+    expect(r.verified).toBe(true);
     expect(r.mode).toBe("anchor");
     // anchor(50000) - 区間 used(4000+5000=9000) = 41000（total から全引きの過剰減算をしない）
     expect(r.remainingMm).toBe(41000);
   });
 
-  it("since=0（ブートストラップ全history基準）は O>1 でも verified=true", () => {
+  it("since=0（ブートストラップ全history基準）は総履歴proofがある場合だけ verified=true", () => {
     addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 0 });
     setHistory("h", [job(500, 4000), job(600, 5000)]);
     appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 100000, sinceJobId: 0, ts: 100 });
@@ -252,6 +431,63 @@ describe("被覆ギャップ F2", () => {
     expect(r.mode).toBe("anchor");
     // anchor(100000) - (4000+5000) = 91000
     expect(r.remainingMm).toBe(91000);
+  });
+
+  it("since=0かつ総履歴proofが無いknown区間は過去履歴を新スプールへ混入させずHALTする", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    setHistory("h", [job(500, 4000), job(600, 5000)], {
+      activeAnchorComplete: true,
+      totalLifetimeComplete: undefined,
+      oldestPrintJobId: 500,
+      newestPrintJobId: 600,
+      anchorSinceJobIds: []
+    });
+    appendMountEvent({
+      host: "h",
+      spoolId: "sp1",
+      anchorRemainingMm: 90000,
+      sinceJobId: 0,
+      ts: 100,
+      boundaryStatus: "known"
+    });
+
+    const derived = deriveSpoolRemaining("sp1");
+    const reconciled = reconcileSpool("sp1", { ts: 200 });
+
+    expect(derived).toMatchObject({
+      remainingMm: 90000,
+      verified: false,
+      mode: "halt-incomplete-history",
+      usedMm: 0
+    });
+    expect(reconciled).toMatchObject({
+      before: 90000,
+      after: 90000,
+      verified: false,
+      mode: "halt-incomplete-history"
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+  });
+
+  it("epoch秒IDではmerged history最古IDだけでactive anchor coverageを証明せず自動deriveを止める", () => {
+    addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 60000 });
+    mockMonitorData.machines.h = {
+      printStore: {
+        history: [
+          job(1700000600, 5000),
+          job(1700000500, 4000),
+          job(1699999900, 1000)
+        ]
+      }
+    };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 50000, sinceJobId: 1700000000, ts: 100 });
+
+    const r = deriveSpoolRemaining("sp1");
+
+    expect(r.verified).toBe(false);
+    expect(r.mode).toBe("halt-incomplete-history");
+    expect(r.remainingMm).toBe(60000);
+    expect(r.usedMm).toBe(0);
   });
 });
 
@@ -273,7 +509,11 @@ describe("純アンカー（total ではなく anchor 基点）", () => {
 
   it("被覆ギャップでも anchor 基準（過剰減算しない）", () => {
     addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 0 });
-    setHistory("h", [job(900, 10000)]);
+    setHistory("h", [job(900, 10000)], {
+      oldestPrintJobId: 50,
+      newestPrintJobId: 900,
+      anchorSinceJobIds: [100]
+    });
     appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 50000, sinceJobId: 100, ts: 100 });
     const r = deriveSpoolRemaining("sp1");
     expect(r.mode).toBe("anchor");
@@ -786,6 +1026,241 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
     expect(res.after).toBe(95000);
   });
 
+  it("truncated復元履歴を含む場合は手動総量再計算を止めて残量を巻き戻さない", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.h = {
+      printStore: {
+        historyAuthorityIncomplete: true,
+        history: [
+          job(200, 5000, { filamentInfo: [{ spoolId: "sp1", usedMm: 5000 }] })
+        ]
+      }
+    };
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(res).toMatchObject({
+      before: 90000,
+      after: 90000,
+      used: 0,
+      mode: "halt-incomplete-history",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
+  it("total lifetime coverageが未証明なら手動総量再計算を止めて残量を巻き戻さない", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.h = {
+      printStore: {
+        historyCoverage: {
+          activeAnchorComplete: true,
+          source: "restored-without-total-proof"
+        },
+        history: [
+          job(200, 5000, { filamentInfo: [{ spoolId: "sp1", usedMm: 5000 }] })
+        ]
+      }
+    };
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(res).toMatchObject({
+      before: 90000,
+      after: 90000,
+      used: 0,
+      mode: "halt-incomplete-total-history",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
+  it("trusted proofの無いtotalLifetimeComplete trueは手動総量再計算authorityとして扱わない", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.h = {
+      printStore: {
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: true,
+          source: "legacy-boolean-total-proof"
+        },
+        history: [
+          job(200, 5000, { filamentInfo: [{ spoolId: "sp1", usedMm: 5000 }] })
+        ]
+      }
+    };
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(res).toMatchObject({
+      before: 90000,
+      after: 90000,
+      used: 0,
+      mode: "halt-incomplete-total-history",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
+  it("placeholder hostの未証明printStoreだけでは手動総量再計算を止めない", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines["_$_NO_MACHINE_$_"] = {
+      printStore: {
+        history: []
+      }
+    };
+    mockMonitorData.machines.h = {
+      printStore: {
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: true,
+          totalLifetimeProof: createTrustedTotalLifetimeCoverageProofForTest({ host: "h" }),
+          source: "test-complete-history"
+        },
+        history: [
+          job(200, 5000, { filamentInfo: [{ spoolId: "sp1", usedMm: 5000 }] })
+        ]
+      }
+    };
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(res).toMatchObject({
+      before: 90000,
+      after: 95000,
+      used: 5000,
+      mode: "total"
+    });
+    expect(sp.remainingLengthMm).toBe(95000);
+    expect(sp._remainingVerified).toBe(true);
+  });
+
+  it("対象spoolと無関係な実hostの未証明printStoreだけでは手動総量再計算を止めない", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.UnrelatedK1 = {
+      printStore: {
+        historyCoverage: {
+          activeAnchorComplete: false,
+          source: "print-history-restore-reprobe-required"
+        },
+        history: [job(50, 1234)]
+      }
+    };
+    mockMonitorData.machines.K2Pro = {
+      printStore: {
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: true,
+          totalLifetimeProof: createTrustedTotalLifetimeCoverageProofForTest({ host: "K2Pro" }),
+          source: "test-complete-history"
+        },
+        history: [
+          job(200, 5000, { filamentInfo: [{ spoolId: "sp1", usedMm: 5000 }] })
+        ]
+      }
+    };
+    mockMonitorData.hostSpoolMap = { K2Pro: "sp1" };
+    appendMountEvent({ host: "K2Pro", spoolId: "sp1", anchorRemainingMm: 90000, sinceJobId: 200, ts: 10 });
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(res).toMatchObject({
+      before: 90000,
+      after: 95000,
+      used: 5000,
+      mode: "total"
+    });
+    expect(sp.remainingLengthMm).toBe(95000);
+    expect(sp._remainingVerified).toBe(true);
+  });
+
+  it("明示retentionでtotal履歴だけが不完全な場合は手動総量再計算を止め、自動deriveはanchor基準を維持する", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 90000 });
+    mockMonitorData.machines.h = {
+      printStore: {
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: false,
+          source: "print-history-retention",
+          oldestPrintJobId: 99,
+          newestPrintJobId: 101,
+          anchorSinceJobIds: [100]
+        },
+        history: [
+          job(101, 5000, { filamentInfo: [{ spoolId: "sp1", usedMm: 5000 }] })
+        ]
+      }
+    };
+    appendMountEvent({ host: "h", spoolId: "sp1", anchorRemainingMm: 90000, sinceJobId: 100, ts: 1000 });
+
+    const derived = deriveSpoolRemaining("sp1");
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(derived).toMatchObject({
+      remainingMm: 85000,
+      verified: true,
+      mode: "anchor",
+      usedMm: 5000
+    });
+    expect(res).toMatchObject({
+      before: 90000,
+      after: 90000,
+      used: 0,
+      mode: "halt-incomplete-total-history",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(90000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
+  it("対象host集合が空の手動総量再計算は履歴完全性を証明できないためfail-closedする", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 41000 });
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1 });
+
+    expect(res).toMatchObject({
+      before: 41000,
+      after: 41000,
+      used: 0,
+      mode: "halt-no-authority-host",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(41000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
+  it("requiredHosts指定時は現在帰属から外れた旧spoolでも編集元hostの履歴完全性を検査する", () => {
+    const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 41000 });
+    mockMonitorData.machines.K1Max = {
+      printStore: {
+        historyCoverage: {
+          activeAnchorComplete: true,
+          totalLifetimeComplete: false,
+          source: "print-history-retention",
+          oldestPrintJobId: 100,
+          newestPrintJobId: 200,
+          anchorSinceJobIds: []
+        },
+        history: []
+      }
+    };
+
+    const res = recomputeSpoolFromManualEdit("sp1", { ts: 1, requiredHosts: ["K1Max"] });
+
+    expect(res).toMatchObject({
+      before: 41000,
+      after: 41000,
+      used: 0,
+      mode: "halt-incomplete-total-history",
+      skipped: true
+    });
+    expect(sp.remainingLengthMm).toBe(41000);
+    expect(sp._remainingVerified).not.toBe(true);
+  });
+
   it("他スプールに帰属するジョブは合算しない（multi-spool の per-reel 厳密帰属）", () => {
     const sp = addSpool({ id: "sp1", totalLengthMm: 100000, remainingLengthMm: 100000 });
     setHistory("h", [
@@ -835,6 +1310,7 @@ describe("recomputeSpoolFromManualEdit（手動編集=権威）", () => {
 
     // 以後に新規完了ジョブ M（since=200 より後）を追加して reconcile
     mockMonitorData.machines.h.printStore.history.push(job(300, 12000, { filamentId: "sp1" }));
+    mockMonitorData.machines.h.printStore.historyCoverage.newestPrintJobId = 300;
     const r = reconcileSpool("sp1", { ts: 1000 });
     expect(r.after).toBe(288000);  // 300000(=anchor) - 12000（過去30000 は再計上しない）
   });

@@ -1,16 +1,26 @@
 /**
- * dashboard_storage.js 移行/round-trip 安全性テスト（v2.2.1027 追加フィールド）
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 storage migration/round-trip 単体テスト
+ * @file dashboard_storage_migration.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_storage_migration_test
  *
- * 検証目的（ユーザ懸念の実証）:
- *  - 新フィールド（connectionTargets[].printerType / storedData.layer・TotalLayer・model）が
- *    保存→復元の往復で失われない（= 新版で保存し新版で読める＝追記運用できる）。
- *  - 旧形式データ（新フィールドなし）を読んでもクラッシュせず、既存データが壊れない。
- *  - 保存JSONは常に妥当（= 旧版が JSON.parse でき、未知フィールドを無視して落ちない）。
- *  - runtimeData（揮発）は永続化されない。
- *  - Web版/Electron版は同一コードパス（localStorage/IndexedDB）のため本テストで両者を代表。
+ * 【機能内容サマリ】
+ * - 新旧ストレージデータの保存/復元/import互換性を検証
+ * - runtimeDataを永続化しない境界を検証
+ * - Gate 18.9H SpoolMount production storeをlegacy台帳へ投影しない境界を検証
  *
- * 実ストレージ層（saveUnifiedStorage / restoreUnifiedStorage）を localStorage スタブ上で
- * 実際に往復させて確認する（IndexedDB は無効化して localStorage 経路を通す）。
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1644 (PR #441)
+ * @since   1.390.1580 (PR #440)
+ * @lastModified 2026-09-02 14:10:41
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
@@ -92,6 +102,26 @@ const monitorData = {
       legacyUsageHistoryWrites: false,
       legacySpoolRemainingWrites: false,
       materialSourceLedgerWrites: "shadow-only",
+    },
+  },
+  materialAccountingSpoolMountStore: {
+    schemaVersion: 1,
+    authority: "material-accounting-spool-mount-store",
+    storeRevision: 0,
+    storeDigest: "",
+    spoolMounts: [],
+    events: [],
+    conflicts: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      operatorManaged: true,
+      deviceObservationWrites: false,
+      physicalCommandWrites: false,
+      legacyHostSpoolMapWrites: false,
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      filamentLedgerWrites: false,
+      printBindingWrites: false,
     },
   },
   physicalCommandRecoveryLatch: {
@@ -180,6 +210,26 @@ function resetMonitorData() {
       materialSourceLedgerWrites: "shadow-only",
     },
   };
+  monitorData.materialAccountingSpoolMountStore = {
+    schemaVersion: 1,
+    authority: "material-accounting-spool-mount-store",
+    storeRevision: 0,
+    storeDigest: "",
+    spoolMounts: [],
+    events: [],
+    conflicts: [],
+    retainedUnsupportedEntries: [],
+    invariants: {
+      operatorManaged: true,
+      deviceObservationWrites: false,
+      physicalCommandWrites: false,
+      legacyHostSpoolMapWrites: false,
+      legacyUsageHistoryWrites: false,
+      legacySpoolRemainingWrites: false,
+      filamentLedgerWrites: false,
+      printBindingWrites: false,
+    },
+  };
   monitorData.physicalCommandRecoveryLatch = {
     schemaVersion: 1,
     authority: "physical-command-recovery-latch",
@@ -213,14 +263,19 @@ vi.mock('../../3dp_lib/dashboard_data.js', () => ({
 vi.mock('../../3dp_lib/dashboard_filament_presets.js', () => ({ FILAMENT_PRESETS: [] }));
 vi.mock('../../3dp_lib/dashboard_log_util.js', () => ({ logManager: { add: vi.fn() } }));
 vi.mock('../../3dp_lib/dashboard_utils.js', () => ({ getCurrentTimestamp: () => 0 }));
-vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({ initLedgerAnchors: () => ({ seeded: 0 }), quarantineInvalidMountEvents: () => 0 }));
+vi.mock('../../3dp_lib/dashboard_filament_ledger.js', () => ({
+  attributedUsed: () => 0,
+  getSpoolIntervals: () => [],
+  initLedgerAnchors: () => ({ seeded: 0 }),
+  quarantineInvalidMountEvents: () => 0
+}));
 vi.mock('../../3dp_lib/dashboard_storage_idb.js', () => ({
   initIdb: vi.fn(), isIdbAvailable: () => false, getIdbCache: () => null,
   queueSharedWrite: vi.fn(), queueMachineWrite: vi.fn(), flushIdb: vi.fn(),
-  exportAllIdb: vi.fn(), importAllIdb: vi.fn(),
+  exportAllIdb: vi.fn(), importAllIdb: vi.fn(), compareAndSwapSharedValue: vi.fn(),
 }));
 
-const { saveUnifiedStorage, restoreUnifiedStorage, importAllData } = await import('../../3dp_lib/dashboard_storage.js');
+const { saveUnifiedStorage, restoreUnifiedStorage, importAllData, exportAllData } = await import('../../3dp_lib/dashboard_storage.js');
 const {
   deriveMaterialSourceObservationFreshness,
 } = await import('../../3dp_lib/printer_core/dashboard_material_source_observation.js');
@@ -234,6 +289,16 @@ const {
   PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS,
   createPhysicalCommandRecoveryLatchRecord,
 } = await import('../../3dp_lib/printer_core/dashboard_physical_command_recovery_latch.js');
+const {
+  MATERIAL_IDENTITY_STRENGTH,
+  SPOOL_MOUNT_STATUS,
+  SPOOL_MOUNT_VERIFICATION,
+  createSpoolMountRecord,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_contract.js');
+const {
+  createMaterialAccountingSpoolMountOperationPayloadDigest,
+  normalizeStoredMaterialAccountingSpoolMountStore,
+} = await import('../../3dp_lib/printer_core/dashboard_material_accounting_mount_store.js');
 
 /**
  * storage round-tripで使用するREADYなUniversal MaterialSource移行dry-run planを生成する。
@@ -265,6 +330,84 @@ function createStorageReadyMaterialMigrationPlan(host = "K1Max-4A1B") {
     hostSpoolMap: { [host]: "spool-031" },
     materialSourceObservations: { schemaVersion: 1, byDeviceId: {} },
   }, { createdAt: "2026-08-31T03:50:00.000Z" });
+}
+
+/**
+ * Gate 18.9Hのstorage round-tripで使うSpoolMount store fixtureを生成する。
+ *
+ * 【詳細説明】
+ * - K2/CFSの2 sourceへ別々の管理スプールをoperator confirmedでmountした状態を作る。
+ * - event payload digestも実装側と同じhelperで生成し、復元時にeventが隔離されないようにする。
+ *
+ * @function createSpoolMountStorageFixture
+ * @returns {Object} 正規化済みSpoolMount store。
+ */
+function createSpoolMountStorageFixture() {
+  const firstMount = createSpoolMountRecord({
+    mountId: "mount:k2:1a:031",
+    materialSourceId: "source:k2:cfs:1a",
+    spoolId: "spool-031",
+    mountOperationId: "operation:mount:k2:1a:031",
+    openedAt: "2026-09-01T04:00:00.000Z",
+    openedBy: "operator",
+    verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+    sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+  });
+  const secondMount = createSpoolMountRecord({
+    mountId: "mount:k2:1b:002",
+    materialSourceId: "source:k2:cfs:1b",
+    spoolId: "spool-002",
+    mountOperationId: "operation:mount:k2:1b:002",
+    openedAt: "2026-09-01T04:01:00.000Z",
+    openedBy: "operator",
+    verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+    sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+  });
+  const firstPayload = {
+    kind: "operator-mount",
+    operatorActionId: "action:k2:1a:031",
+    operationId: firstMount.mountOperationId,
+    materialSourceId: "source:k2:cfs:1a",
+    spoolId: "spool-031",
+  };
+  const secondPayload = {
+    kind: "operator-mount",
+    operatorActionId: "action:k2:1b:002",
+    operationId: secondMount.mountOperationId,
+    materialSourceId: "source:k2:cfs:1b",
+    spoolId: "spool-002",
+  };
+
+  return normalizeStoredMaterialAccountingSpoolMountStore({
+    schemaVersion: 1,
+    authority: "material-accounting-spool-mount-store",
+    storeRevision: 2,
+    spoolMounts: [firstMount, secondMount],
+    events: [
+      {
+        eventId: "event:k2:1a:031",
+        kind: "operator-mount",
+        operatorActionId: "action:k2:1a:031",
+        operationId: firstMount.mountOperationId,
+        payload: firstPayload,
+        payloadDigest: createMaterialAccountingSpoolMountOperationPayloadDigest(firstPayload),
+        recordRefs: [firstMount.mountId, firstMount.mountOperationId],
+        createdAt: "2026-09-01T04:00:00.000Z",
+        actor: "operator",
+      },
+      {
+        eventId: "event:k2:1b:002",
+        kind: "operator-mount",
+        operatorActionId: "action:k2:1b:002",
+        operationId: secondMount.mountOperationId,
+        payload: secondPayload,
+        payloadDigest: createMaterialAccountingSpoolMountOperationPayloadDigest(secondPayload),
+        recordRefs: [secondMount.mountId, secondMount.mountOperationId],
+        createdAt: "2026-09-01T04:01:00.000Z",
+        actor: "operator",
+      },
+    ],
+  });
 }
 
 beforeEach(() => {
@@ -321,6 +464,29 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
 
     // runtimeData は永続化されない（復元後は ensureMachineData の空 {} 相当）
     expect(monitorData.machines['Ideaformer'].runtimeData?.lastError).toBeUndefined();
+  });
+
+  it('Gate18.9I: exportAllData は未保存のCAS保護storeもread-only exportへ補完する', async () => {
+    const exported = await exportAllData();
+
+    expect(exported.materialAccountingPrintBindingStore).toMatchObject({
+      authority: 'material-accounting-print-binding-shadow-store',
+      printStartSnapshots: [],
+      jobMaterialSegments: [],
+      invariants: {
+        legacyUsageHistoryWrites: false,
+      },
+    });
+    expect(exported.materialAccountingSpoolMountStore).toMatchObject({
+      authority: 'material-accounting-spool-mount-store',
+      spoolMounts: [],
+      events: [],
+      invariants: {
+        operatorManaged: true,
+        physicalCommandWrites: false,
+      },
+    });
+    expect(globalThis.localStorage.length).toBe(0);
   });
 
   it('P0-1: pendingUnattributedUsage / archive / mountHistorySeq が往復で保持される', () => {
@@ -777,6 +943,189 @@ describe('v2.2.1027 追加フィールドの round-trip', () => {
     });
     expect(monitorData.hostSpoolMap).toEqual({ "K2Pro-69E7": "legacy-single-spool" });
     expect(monitorData.usageHistory).toEqual([{ host: "K2Pro-69E7", spoolId: "legacy-single-spool", usedMm: 10 }]);
+  });
+
+  it('Gate18.9H: localStorage fallback restoreはSpoolMount storeをactive authorityへ復元しない', () => {
+    monitorData.filamentSpools = [
+      { id: "legacy-spool", remainingLengthMm: 100000, updatedAt: 100 },
+      { id: "spool-031", remainingLengthMm: 235800, updatedAt: 100 },
+      { id: "spool-002", remainingLengthMm: 330000, updatedAt: 100 },
+    ];
+    monitorData.hostSpoolMap = { "K1Max-4A1B": "legacy-spool" };
+    monitorData.usageHistory = [{ usageId: "legacy-usage", host: "K1Max-4A1B", spoolId: "legacy-spool", usedMm: 120 }];
+    monitorData.materialAccountingPrintBindingStore = {
+      schemaVersion: 1,
+      authority: "material-accounting-print-binding-shadow-store",
+      printStartSnapshots: [],
+      usageEvidence: [],
+      jobMaterialSegments: [],
+      ledgerEvents: [],
+      unattributedUsage: [],
+      operationsById: {},
+      invariants: {
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        materialSourceLedgerWrites: "shadow-only",
+      },
+    };
+    monitorData.physicalCommandRecoveryLatch = {
+      schemaVersion: 1,
+      authority: "physical-command-recovery-latch",
+      unresolvedByCommandId: {},
+      events: [],
+      retainedUnsupportedEntries: [],
+      invariants: {
+        autoReplay: false,
+        commandFramePersistence: false,
+        physicalCommandAuthority: "recovery-latch-only",
+      },
+    };
+    monitorData.materialAccountingSpoolMountStore = createSpoolMountStorageFixture();
+
+    saveUnifiedStorage(true);
+    resetMonitorData();
+    restoreUnifiedStorage();
+
+    expect(monitorData.materialAccountingSpoolMountStore).toMatchObject({
+      authority: "material-accounting-spool-mount-store",
+      spoolMounts: [],
+      events: [],
+      invariants: {
+        legacyHostSpoolMapWrites: false,
+        legacyUsageHistoryWrites: false,
+        legacySpoolRemainingWrites: false,
+        printBindingWrites: false,
+      },
+    });
+    expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "legacy-spool" });
+    expect(monitorData.usageHistory).toEqual([{ usageId: "legacy-usage", host: "K1Max-4A1B", spoolId: "legacy-spool", usedMm: 120 }]);
+    expect(monitorData.filamentSpools.map((spool) => [spool.id, spool.remainingLengthMm])).toEqual([
+      ["legacy-spool", 100000],
+      ["spool-031", 235800],
+      ["spool-002", 330000],
+    ]);
+    expect(monitorData.materialAccountingPrintBindingStore.printStartSnapshots).toEqual([]);
+    expect(monitorData.physicalCommandRecoveryLatch.unresolvedByCommandId).toEqual({});
+  });
+
+  it('Gate18.9H: localStorage fallback importはdivergent SpoolMount storeをactive authorityへ反映しない', async () => {
+    monitorData.filamentSpools = [
+      { id: "spool-031", remainingLengthMm: 235800 },
+      { id: "spool-002", remainingLengthMm: 330000 },
+      { id: "spool-006", remainingLengthMm: 198000 },
+    ];
+    monitorData.materialAccountingSpoolMountStore = createSpoolMountStorageFixture();
+    const incomingStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...createSpoolMountStorageFixture(),
+      storeRevision: 3,
+      spoolMounts: [
+        createSpoolMountRecord({
+          mountId: "mount:k2:1c:006",
+          materialSourceId: "source:k2:cfs:1c",
+          spoolId: "spool-006",
+          mountOperationId: "operation:mount:k2:1c:006",
+          openedAt: "2026-09-01T04:02:00.000Z",
+          openedBy: "operator",
+          verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+          sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+        }),
+      ],
+      events: [],
+    });
+
+    await importAllData({
+      materialAccountingSpoolMountStore: incomingStore,
+    });
+
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts.map((mount) => mount.materialSourceId)).toEqual([
+      "source:k2:cfs:1a",
+      "source:k2:cfs:1b",
+    ]);
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual([]);
+    expect(monitorData.hostSpoolMap).toEqual({});
+    expect(monitorData.usageHistory).toEqual([]);
+  });
+
+  it('Gate18.9H: localStorage fallback importはlegacy hostSpoolMapと衝突するUniversal mountをactive authorityへ反映しない', async () => {
+    monitorData.hostSpoolMap = { "K1Max-4A1B": "spool-031" };
+    monitorData.filamentSpools = [
+      { id: "spool-031", remainingLengthMm: 235800 },
+      { id: "spool-002", remainingLengthMm: 330000 },
+    ];
+
+    await importAllData({
+      materialAccountingSpoolMountStore: createSpoolMountStorageFixture(),
+    });
+
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.events).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.retainedUnsupportedEntries).toEqual([]);
+    expect(monitorData.hostSpoolMap).toEqual({ "K1Max-4A1B": "spool-031" });
+  });
+
+  it('Gate18.9H: localStorage fallback importはCLOSED Universal mount履歴もactive authorityへ反映しない', async () => {
+    const closedMount = createSpoolMountRecord({
+      mountId: "mount:k2:closed:031",
+      materialSourceId: "source:k2:cfs:closed",
+      spoolId: "spool-031",
+      mountOperationId: "operation:mount:k2:closed:031",
+      openedAt: "2026-09-01T03:00:00.000Z",
+      closedAt: "2026-09-01T03:30:00.000Z",
+      closedByOperationId: "operation:unmount:k2:closed:031",
+      openedBy: "operator",
+      closedBy: "operator",
+      status: SPOOL_MOUNT_STATUS.CLOSED,
+      verification: SPOOL_MOUNT_VERIFICATION.OPERATOR_CONFIRMED,
+      sourceIdentityStrengthAtOpen: MATERIAL_IDENTITY_STRENGTH.PROVISIONAL,
+    });
+    monitorData.hostSpoolMap = { "K1Max-4A1B": "spool-031" };
+    monitorData.filamentSpools = [{ id: "spool-031", remainingLengthMm: 235800 }];
+
+    await importAllData({
+      materialAccountingSpoolMountStore: normalizeStoredMaterialAccountingSpoolMountStore({
+        schemaVersion: 1,
+        authority: "material-accounting-spool-mount-store",
+        spoolMounts: [closedMount],
+        events: [],
+      }),
+    });
+
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([]);
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        reason: "legacy-spool-backend-conflict",
+        spoolId: "spool-031",
+      }),
+    ]));
+  });
+
+  it('Gate18.9H: importAllData は既存current Universal OPEN mountと衝突するhostSpoolMapを取り込まない', async () => {
+    monitorData.filamentSpools = [{ id: "spool-031", remainingLengthMm: 235800 }];
+    monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore({
+      ...createSpoolMountStorageFixture(),
+      spoolMounts: [createSpoolMountStorageFixture().spoolMounts[0]],
+      events: [createSpoolMountStorageFixture().events[0]],
+    });
+
+    await importAllData({
+      hostSpoolMap: { "K1Max-4A1B": "spool-031" },
+    });
+
+    expect(monitorData.hostSpoolMap).toEqual({});
+    expect(monitorData.materialAccountingSpoolMountStore.spoolMounts).toEqual([
+      expect.objectContaining({
+        spoolId: "spool-031",
+      }),
+    ]);
+    expect(monitorData.materialAccountingSpoolMountStore.conflicts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "spool-mount-cross-backend-conflict",
+        reason: "legacy-spool-backend-conflict",
+        spoolId: "spool-031",
+      }),
+    ]));
   });
 
   it('Gate19 prep: physicalCommandRecoveryLatch は再起動後も未解決証跡を保持し自動再送材料を保存しない', () => {

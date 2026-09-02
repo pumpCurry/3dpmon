@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1436 (PR #435)
+ * @version 1.390.1621 (PR #440)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-08-28 10:37:51
+ * @lastModified 2026-09-02 02:24:00
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -57,6 +57,16 @@ import {
  * @constant {number}
  */
 export const PRINTER_CORE_V3_LIVE_SHADOW_SCHEMA_VERSION = 1;
+
+/**
+ * K2 CFS物理操作前に使えるprinter idle観測証跡の有効期限。
+ *
+ * 【詳細説明】
+ * - panel側のsend-time context TTLとは別に、status frame自体の鮮度を保証するための短い期限。
+ *
+ * @constant {number}
+ */
+const K2_PRINTER_IDLE_OBSERVATION_TTL_MS = 5000;
 
 /**
  * K1 live shadow 用の共有 Facade。
@@ -114,6 +124,162 @@ const SHADOW_DIFF_WARN_INTERVAL_MS = 10_000;
  */
 function hasOwn(value, key) {
   return !!value && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+/**
+ * ISO時刻文字列をepoch millisecondsへ正規化する。
+ *
+ * 【詳細説明】
+ * - status freshnessで不正時刻を安全側へ倒すため、parse失敗時はnullを返す。
+ *
+ * @private
+ * @function parseIsoEpochMs
+ * @param {*} value - ISO時刻候補
+ * @returns {number|null} epoch ms、または不正時null
+ */
+function parseIsoEpochMs(value) {
+  const ms = Date.parse(String(value || "").trim());
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * K2 print state labelがCFS物理操作前のidle候補か判定する。
+ *
+ * 【詳細説明】
+ * - `completed` はジョブ完了を示しても物理操作可能な待機状態を保証しないため含めない。
+ *
+ * @private
+ * @function isK2CfsSafeIdleLabel
+ * @param {*} value - print state label候補
+ * @returns {boolean} idle/ready/standbyならtrue
+ */
+function isK2CfsSafeIdleLabel(value) {
+  return ["idle", "ready", "standby"].includes(String(value || "").trim().toLowerCase());
+}
+
+/**
+ * K2 raw frameがprinter status scalarを含むか判定する。
+ *
+ * 【詳細説明】
+ * - boxsInfoだけのframeでprinter idle証跡を延命しないため、CFS物理操作に関係するstatus keyだけを見る。
+ *
+ * @private
+ * @function hasK2PrinterStatusScalarFrame
+ * @param {object|null|undefined} frame - K2 raw frame
+ * @returns {boolean} printer status scalarを含む場合true
+ */
+function hasK2PrinterStatusScalarFrame(frame) {
+  if (!frame || typeof frame !== "object") {
+    return false;
+  }
+  return [
+    "state",
+    "deviceState",
+    "printProgress",
+    "dProgress",
+    "printJobTime",
+    "printLeftTime",
+    "nozzleTemp",
+    "bedTemp0",
+    "targetNozzleTemp",
+    "targetBedTemp0",
+    "printFileName",
+    "fileName",
+    "printId",
+  ].some((key) => hasOwn(frame, key));
+}
+
+/**
+ * K2 print patchからCFS物理操作用printer idle証跡を生成する。
+ *
+ * 【詳細説明】
+ * - complete status frameはそのまま`observed`証跡にする。
+ * - delta-only / partial frameは、直前に同一session/generationのcomplete baselineがあり、sequenceが前進した場合だけ
+ *   `assembled`として扱う。baselineが無いdeltaはidle authorityへ昇格しない。
+ *
+ * @private
+ * @function createK2PrinterIdleObservationForShadow
+ * @param {object} options - 生成オプション
+ * @param {object|null|undefined} options.previousRecord - 直前shadow record
+ * @param {object|null|undefined} options.lastState - Facade累積後のNormalizedState
+ * @param {string} options.sessionId - shadow session ID
+ * @param {number|null} options.connectionGeneration - WebSocket接続世代
+ * @param {string} options.observedAt - status frame受信時刻
+ * @param {number|null} options.sequence - current sequence
+ * @returns {object|null} printer idle観測証跡
+ */
+function createK2PrinterIdleObservationForShadow(options) {
+  const print = options.lastState?.print;
+  if (!print || typeof print !== "object") {
+    return null;
+  }
+  const observedAtMs = parseIsoEpochMs(options.observedAt);
+  if (observedAtMs === null) {
+    return null;
+  }
+  const snapshotCompleteness = String(print.snapshotCompleteness || "").trim().toLowerCase();
+  const activityState = String(print.activityState || "").trim().toLowerCase();
+  const coreStateComplete = print.coreStateComplete === true;
+  const connectionGeneration = Number.isFinite(Number(options.connectionGeneration))
+    ? Number(options.connectionGeneration)
+    : null;
+  const sequence = Number.isFinite(Number(options.sequence)) ? Number(options.sequence) : null;
+  const expiresAtMs = observedAtMs + K2_PRINTER_IDLE_OBSERVATION_TTL_MS;
+  const base = {
+    activityState: activityState || "unknown",
+    coreStateComplete,
+    snapshotCompleteness: snapshotCompleteness || "unknown",
+    observedAt: options.observedAt,
+    receivedAt: options.observedAt,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+    sessionId: options.sessionId || null,
+    connectionGeneration,
+    baselineSequence: sequence,
+    lastAppliedSequence: sequence,
+    appliedDeltaCount: 0,
+    fresh: true,
+    idle: isK2CfsSafeIdleLabel(print.stateLabel || print.state) && activityState === "idle" && coreStateComplete,
+  };
+  if (snapshotCompleteness === "complete" && coreStateComplete) {
+    return {
+      ...base,
+      status: "observed",
+    };
+  }
+
+  const previous = options.previousRecord?.printerIdleObservation;
+  const previousComplete = previous &&
+    ["observed", "assembled"].includes(String(previous.status || "").toLowerCase()) &&
+    previous.coreStateComplete === true &&
+    String(previous.sessionId || "") === String(options.sessionId || "") &&
+    Number(previous.connectionGeneration) === connectionGeneration;
+  const orderedDelta = sequence !== null &&
+    Number.isFinite(Number(previous?.lastAppliedSequence)) &&
+    sequence > Number(previous.lastAppliedSequence);
+  if (!previousComplete || !orderedDelta) {
+    return {
+      ...base,
+      status: "partial",
+      baselineSequence: previous?.baselineSequence ?? null,
+      appliedDeltaCount: 0,
+      fresh: false,
+      idle: false,
+    };
+  }
+
+  const partialShowsActive = activityState === "active" ||
+    activityState === "active-without-core-state" ||
+    ["printing", "paused", "busy", "heating", "checking", "running"].includes(String(print.stateLabel || print.state || "").toLowerCase());
+  return {
+    ...base,
+    status: "assembled",
+    activityState: partialShowsActive ? "active" : (previous.activityState || "idle"),
+    coreStateComplete: true,
+    snapshotCompleteness: "complete",
+    baselineSequence: previous.baselineSequence ?? previous.lastAppliedSequence ?? sequence,
+    appliedDeltaCount: Number(previous.appliedDeltaCount || 0) + 1,
+    idle: partialShowsActive ? false : previous.idle === true,
+  };
 }
 
 /**
@@ -1159,6 +1325,7 @@ export function beginK1LiveShadowSession(options) {
  * @param {string} options.host - ホスト名
  * @param {string} options.deviceId - shadow 用 deviceId
  * @param {string} options.sessionId - shadow session ID
+ * @param {number=} options.connectionGeneration - WebSocket接続世代
  * @returns {object} shadow runtime record
  * @example
  * beginK2LiveShadowSession({ host: "K2Pro-A", deviceId: "host:K2Pro-A", sessionId: "k2-live:..." });
@@ -1184,6 +1351,7 @@ export function beginK2LiveShadowSession(options) {
  * @param {string} options.deviceId - shadow 用 deviceId
  * @param {string} options.sessionId - shadow session ID
  * @param {string} options.printerFamily - printer family
+ * @param {number=} options.connectionGeneration - WebSocket接続世代
  * @param {object} options.facade - PrinterFacade instance
  * @returns {object} shadow runtime record
  */
@@ -1192,6 +1360,7 @@ function beginPrinterCoreV3LiveShadowSession(options) {
   const deviceId = String(options?.deviceId || "").trim();
   const sessionId = String(options?.sessionId || "").trim();
   const printerFamily = String(options?.printerFamily || "k1").trim().toLowerCase();
+  const connectionGeneration = Number(options?.connectionGeneration);
   const facade = options?.facade;
   if (!host || !deviceId || !sessionId) {
     return {
@@ -1211,6 +1380,8 @@ function beginPrinterCoreV3LiveShadowSession(options) {
     host,
     deviceId,
     sessionId,
+    connectionGeneration: Number.isFinite(connectionGeneration) ? connectionGeneration : null,
+    printerCoreV3ConnectionGeneration: Number.isFinite(connectionGeneration) ? connectionGeneration : null,
     state: "active",
     differentialCompared: false,
     observedFrames: 0,
@@ -1684,6 +1855,7 @@ export function observeK1LiveShadowFrame(options, dependencies = {}) {
  * @param {string} options.sessionId - shadow session ID
  * @param {object|null|undefined} options.frame - K2 raw payload
  * @param {string=} options.receivedAt - 受信時刻 ISO 文字列
+ * @param {number=} options.connectionGeneration - WebSocket接続世代
  * @param {object=} dependencies - テスト用依存注入
  * @param {object=} dependencies.facade - observeFrame を提供する Facade
  * @returns {object} shadow runtime record または拒否理由
@@ -1734,6 +1906,11 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
 
   const machine = getMachineForShadow(host);
   const previous = machine?.runtimeData?.printerCoreV3Shadow || {};
+  const observedConnectionGeneration = Number(
+    options.connectionGeneration ??
+    previous.connectionGeneration ??
+    previous.printerCoreV3ConnectionGeneration
+  );
   const lastObservedAt = state.source?.receivedAt ?? options.receivedAt ?? new Date().toISOString();
   const hasBoxsInfoFrame = hasOwn(options.frame, "boxsInfo") && options.frame?.boxsInfo && typeof options.frame.boxsInfo === "object";
   const previousMaterialObservedAt = previous.materialProviderLastObservedAt ||
@@ -1761,6 +1938,8 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     host,
     deviceId,
     sessionId,
+    connectionGeneration: Number.isFinite(observedConnectionGeneration) ? observedConnectionGeneration : null,
+    printerCoreV3ConnectionGeneration: Number.isFinite(observedConnectionGeneration) ? observedConnectionGeneration : null,
     state: "observed",
     differentialCompared: false,
     observedFrames: Number(previous.observedFrames || 0) + 1,
@@ -1783,6 +1962,16 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     ? { ...state, materials: runtimeMaterials }
     : lastState;
   record.lastState = runtimeLastState;
+  record.printerIdleObservation = hasK2PrinterStatusScalarFrame(options.frame)
+    ? createK2PrinterIdleObservationForShadow({
+        previousRecord: previous,
+        lastState: runtimeLastState,
+        sessionId,
+        connectionGeneration: record.connectionGeneration,
+        observedAt: lastObservedAt,
+        sequence: record.lastSequence,
+      })
+    : (previous.printerIdleObservation || null);
   record.cfsConnected = runtimeMaterials?.cfs?.connected ?? null;
   record.cfsTopologyState = runtimeMaterials?.cfs?.topologyState ?? null;
   record.cfsSourceCount = Array.isArray(runtimeMaterials?.sources) ? runtimeMaterials.sources.length : 0;

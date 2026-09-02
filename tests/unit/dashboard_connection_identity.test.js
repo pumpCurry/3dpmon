@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1452 (PR #435)
+ * @version 1.390.1669 (PR #440)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-08-28 14:28:57
+ * @lastModified 2026-09-02 20:03:58
  *
  * @vitest-environment jsdom
  */
@@ -46,7 +46,10 @@ vi.mock("../../3dp_lib/dashboard_panel_factory.js", () => ({
   migratePanelsToHost: vi.fn(), renamePanelsHost: vi.fn(), ensureHostPanels: vi.fn(),
   removePanelsForHost: vi.fn(), recreatePanelsForHost: vi.fn(), updateAllPanelHeaders: vi.fn(),
 }));
-vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorage: vi.fn() }));
+vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
+  markPrintHistoryActiveCoverageRequiresReprobe: vi.fn(),
+  saveUnifiedStorage: vi.fn()
+}));
 vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({ showConfirmDialog: vi.fn() }));
 vi.mock("../../3dp_lib/dashboard_moonraker.js", () => ({
   createMoonrakerSession: vi.fn(() => ({ close: vi.fn() })),
@@ -619,11 +622,13 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K1Max-Shadow",
       deviceId: "provisional:k1%20max:k1max-shadow",
       sessionId: "k1-live:test-session",
+      connectionGeneration: 1,
     });
     expect(shadowMock.observeK1LiveShadowFrame).toHaveBeenCalledWith({
       host: "K1Max-Shadow",
       deviceId: "provisional:k1%20max:k1max-shadow",
       sessionId: "k1-live:test-session",
+      connectionGeneration: 1,
       frame: {
         hostname: "K1Max-Shadow",
         model: "K1 Max",
@@ -649,11 +654,13 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-69E7",
       deviceId: "provisional:f012:k2pro-69e7",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
     });
     expect(shadowMock.observeK2LiveShadowFrame).toHaveBeenCalledWith({
       host: "K2Pro-69E7",
       deviceId: "provisional:f012:k2pro-69e7",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         hostname: "K2Pro-69E7",
         model: "F012",
@@ -698,6 +705,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-69E7",
       deviceId: "provisional:f012:k2pro-69e7",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         boxsInfo: {
           enable: 1,
@@ -749,6 +757,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-Sparse",
       deviceId: "provisional:f012:k2pro-sparse",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         boxsInfo: {
           materialBoxs: [
@@ -786,6 +795,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-Sparse",
       deviceId: "provisional:f012:k2pro-sparse",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         boxsInfo: {
           enable: 1,
@@ -858,6 +868,147 @@ describe("Printer Core v3 identity dry-run", () => {
     });
   });
 
+  it("K2 Moonraker履歴fallbackは旧connectionGeneration応答を現在接続へ採用しない", async () => {
+    vi.useFakeTimers();
+    let resolveHistoryResponse;
+    window.fetch = vi.fn((url) => {
+      const text = String(url || "");
+      if (text.includes("/server/history/list")) {
+        return new Promise((resolve) => {
+          resolveHistoryResponse = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, json: vi.fn() });
+    });
+
+    try {
+      mod.connectWithType("203.0.113.53:9999", "creality-k2");
+      const firstWs = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      firstWs.onopen();
+      await vi.advanceTimersByTimeAsync(1000 + 6000 * 3);
+      expect(window.fetch).toHaveBeenCalledWith(
+        "http://203.0.113.53:4408/server/history/list",
+        expect.objectContaining({ cache: "no-store" })
+      );
+
+      mod.connectWs("203.0.113.53:9999");
+      resolveHistoryResponse({
+        ok: true,
+        json: vi.fn(async () => ({
+          result: {
+            jobs: [
+              { filename: "stale-generation.gcode", start_time: 1784100000 },
+            ],
+          },
+        })),
+      });
+      await flushAsyncProbe();
+
+      expect(printManagerMock.updateHistoryList).not.toHaveBeenCalled();
+      expect(mod.getPrinterCoreV3ConnectionGeneration("203.0.113.53")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("K2 Moonraker履歴fallbackは切断後の同一connectionGeneration応答を採用しない", async () => {
+    vi.useFakeTimers();
+    let resolveHistoryResponse;
+    window.fetch = vi.fn((url) => {
+      const text = String(url || "");
+      if (text.includes("/server/history/list")) {
+        return new Promise((resolve) => {
+          resolveHistoryResponse = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, json: vi.fn() });
+    });
+
+    try {
+      mod.connectWithType("203.0.113.54:9999", "creality-k2");
+      const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      ws.onopen();
+      await vi.advanceTimersByTimeAsync(1000 + 6000 * 3);
+      expect(window.fetch).toHaveBeenCalledWith(
+        "http://203.0.113.54:4408/server/history/list",
+        expect.objectContaining({ cache: "no-store" })
+      );
+
+      ws.onclose();
+      resolveHistoryResponse({
+        ok: true,
+        json: vi.fn(async () => ({
+          result: {
+            jobs: [
+              { filename: "disconnected-generation.gcode", start_time: 1784100060 },
+            ],
+          },
+        })),
+      });
+      await flushAsyncProbe();
+
+      expect(printManagerMock.updateHistoryList).not.toHaveBeenCalled();
+      expect(mod.getPrinterCoreV3ConnectionGeneration("203.0.113.54")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("K2 Moonrakerファイル一覧fallbackは旧connectionGeneration応答を現在UIへ描画しない", async () => {
+    vi.useFakeTimers();
+    let resolveFileResponse;
+    window.fetch = vi.fn((url) => {
+      const text = String(url || "");
+      if (text.includes("/server/history/list")) {
+        return Promise.resolve({
+          ok: true,
+          json: vi.fn(async () => ({
+            result: {
+              jobs: [
+                { filename: "fresh-history.gcode", start_time: 1784100120 },
+              ],
+            },
+          })),
+        });
+      }
+      if (text.includes("/server/files/list")) {
+        return new Promise((resolve) => {
+          resolveFileResponse = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, json: vi.fn() });
+    });
+
+    try {
+      mod.connectWithType("203.0.113.55:9999", "creality-k2");
+      const firstWs = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      firstWs.onopen();
+      await vi.advanceTimersByTimeAsync(1000 + 6000 * 6);
+      expect(window.fetch).toHaveBeenCalledWith(
+        "http://203.0.113.55:4408/server/files/list?root=gcodes",
+        expect.objectContaining({ cache: "no-store" })
+      );
+
+      printManagerMock.renderFileList.mockClear();
+      mod.connectWs("203.0.113.55:9999");
+      resolveFileResponse({
+        ok: true,
+        json: vi.fn(async () => ({
+          result: [
+            { path: "gcodes/stale-generation.gcode", size: 1234, modified: 1784100180 },
+          ],
+        })),
+      });
+      await flushAsyncProbe();
+
+      expect(printManagerMock.renderFileList).not.toHaveBeenCalled();
+      expect(dataMock.monitorData.machines["203.0.113.55"]?._cachedFileInfo).toBeUndefined();
+      expect(mod.getPrinterCoreV3ConnectionGeneration("203.0.113.55")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("F012でK2確定後はhostnameがK2 prefixでない疎なdeltaでもK2 shadowを維持する", () => {
     mod.connectWithType("203.0.113.32:9999", "creality-k1");
 
@@ -877,6 +1028,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "Workshop-Printer",
       deviceId: "provisional:f012:workshop-printer",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         connectionCount: 1,
       },
@@ -946,6 +1098,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K2Pro-MixedFrame",
       deviceId: "provisional:f012:k2pro-mixedframe",
       sessionId: "k2-live:test-session",
+      connectionGeneration: 1,
       frame: {
         hostname: "K2Pro-MixedFrame",
         model: "F012",
@@ -1076,6 +1229,7 @@ describe("Printer Core v3 identity dry-run", () => {
       host: "K1Max-Conflict",
       deviceId: "provisional-shadow:endpoint:203.0.113.13%3A9999",
       sessionId: "k1-live:test-session",
+      connectionGeneration: 1,
     });
   });
 

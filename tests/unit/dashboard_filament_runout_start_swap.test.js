@@ -38,6 +38,7 @@ const { setCurrentSpoolId, registerRebaselineHostUsage, finalizeFilamentUsage } 
 
 let rebaselineSpy;
 function reset() {
+  ledger.clearTrustedTotalLifetimeCoverageProofsForTest();
   mockMonitorData.machines = {};
   mockMonitorData.filamentSpools = [];
   mockMonitorData.usageHistory = [];
@@ -58,7 +59,19 @@ function histJob(host, id) { return mockMonitorData.machines[host].printStore.hi
 /** 残量0で印刷開始した OLD（startLen=0, expected=50000）＋一時停止中の切れ文脈をセットアップ */
 function setupEmptyStartPaused({ usedAtSwap = 2000 } = {}) {
   mockMonitorData.machines['h'] = {
-    printStore: { current: { id: '300' }, history: [job(100, 5000), job(200, 6000)] },
+    printStore: {
+      current: { id: '300' },
+      history: [job(100, 5000), job(200, 6000)],
+      historyCoverage: {
+        activeAnchorComplete: true,
+        totalLifetimeComplete: true,
+        totalLifetimeProof: ledger.createTrustedTotalLifetimeCoverageProofForTest({ host: 'h' }),
+        source: 'test-complete-history',
+        oldestPrintJobId: 100,
+        newestPrintJobId: 200,
+        anchorSinceJobIds: [200],
+      },
+    },
     storedData: { usedMaterialLength: { rawValue: usedAtSwap }, state: { rawValue: 5 } },
     runtimeData: { state: 5 },
     historyData: [],
@@ -114,6 +127,8 @@ describe('残量0で印刷開始 → 印刷中(paused)交換: 架空消費を作
     // プリンタ報告の総消費が後から入る（単一スプールジョブ）
     const h300 = histJob('h', 300) || (mockMonitorData.machines.h.printStore.history.push(job(300, 50000)), histJob('h', 300));
     h300.materialUsedMm = 50000;
+    mockMonitorData.machines.h.printStore.historyCoverage.newestPrintJobId = 300;
+    mockMonitorData.machines.h.printStore.historyCoverage.anchorSinceJobIds = [200, 300];
 
     const remNew = ledger.deriveSpoolRemaining('NEW').remainingMm;
     expect(remNew, 'NEW は単一スプール materialUsedMm 帰属で減る（100%固定にならない）').toBeLessThan(330000);
@@ -125,7 +140,19 @@ describe('対照: 残量ありの genuine split は従来どおり（回帰防�
 
   it('OLD残量あり(startLen=300000)の paused 交換は per-reel 分割を維持し OLD→0', () => {
     mockMonitorData.machines['h'] = {
-      printStore: { current: { id: '300' }, history: [job(100, 5000), job(200, 6000)] },
+      printStore: {
+        current: { id: '300' },
+        history: [job(100, 5000), job(200, 6000)],
+        historyCoverage: {
+        activeAnchorComplete: true,
+        totalLifetimeComplete: true,
+        totalLifetimeProof: ledger.createTrustedTotalLifetimeCoverageProofForTest({ host: 'h' }),
+        source: 'test-complete-history',
+        oldestPrintJobId: 100,
+        newestPrintJobId: 200,
+        anchorSinceJobIds: [200],
+      },
+      },
       storedData: { usedMaterialLength: { rawValue: 15000 }, state: { rawValue: 5 } },
       runtimeData: { state: 5 },
       historyData: [],

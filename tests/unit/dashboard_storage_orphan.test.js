@@ -1,11 +1,24 @@
 /**
- * dashboard_storage.js 孤児ホストキー削除の安全判定テスト
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 orphan storage key 単体テスト
+ * @file dashboard_storage_orphan.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module dashboard_storage_orphan_test
  *
- * 回帰防止対象バグ:
- *   _writePerHostLocalStorage が machines に無いホストキーを無条件削除し、
- *   一時的に machines から外れた機器の印刷履歴・フィラメント履歴ごと消去
- *   していた破壊的バグ（実質「アクティブ1ホスト優先」アンチパターン）。
- *   isEmptyHostShell によりデータを持つキーは決して削除されないことを検証。
+ * 【機能内容サマリ】
+ * - データを持つ孤児ホストキーを自動削除しない安全判定を検証
+ *
+ * 【公開関数一覧】
+ * - none
+ *
+ * @version 1.390.1580 (PR #440)
+ * @since   1.390.1538 (PR #439)
+ * @lastModified 2026-09-01 13:38:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import { describe, it, expect, vi } from 'vitest';
 
@@ -25,6 +38,7 @@ vi.mock('../../3dp_lib/dashboard_storage_idb.js', () => ({
   initIdb: vi.fn(), isIdbAvailable: vi.fn(() => false), getIdbCache: vi.fn(),
   queueSharedWrite: vi.fn(), queueMachineWrite: vi.fn(), flushIdb: vi.fn(),
   exportAllIdb: vi.fn(), importAllIdb: vi.fn(),
+  compareAndSwapSharedValue: vi.fn(),
 }));
 
 const { isEmptyHostShell } = await import('../../3dp_lib/dashboard_storage.js');

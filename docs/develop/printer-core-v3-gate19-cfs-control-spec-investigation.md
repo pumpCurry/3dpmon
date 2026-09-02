@@ -1,6 +1,6 @@
 # Printer Core v3 Gate 19 CFS Control Spec Investigation
 
-Last updated: 2026-08-31
+Last updated: 2026-09-02
 
 このメモは、K2/CFSを3DPmon UIから操作できる版に向けて、公開ソース、既存3DPmon実装、実機captureで確認済みの事実、未確定の仕様境界を整理する。ここでの目的は、CFS操作を急いで有効化することではなく、どの操作をどの証跡でproduction authorityへ昇格できるかを固定すること。
 
@@ -164,6 +164,30 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   `printJobTime` / `printLeftTime` / target温度を確認する。プリンタ本体が印刷/加熱/前ジョブ残存を示す場合は、
   `pre-command-printer-not-idle` としてCFS操作frameを送らない。
   `null`、空文字、空白文字、未観測値はJavaScriptの暗黙変換で0にせず、idle根拠としては扱わない。
+  UI/dispatcher側でも同じ境界を持ち、`stateLabel:"idle"` が残っていても、send-time観測が
+  `snapshotCompleteness:"partial"`、`statusProbeStatus:"partial"`、`activityState:"unknown-core-state"`、
+  または `coreStateComplete:false` を明示する場合は `cfs-control-printer-idle-observation-incomplete` として拒否する。
+  これはdelta-only/timeout後に古いidle表示だけでphysical CFS commandを送らないためのGate19 idle predicateである。
+  `createK2StatusPatch()` はraw frame単位でこのmetadataを生成し、Facadeの累積 `shadowRecord.lastState.print` へ残す。
+  そのためCertification panelの合成入力だけでなく、実機WS9999から入ったproduction shadowでも同じpreflight境界を使える。
+- production dispatcherは、送信時に `printerIdleObservation` を内部生成し、command authorityへ渡す。
+  この観測は現在の `runtimeData.printerCoreV3Shadow` recordから生成し、`sessionId` と
+  `connectionGeneration` が現在接続と一致しなければ `cfs-control-printer-idle-session-mismatch` /
+  `cfs-control-printer-idle-generation-mismatch` で拒否する。観測TTLは5秒で、期限切れまたは
+  `fresh:false` は `cfs-control-printer-idle-observation-stale` として扱う。
+  `boxsInfo` のようなmaterial-only frameはprinter status scalarを含まないため、このTTLを延長しない。
+  complete baseline後に同一session/generation内で届いたdelta-only printer status frameは、baseline sequenceと
+  last applied sequenceを保持した `status:"assembled"` evidenceとして扱える。これによりF012で観測された
+  「full statusは初回だけ、その後は差分だけ」という通信でも、古いidle表示だけを根拠にせず、freshな
+  assembled idle観測がある場合だけsend-time guardを通せる。
+- `scripts/capture_k2_cfs_readonly_calibration.mjs` は、複数のprinter status probeから
+  `assembledPrinterStatus` を生成する。これはread-only certification用のprojectionであり、
+  最初に `state` と `deviceState` を含むcomplete baselineを観測できた場合だけ、同一WS session内の
+  後続delta scalarを順序通り累積する。complete baselineなしのdelta-only応答は
+  `status:"unknown" / reason:"complete-baseline-missing"` として保存し、idle authorityへ昇格しない。
+  projectionには `baselineProbeMode`、`lastAppliedProbeMode`、`appliedDeltaProbeCount`、`ttlMs`、
+  `fresh`、累積後の `snapshot` を含め、F012で観測されるfull baseline後のdelta-only通信を
+  physical send前にレビューできる形へ残す。TTL切れや観測時刻の逆行はfail-closedに扱う。
 - `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
   `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。
@@ -315,6 +339,10 @@ live certificationは次の順で進める。
    「通信応答timeout」なのか「物理反映待ち不足」なのかを切り分けやすい。
    `printerInfo` には `/info` のmodel/version/port hintと観測時刻、期待modelとの一致結果を保存する。
    `printerStatus` には送信前のread-only status probe結果を保存し、`idle:false` の場合は送信前rejectの根拠として扱う。
+   `state` / `deviceState` が未観測のpartial frameはidle証明にもactive確定にも使わず、
+   `summary.activityState:"unknown-core-state"` / `coreStateComplete:false` として保存する。
+   これは「状態不足」と「not idle」をレビュー時に分けて読むための診断であり、
+   `summary.active:false` であっても `summary.idle:true` でない限りlive CFS操作は送らない。
    `targetSourceDelta` には対象sourceのpresence/stateCode/selected/percent/material/color/RFID有無の前後差分を保存する。
    `--probe-before` / `--probe-after` の観測結果には `summary` が含まれ、次の項目をraw payloadとは別に確認できる。
 

@@ -17,19 +17,23 @@
  * - {@link setStorageLogEnabled}：ログ出力有効化
  * - {@link saveUnifiedStorage}：全データ保存
  * - {@link saveUnifiedStorageDurably}：全データを耐久保存完了まで待つ
+ * - {@link commitMaterialAccountingSpoolMountStoreDurably}：SpoolMount storeをCAS境界で耐久保存
+ * - {@link commitMaterialAccountingPrintBindingStoreDurably}：PrintBinding storeをCAS境界で耐久保存
  * - {@link restoreUnifiedStorage}：全データ復元
  * - {@link restoreLegacyStoredData}：レガシーデータ読込
  * - {@link cleanupLegacy}：レガシー削除
  * - {@link estimateStorageQuota}：容量取得
  * - {@link syncStorageNow}：即時同期
+ * - {@link markPrintHistoryActiveCoverageRequiresReprobe}：active anchor coverageを再probe待ちへ戻す
  * - {@link testMaxLocalStorageQuota}：書き込みテスト
+ * - {@link recordPrintHistoryFetchCoverage}：印刷履歴fetch windowのactive anchor被覆を記録
  * - {@link estimateLocalStorageUsageBytes}：使用量推定
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1543 (PR #439)
+ * @version 1.390.1667 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 19:10:36
+ * @lastModified 2026-09-02 19:33:18
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -41,13 +45,42 @@ import { monitorData, ensureMachineData, PLACEHOLDER_HOSTNAME } from "./dashboar
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
 import { logManager } from "./dashboard_log_util.js";
 import { getCurrentTimestamp } from "./dashboard_utils.js";
-import { initLedgerAnchors, quarantineInvalidMountEvents } from "./dashboard_filament_ledger.js";
+import {
+  attributedUsed,
+  getSpoolIntervals,
+  initLedgerAnchors,
+  isTrustedTotalLifetimeCoverageProof,
+  quarantineInvalidMountEvents
+} from "./dashboard_filament_ledger.js";
 import { parseDest, isIpLiteral, extractHost } from "./dashboard_target_identity.js";
 import { normalizeStoredMaterialSourceObservations } from "./printer_core/dashboard_material_source_observation.js";
 import { normalizeStoredMaterialAccountingMigrationJournal } from "./printer_core/dashboard_material_accounting_migration_journal.js";
 import { normalizeStoredMaterialAccountingMigrationShadowCommitStore } from "./printer_core/dashboard_material_accounting_migration_shadow_commit.js";
-import { normalizeStoredMaterialAccountingPrintBindingStore } from "./printer_core/dashboard_material_accounting_print_binding.js";
+import {
+  createMaterialAccountingPrintBindingStoreDigest,
+  normalizeStoredMaterialAccountingPrintBindingStore,
+} from "./printer_core/dashboard_material_accounting_print_binding.js";
+import {
+  createMaterialAccountingSpoolMountStoreDigest,
+  normalizeStoredMaterialAccountingSpoolMountStore,
+} from "./printer_core/dashboard_material_accounting_mount_store.js";
+import {
+  findUniversalSpoolAssignmentConflict,
+  reconcileCurrentOpenUniversalSpoolMountsAgainstBackends,
+} from "./printer_core/dashboard_material_accounting_spool_assignment_guard.js";
+import {
+  createPrinterCoreV3DeterministicId,
+  stableStringifyPrinterCoreV3Value,
+} from "./printer_core/dashboard_data_schema_v3.js";
 import { normalizeStoredPhysicalCommandRecoveryLatchStore } from "./printer_core/dashboard_physical_command_recovery_latch.js";
+import {
+  FILAMENT_UNIT_KIND,
+  MATERIAL_IDENTITY_STRENGTH,
+  MATERIAL_SOURCE_KIND,
+  createMaterialSourceIdentity,
+  createMaterialSourceLocator,
+  createMaterialSourceRecord,
+} from "./printer_core/dashboard_material_accounting_contract.js";
 import {
   initIdb,
   isIdbAvailable,
@@ -57,6 +90,7 @@ import {
   flushIdb,
   exportAllIdb,
   importAllIdb,
+  compareAndSwapSharedValue,
   setIdbDbName
 } from "./dashboard_storage_idb.js";
 
@@ -78,6 +112,11 @@ const MAX_VIDEOS = 500;
 
 /** IndexedDB 初期化済みフラグ */
 let _idbInitialized = false;
+
+/** SpoolMount production commit直列化用mutex */
+let _spoolMountCommitMutex = Promise.resolve();
+/** PrintBinding shadow commit直列化用mutex */
+let _printBindingCommitMutex = Promise.resolve();
 
 /**
  * Universal MaterialSource移行dry-run journalを現在のmonitorDataへ安全にマージする。
@@ -213,12 +252,465 @@ function _mergeMaterialAccountingPrintBindingStore(incomingStore) {
   const currentStore = normalizeStoredMaterialAccountingPrintBindingStore(
     monitorData.materialAccountingPrintBindingStore
   );
-  const restoredStore = normalizeStoredMaterialAccountingPrintBindingStore(incomingStore);
   monitorData.materialAccountingPrintBindingStore =
-    (restoredStore.ledgerEvents || []).length >= (currentStore.ledgerEvents || []).length
-      ? restoredStore
-      : currentStore;
+    _createMergedMaterialAccountingPrintBindingStoreTarget(currentStore, incomingStore);
   return true;
+}
+
+/**
+ * PrintBinding storeが空かどうかを判定する。
+ *
+ * @private
+ * @function _isEmptyMaterialAccountingPrintBindingStore
+ * @param {Object} store - 正規化済みPrintBinding store。
+ * @returns {boolean} authority recordを含まない場合true。
+ */
+function _isEmptyMaterialAccountingPrintBindingStore(store) {
+  return (store.printStartSnapshots || []).length === 0 &&
+    (store.usageEvidence || []).length === 0 &&
+    (store.jobMaterialSegments || []).length === 0 &&
+    (store.ledgerEvents || []).length === 0 &&
+    (store.unattributedUsage || []).length === 0 &&
+    (store.retainedUnsupportedEntries || []).length === 0;
+}
+
+/**
+ * 2つのJSON互換recordが同一か判定する。
+ *
+ * @private
+ * @function _isSameJsonRecord
+ * @param {*} left - 比較対象。
+ * @param {*} right - 比較対象。
+ * @returns {boolean} stable JSONとして一致する場合true。
+ */
+function _isSameJsonRecord(left, right) {
+  return stableStringifyPrinterCoreV3Value(left) === stableStringifyPrinterCoreV3Value(right);
+}
+
+/**
+ * storage merge用にJSON互換値をcloneする。
+ *
+ * @private
+ * @function _cloneStorageJsonValue
+ * @param {*} value - clone対象。
+ * @returns {*} clone済み値。
+ */
+function _cloneStorageJsonValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+/**
+ * ID付きPrintBinding record配列を衝突隔離しながらmergeする。
+ *
+ * @private
+ * @function _mergePrintBindingRecordArrayById
+ * @param {Object[]} currentRecords - 現在record配列。
+ * @param {Object[]} incomingRecords - incoming record配列。
+ * @param {string} idKey - record ID key。
+ * @param {string} recordType - 隔離記録用record type。
+ * @param {Object[]} retainedUnsupportedEntries - 隔離entry配列。
+ * @returns {Object[]} merge済みrecord配列。
+ */
+function _mergePrintBindingRecordArrayById(currentRecords, incomingRecords, idKey, recordType, retainedUnsupportedEntries) {
+  const merged = Array.isArray(currentRecords) ? currentRecords.map((record) => _cloneStorageJsonValue(record)) : [];
+  const byId = new Map();
+  for (const record of merged) {
+    const id = String(record?.[idKey] || "").trim();
+    if (id) {
+      byId.set(id, record);
+    }
+  }
+  for (const incomingRecord of Array.isArray(incomingRecords) ? incomingRecords : []) {
+    const id = String(incomingRecord?.[idKey] || "").trim();
+    if (!id) {
+      continue;
+    }
+    const existing = byId.get(id);
+    if (!existing) {
+      const clonedRecord = _cloneStorageJsonValue(incomingRecord);
+      merged.push(clonedRecord);
+      byId.set(id, clonedRecord);
+      continue;
+    }
+    if (!_isSameJsonRecord(existing, incomingRecord)) {
+      retainedUnsupportedEntries.push({
+        recordType,
+        index: id,
+        reason: "print-binding-record-id-conflict",
+        currentDigest: createPrinterCoreV3DeterministicId("print-binding-current-record", [
+          stableStringifyPrinterCoreV3Value(existing),
+        ]),
+        incomingDigest: createPrinterCoreV3DeterministicId("print-binding-incoming-record", [
+          stableStringifyPrinterCoreV3Value(incomingRecord),
+        ]),
+        record: _cloneStorageJsonValue(incomingRecord),
+      });
+    }
+  }
+  return merged;
+}
+
+/**
+ * IDを持たない未帰属使用量recordを重複排除しながらmergeする。
+ *
+ * @private
+ * @function _mergePrintBindingUnattributedUsage
+ * @param {Object[]} currentRecords - 現在record配列。
+ * @param {Object[]} incomingRecords - incoming record配列。
+ * @returns {Object[]} merge済みrecord配列。
+ */
+function _mergePrintBindingUnattributedUsage(currentRecords, incomingRecords) {
+  const merged = Array.isArray(currentRecords) ? currentRecords.map((record) => _cloneStorageJsonValue(record)) : [];
+  const fingerprints = new Set(merged.map((record) => stableStringifyPrinterCoreV3Value(record)));
+  for (const incomingRecord of Array.isArray(incomingRecords) ? incomingRecords : []) {
+    const fingerprint = stableStringifyPrinterCoreV3Value(incomingRecord);
+    if (fingerprints.has(fingerprint)) {
+      continue;
+    }
+    fingerprints.add(fingerprint);
+    merged.push(_cloneStorageJsonValue(incomingRecord));
+  }
+  return merged;
+}
+
+/**
+ * 現在storeとincoming storeからPrintBinding import/restore後の候補storeを作成する。
+ *
+ * 【詳細説明】
+ * - empty restoreは保存済みstoreをそのまま採用する。
+ * - 既存storeとincoming storeの両方にrecordがある場合、semantic ID単位で同一recordをdedupeし、
+ *   同一IDかつ内容が異なるrecordは勝者を作らずretainedUnsupportedEntriesへ隔離する。
+ * - import時はこの候補storeをIndexedDB CASへ渡し、CAS成功後だけruntimeへ反映する。
+ *
+ * @private
+ * @function _createMergedMaterialAccountingPrintBindingStoreTarget
+ * @param {Object} currentStore - 現在の正規化済みPrintBinding store。
+ * @param {Object|null|undefined} incomingStore - import/restore候補store。
+ * @returns {Object} merge候補store。
+ */
+function _createMergedMaterialAccountingPrintBindingStoreTarget(currentStore, incomingStore) {
+  const normalizedCurrentStore = normalizeStoredMaterialAccountingPrintBindingStore(currentStore);
+  const restoredStore = normalizeStoredMaterialAccountingPrintBindingStore(incomingStore);
+  const currentDigest = createMaterialAccountingPrintBindingStoreDigest(normalizedCurrentStore);
+  const restoredDigest = createMaterialAccountingPrintBindingStoreDigest(restoredStore);
+  if (_isEmptyMaterialAccountingPrintBindingStore(normalizedCurrentStore) || currentDigest === restoredDigest) {
+    return restoredStore;
+  }
+  const retainedUnsupportedEntries = [
+    ...(normalizedCurrentStore.retainedUnsupportedEntries || []).map((entry) => _cloneStorageJsonValue(entry)),
+    ...(restoredStore.retainedUnsupportedEntries || []).map((entry) => _cloneStorageJsonValue(entry)),
+  ];
+  return normalizeStoredMaterialAccountingPrintBindingStore({
+    ...normalizedCurrentStore,
+    printStartSnapshots: _mergePrintBindingRecordArrayById(
+      normalizedCurrentStore.printStartSnapshots,
+      restoredStore.printStartSnapshots,
+      "snapshotId",
+      "printStartSnapshot",
+      retainedUnsupportedEntries,
+    ),
+    usageEvidence: _mergePrintBindingRecordArrayById(
+      normalizedCurrentStore.usageEvidence,
+      restoredStore.usageEvidence,
+      "evidenceId",
+      "usageEvidence",
+      retainedUnsupportedEntries,
+    ),
+    jobMaterialSegments: _mergePrintBindingRecordArrayById(
+      normalizedCurrentStore.jobMaterialSegments,
+      restoredStore.jobMaterialSegments,
+      "segmentId",
+      "jobMaterialSegment",
+      retainedUnsupportedEntries,
+    ),
+    ledgerEvents: _mergePrintBindingRecordArrayById(
+      normalizedCurrentStore.ledgerEvents,
+      restoredStore.ledgerEvents,
+      "ledgerEventId",
+      "ledgerEvent",
+      retainedUnsupportedEntries,
+    ),
+    unattributedUsage: _mergePrintBindingUnattributedUsage(
+      normalizedCurrentStore.unattributedUsage,
+      restoredStore.unattributedUsage,
+    ),
+    operationsById: {},
+    retainedUnsupportedEntries,
+  });
+}
+
+/**
+ * 現在のlegacy/managed spool backendとSpoolMount storeのactive mountを照合する。
+ *
+ * 【詳細説明】
+ * - restore/importではUniversal SpoolMount storeをlegacy hostSpoolMapへ投影しない。
+ * - その代わり、同じmanaged spoolがlegacy hostSpoolMapで既に装着中ならUniversal側をactive authorityから隔離する。
+ * - 管理spoolが存在しない、または削除済みの場合もactiveに戻さず、後続UIで人間が修復できる証跡として保持する。
+ *
+ * @private
+ * @function _reconcileSpoolMountStoreWithCurrentBackends
+ * @param {Object} store - 正規化対象SpoolMount store。
+ * @returns {Object} backend整合性を反映した正規化済みstore。
+ */
+function _reconcileSpoolMountStoreWithCurrentBackends(store) {
+  return reconcileCurrentOpenUniversalSpoolMountsAgainstBackends({
+    store,
+    managedSpools: monitorData.filamentSpools,
+    hostSpoolMap: monitorData.hostSpoolMap,
+  });
+}
+
+/**
+ * reconcile済みSpoolMount storeをCAS保護shared keyへ書き戻す。
+ *
+ * 【詳細説明】
+ * - operator-managed SpoolMount storeは通常flush対象外なので、restore/import後にreconcileで
+ *   active authorityが変わった場合だけ専用CASでIndexedDBへ反映する。
+ * - CAS mismatch時は値を書き換えず、次回operator操作もfail-closedするため、古い値でsilent overwriteしない。
+ *
+ * @private
+ * @function _persistReconciledMaterialAccountingSpoolMountStoreIfChanged
+ * @param {Object} previousStore - reconcile前の正規化候補store。
+ * @param {Object} nextStore - reconcile後の正規化候補store。
+ * @returns {Promise<Object|null>} CAS実行結果。変更なしまたはIndexedDB不可ならnull。
+ */
+async function _persistReconciledMaterialAccountingSpoolMountStoreIfChanged(previousStore, nextStore) {
+  const normalizedPrevious = normalizeStoredMaterialAccountingSpoolMountStore(previousStore);
+  const normalizedNext = normalizeStoredMaterialAccountingSpoolMountStore(nextStore);
+  const previousDigest = createMaterialAccountingSpoolMountStoreDigest(normalizedPrevious);
+  const nextDigest = createMaterialAccountingSpoolMountStoreDigest(normalizedNext);
+  if (previousDigest === nextDigest || !_idbInitialized || !isIdbAvailable()) {
+    return null;
+  }
+  return compareAndSwapSharedValue({
+    key: "materialAccountingSpoolMountStore",
+    expectedDigest: previousDigest,
+    createDigest: createMaterialAccountingSpoolMountStoreDigest,
+    nextValue: normalizedNext,
+  });
+}
+
+/**
+ * monitorData上の現在Universal SpoolMount authorityをbackend状態へ再照合し、必要ならCAS保護storeへ反映する。
+ *
+ * 【詳細説明】
+ * - SpoolMount storeは通常flushから除外されるため、restore/import後の隔離結果は専用CASで書き戻す。
+ * - importでは呼び出し元がawaitし、restoreでは起動を止めずに非同期で書き戻す。書き戻し完了前の
+ *   operator操作はCAS mismatchでfail-closedする。
+ *
+ * @private
+ * @function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends
+ * @param {Object=} options - 照合オプション。
+ * @param {boolean=} options.awaitDurable - CAS保護storeへの反映完了を待つ場合true。
+ * @returns {Promise<Object|null>|null} durable書き戻し結果、または非同期書き戻しを待たない場合null。
+ */
+function _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends(options = {}) {
+  const previousStore = normalizeStoredMaterialAccountingSpoolMountStore(
+    monitorData.materialAccountingSpoolMountStore
+  );
+  const reconciledStore = _reconcileSpoolMountStoreWithCurrentBackends(previousStore);
+  monitorData.materialAccountingSpoolMountStore = reconciledStore;
+  const persistPromise = _persistReconciledMaterialAccountingSpoolMountStoreIfChanged(previousStore, reconciledStore)
+    .catch((error) => {
+      console.warn("[SpoolMount reconcile] CAS保護storeへの書き戻しに失敗:", error?.message || error);
+      return {
+        ok: false,
+        casApplied: false,
+        backend: "indexedDB",
+        key: "materialAccountingSpoolMountStore",
+        reason: "reconcile-persist-threw",
+        error: error?.message || String(error),
+      };
+    });
+  if (options.awaitDurable === true) {
+    return persistPromise;
+  }
+  persistPromise.then((result) => {
+    if (result && result.ok !== true) {
+      console.warn("[SpoolMount reconcile] CAS保護storeへの書き戻しが未適用:", result.reason || result.error || result);
+    }
+  });
+  return null;
+}
+
+/**
+ * legacy hostSpoolMapのimport/restore割当をUniversal SpoolMount authorityに対して検査する。
+ *
+ * 【詳細説明】
+ * - import/restoreはlegacy `hostSpoolMap`を直接増やし得るため、通常UIの
+ *   `setCurrentSpoolId()` と同じくUniversal `OPEN` mount / in-flight reservationを尊重する。
+ * - まだCASで確定していないincoming Universal storeはここではlegacy割当を奪うauthorityにしない。
+ *
+ * @private
+ * @function _canImportLegacyHostSpoolAssignment
+ * @param {Object} input - 検査入力。
+ * @param {string} input.host - legacy host名。
+ * @param {string|null|undefined} input.spoolId - import/restoreされるspool ID。
+ * @param {Set<string>} input.validSpoolIds - 現在有効なmanaged spool ID集合。
+ * @param {string} input.contextLabel - ログ用context名。
+ * @returns {boolean} hostSpoolMapへ取り込んでよい場合はtrue。
+ */
+function _canImportLegacyHostSpoolAssignment(input = {}) {
+  const host = String(input.host || "").trim();
+  const spoolId = String(input.spoolId || "").trim();
+  const validSpoolIds = input.validSpoolIds instanceof Set ? input.validSpoolIds : new Set();
+  const contextLabel = String(input.contextLabel || "storage").trim();
+  if (!spoolId) {
+    return true;
+  }
+  if (!validSpoolIds.has(spoolId)) {
+    console.warn(`[${contextLabel}] hostSpoolMap["${host}"]: スプール "${spoolId}" が存在しないためスキップ`);
+    return false;
+  }
+  const currentConflict = findUniversalSpoolAssignmentConflict({
+    spoolId,
+    store: monitorData.materialAccountingSpoolMountStore,
+  });
+  const conflict = currentConflict;
+  if (conflict) {
+    console.warn(
+      `[${contextLabel}] hostSpoolMap["${host}"]: スプール "${spoolId}" はUniversal MaterialSourceで` +
+      `装着中または予約中のためlegacy割当をスキップします (${conflict.reason || conflict.type || "conflict"})`
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
+ * operator-managed SpoolMount production storeを現在のmonitorDataへ安全にマージする。
+ *
+ * 【詳細説明】
+ * - このstoreはGate 18.9Hで初めてproduction authorityになるが、restore/import時に
+ *   legacy `hostSpoolMap`、`usageHistory`、管理スプール残量、print binding storeへ投影しない。
+ * - 起動時の空storeへ保存済みstoreを復元する場合は正規化済みstoreをそのまま採用する。
+ * - 既に別の非空storeが存在する状態で異なるstoreをimportした場合はfirst-winせず、
+ *   incoming store全体をretainedUnsupportedEntriesへ隔離して既存authorityを維持する。
+ *
+ * @private
+ * @function _mergeMaterialAccountingSpoolMountStore
+ * @param {Object|null|undefined} incomingStore - 復元またはimportされたSpoolMount store候補。
+ * @returns {boolean} 有効なstore候補を処理した場合はtrue。
+ */
+function _mergeMaterialAccountingSpoolMountStore(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return false;
+  }
+  const currentStore = normalizeStoredMaterialAccountingSpoolMountStore(
+    monitorData.materialAccountingSpoolMountStore
+  );
+  monitorData.materialAccountingSpoolMountStore = _createMergedMaterialAccountingSpoolMountStoreTarget(
+    currentStore,
+    incomingStore,
+  );
+  return true;
+}
+
+/**
+ * 現在storeとincoming storeからSpoolMount import/restore後の候補storeを作成する。
+ *
+ * 【詳細説明】
+ * - このhelperはmonitorDataを直接更新しない。
+ * - import時は、この候補storeをIndexedDB CASへ渡し、CAS成功後だけruntimeへ反映する。
+ * - restore時は既存動作どおり候補をruntimeへ反映し、その後にbest-effort CASでshared keyへ戻す。
+ *
+ * @private
+ * @function _createMergedMaterialAccountingSpoolMountStoreTarget
+ * @param {Object} currentStore - 現在の正規化済みSpoolMount store。
+ * @param {Object|null|undefined} incomingStore - import/restore候補store。
+ * @returns {Object} merge候補store。
+ */
+function _createMergedMaterialAccountingSpoolMountStoreTarget(currentStore, incomingStore) {
+  const normalizedCurrentStore = normalizeStoredMaterialAccountingSpoolMountStore(currentStore);
+  const restoredStore = _reconcileSpoolMountStoreWithCurrentBackends(incomingStore);
+  const currentDigest = createMaterialAccountingSpoolMountStoreDigest(normalizedCurrentStore);
+  const restoredDigest = createMaterialAccountingSpoolMountStoreDigest(restoredStore);
+  const currentIsEmpty = (normalizedCurrentStore.spoolMounts || []).length === 0
+    && (normalizedCurrentStore.events || []).length === 0
+    && (normalizedCurrentStore.conflicts || []).length === 0
+    && (normalizedCurrentStore.retainedUnsupportedEntries || []).length === 0;
+
+  if (currentIsEmpty || currentDigest === restoredDigest) {
+    return restoredStore;
+  }
+
+  return normalizeStoredMaterialAccountingSpoolMountStore({
+    ...normalizedCurrentStore,
+    conflicts: [
+      ...(normalizedCurrentStore.conflicts || []),
+      {
+        type: "spool-mount-store-import-conflict",
+        reason: "divergent-non-empty-spool-mount-store",
+        currentDigest,
+        incomingDigest: restoredDigest,
+      },
+    ],
+    retainedUnsupportedEntries: [
+      ...(normalizedCurrentStore.retainedUnsupportedEntries || []),
+      {
+        kind: "spoolMountStore",
+        reason: "divergent-non-empty-spool-mount-store",
+        record: restoredStore,
+      },
+    ],
+  });
+}
+
+/**
+ * importされたSpoolMount production storeをCAS成功後だけruntimeへ反映する。
+ *
+ * 【詳細説明】
+ * - import payloadは外部入力であり、incoming Universal `OPEN` mountだけでlegacy割当を黙って破棄しない。
+ * - 現在runtime storeをbase `C`、incomingをmergeした結果をtarget `R`として構築し、
+ *   IndexedDB shared keyがまだ`C`であることをCASで確認できた場合だけ`monitorData`へ反映する。
+ * - IndexedDB CASが使えない環境ではsuccess扱いせず、既存runtime storeを維持する。
+ *
+ * @private
+ * @function _importMaterialAccountingSpoolMountStoreDurably
+ * @param {Object|null|undefined} incomingStore - import候補SpoolMount store。
+ * @returns {Promise<Object|null>} CAS結果、または処理対象外ならnull。
+ */
+async function _importMaterialAccountingSpoolMountStoreDurably(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return null;
+  }
+  const baseStore = normalizeStoredMaterialAccountingSpoolMountStore(
+    monitorData.materialAccountingSpoolMountStore
+  );
+  const targetStore = _createMergedMaterialAccountingSpoolMountStoreTarget(baseStore, incomingStore);
+  const baseDigest = createMaterialAccountingSpoolMountStoreDigest(baseStore);
+  const targetDigest = createMaterialAccountingSpoolMountStoreDigest(targetStore);
+  if (baseDigest === targetDigest) {
+    monitorData.materialAccountingSpoolMountStore = targetStore;
+    return { ok: true, casApplied: false, backend: "indexedDB", key: "materialAccountingSpoolMountStore", reason: "unchanged" };
+  }
+  if (!_idbInitialized || !isIdbAvailable()) {
+    console.warn("[importAllData] SpoolMount store import skipped: IndexedDB CAS is unavailable.");
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingSpoolMountStore",
+      reason: "production-cas-unavailable",
+    };
+  }
+  const result = await compareAndSwapSharedValue({
+    key: "materialAccountingSpoolMountStore",
+    expectedDigest: baseDigest,
+    createDigest: createMaterialAccountingSpoolMountStoreDigest,
+    nextValue: targetStore,
+  });
+  if (result?.ok === true && result.casApplied === true) {
+    monitorData.materialAccountingSpoolMountStore = targetStore;
+    return result;
+  }
+  console.warn(
+    `[importAllData] SpoolMount store import CASが未適用: ${result?.reason || result?.error || "unknown"}`
+  );
+  return result || { ok: false, casApplied: false, backend: "indexedDB", key: "materialAccountingSpoolMountStore", reason: "durable-cas-not-applied" };
 }
 
 /**
@@ -349,6 +841,20 @@ export async function exportAllData() {
       // ★ v2.2.0: 旧 STORAGE_KEY フォールバックは削除
       data = {};
     }
+  }
+
+  // Gate 18.9H/I のCAS保護storeは通常flush queueへ載せないため、旧データや未操作環境では
+  // IndexedDB shared keyとしてまだ存在しない場合がある。exportはread-only可視化なので、
+  // 永続storeへ書き込まず、現在runtimeが保持する正規化済み空storeをJSONへ補完する。
+  if (!data.materialAccountingPrintBindingStore || typeof data.materialAccountingPrintBindingStore !== "object") {
+    data.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(
+      monitorData.materialAccountingPrintBindingStore
+    );
+  }
+  if (!data.materialAccountingSpoolMountStore || typeof data.materialAccountingSpoolMountStore !== "object") {
+    data.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore(
+      monitorData.materialAccountingSpoolMountStore
+    );
   }
 
   // パネルレイアウトをエクスポートデータに含める
@@ -594,10 +1100,13 @@ export async function importAllData(data) {
     const validIds = new Set(monitorData.filamentSpools.filter(s => !s.deleted && !s.isDeleted).map(s => s.id));
     for (const [host, spoolId] of Object.entries(data.hostSpoolMap)) {
       if (!(host in monitorData.hostSpoolMap)) {
-        if (!spoolId || validIds.has(spoolId)) {
+        if (_canImportLegacyHostSpoolAssignment({
+          host,
+          spoolId,
+          validSpoolIds: validIds,
+          contextLabel: "importAllData",
+        })) {
           monitorData.hostSpoolMap[host] = spoolId;
-        } else {
-          console.warn(`[importAllData] hostSpoolMap["${host}"]: スプール "${spoolId}" が存在しないためスキップ`);
         }
       }
     }
@@ -651,8 +1160,15 @@ export async function importAllData(data) {
   // ── Gate 18.9E: print-start binding / source-aware usage shadow storeをimportする ──
   //    importしてもlegacy usageHistoryやspool残量へは投影しない。
   if (data.materialAccountingPrintBindingStore && typeof data.materialAccountingPrintBindingStore === "object") {
-    _mergeMaterialAccountingPrintBindingStore(data.materialAccountingPrintBindingStore);
+    await _importMaterialAccountingPrintBindingStoreDurably(data.materialAccountingPrintBindingStore);
   }
+
+  // ── Gate 18.9H: operator-managed SpoolMount production storeをimportする ──
+  //    importしてもlegacy hostSpoolMap / usageHistory / spool残量 / print bindingへは投影しない。
+  if (data.materialAccountingSpoolMountStore && typeof data.materialAccountingSpoolMountStore === "object") {
+    await _importMaterialAccountingSpoolMountStoreDurably(data.materialAccountingSpoolMountStore);
+  }
+  await _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends({ awaitDurable: true });
 
   // ── Gate 19 prep: 物理コマンド復旧ラッチをimportする ──
   //    submitted/post-observed/unknownの未解決証跡だけを保持し、コマンド再送・legacy ledger投影は行わない。
@@ -856,6 +1372,13 @@ export function importHistoryOnly(data) {
       const tb = Number(b.starttime || b.id || 0);
       return tb - ta;
     });
+    const retained = applyPrintHistoryRetention(existing.printStore.history, monitorData.appSettings, { host });
+    if (retained.length !== existing.printStore.history.length) {
+      const sourceLength = existing.printStore.history.length;
+      existing.printStore.history = retained;
+      _markExplicitPrintHistoryRetentionCoverage(existing.printStore, sourceLength, retained.length, resolvePrintHistoryRetentionLimit(monitorData.appSettings), host);
+      existing.printStore._historyRev = (Number(existing.printStore._historyRev) || 0) + 1;
+    }
   }
 
   // ── フィラメント使用実績 (usageHistory): 不整合チェック付きマージ ──
@@ -1030,6 +1553,7 @@ const LS_GLOBAL_FIELDS = [
   "materialAccountingMigrationJournal",
   "materialAccountingMigrationShadowStore",
   "materialAccountingPrintBindingStore",
+  "materialAccountingSpoolMountStore",
   "physicalCommandRecoveryLatch",
   // ★ "currentSpoolId" は廃止済み。hostSpoolMap が唯一の権威。
   "hostSpoolMap", "hostCameraToggle", "spoolSerialCounter"
@@ -1077,11 +1601,11 @@ function _discoverHostKeysInLocalStorage() {
   return hosts;
 }
 /**
- * 印刷履歴の最大保持件数
+ * 印刷履歴のレガシー最大保持件数
  *
- * localStorage に保存する印刷履歴配列の上限を定める。
- * これまでは 250 件までの保持であったが、過去の履歴を
- * より多く参照できるよう 1500 件まで保存できるようにする。
+ * 旧バージョンで固定上限として使っていた値。現在の既定動作は
+ * `monitorData.appSettings.printHistoryMaxEntries === 0` による無制限保持で、
+ * この値はユーザーが明示的に自動削除をONにする際の初期候補として扱う。
  *
  * @constant {number}
  */
@@ -1090,12 +1614,529 @@ export const MAX_PRINT_HISTORY = 1500;
 /**
  * フィラメント使用履歴の最大保持件数
  *
- * 1 印刷で最大 2 リールまで使用する想定のため、
- * 4500 件を上限として保持する。
+ * 旧バージョンで固定上限として使っていた値。現在の既定動作は
+ * `monitorData.appSettings.usageHistoryMaxEntries === 0` による無制限保持で、
+ * 明示的に上限を指定する場合の初期候補として扱う。
  *
  * @constant {number}
  */
 export const MAX_USAGE_HISTORY = 4500;
+
+/**
+ * IndexedDB利用時にlocalStorageへ書き出す回復用印刷履歴バックアップ件数。
+ *
+ * 【詳細説明】
+ * - IndexedDBが正本である場合、localStorageは緊急復元用の近傍snapshotに限定する。
+ * - 正本の無制限履歴はIndexedDB側に残し、localStorage quotaで保存全体が失敗することを避ける。
+ *
+ * @constant {number}
+ */
+const LOCAL_STORAGE_PRINT_HISTORY_BACKUP_LIMIT = MAX_PRINT_HISTORY;
+
+/**
+ * IndexedDB利用時にlocalStorageへ書き出す回復用使用履歴バックアップ件数。
+ *
+ * @constant {number}
+ */
+const LOCAL_STORAGE_USAGE_HISTORY_BACKUP_LIMIT = MAX_USAGE_HISTORY;
+
+/**
+ * IndexedDB利用時にlocalStorageへ書き出すPrintBinding回復バックアップの配列別上限。
+ *
+ * @constant {number}
+ */
+const LOCAL_STORAGE_PRINT_BINDING_BACKUP_LIMIT = MAX_PRINT_HISTORY;
+
+/**
+ * PrintBinding store内でbounded recovery backup対象にする配列フィールド。
+ *
+ * @constant {ReadonlyArray<string>}
+ */
+const PRINT_BINDING_RECOVERY_ARRAY_FIELDS = Object.freeze([
+  "printStartSnapshots",
+  "usageEvidence",
+  "jobMaterialSegments",
+  "ledgerEvents",
+  "unattributedUsage",
+  "retainedUnsupportedEntries"
+]);
+
+/**
+ * 履歴保持件数設定を厳格な十進整数として正規化する。
+ *
+ * 【詳細説明】
+ * - boolean、配列、指数表記、16進表記など、JavaScriptの暗黙Number変換で別の意味になる値は拒否する。
+ * - 設定値は「履歴を削除する権限」なので、意図が明確な正の整数だけを採用する。
+ *
+ * @private
+ * @function _resolveRetentionLimitStrict
+ * @param {*} raw - appSettingsから読んだ未検証値。
+ * @returns {number} 0または1以上の安全な整数。0は無制限。
+ */
+function _resolveRetentionLimitStrict(raw) {
+  if (typeof raw === "number") {
+    return Number.isSafeInteger(raw) && raw > 0 ? raw : 0;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!/^[0-9]+$/.test(trimmed)) return 0;
+    const parsed = Number(trimmed);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+  }
+  return 0;
+}
+
+/**
+ * 印刷履歴の自動削除上限を正規化する。
+ *
+ * 【詳細説明】
+ * - 0は「自動削除しない」を表す明示値として扱う。
+ * - 未設定、null、負数、不正値も安全側で0へ倒し、Electron版では容量由来の履歴欠落を起こさない。
+ * - 1以上の有限数だけを件数上限として採用し、小数は切り捨てる。
+ *
+ * @function resolvePrintHistoryRetentionLimit
+ * @param  {Object|null|undefined} settings - monitorData.appSettings相当の設定オブジェクト。
+ * @returns {number} 0または1以上の整数。0は無制限を示す。
+ */
+export function resolvePrintHistoryRetentionLimit(settings = monitorData.appSettings) {
+  return _resolveRetentionLimitStrict(settings?.printHistoryMaxEntries);
+}
+
+/**
+ * 指定ホストのprintStore.historyから削除してはいけない台帳根拠ジョブIDを収集する。
+ *
+ * 【詳細説明】
+ * - `deriveSpoolRemaining()` は装着区間の `host/sinceJobId/untilJobId` と
+ *   printStore.history の消費ジョブを使って残量を冪等に導出する。
+ * - 自動削除がこの根拠ジョブを落とすと、次回reconcileで残量が増えたように見えるため、
+ *   retention limitより優先して保持対象に加える。
+ *
+ * @private
+ * @function _collectLedgerProtectedPrintJobIds
+ * @param {string} host - 対象ホスト名。
+ * @param {Array<Object>} history - 新しい順に並ぶprintStore.history。
+ * @returns {Set<number>} 保護対象の数値job id集合。
+ */
+function _collectLedgerProtectedPrintJobIds(host, history) {
+  const protectedIds = new Set();
+  if (!host || !Array.isArray(history) || history.length === 0) return protectedIds;
+  const spools = Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [];
+  for (const spool of spools) {
+    const spoolId = spool?.id;
+    if (!spoolId) continue;
+    let intervals = [];
+    try {
+      intervals = getSpoolIntervals(spoolId) || [];
+    } catch {
+      intervals = [];
+    }
+    const activeIntervals = intervals.filter((interval) => interval && !interval.superseded && interval.host === host);
+    const openIntervals = activeIntervals.filter((interval) => interval.untilJobId == null);
+    if (activeIntervals.length === 0 || openIntervals.length >= 2) continue;
+    const interval = openIntervals[0] || activeIntervals[activeIntervals.length - 1];
+    if (!interval || interval.boundaryStatus === "unknown") continue;
+    const sinceJobId = Number(interval.sinceJobId) || 0;
+    const untilJobId = interval.untilJobId == null ? null : Number(interval.untilJobId);
+    for (const job of history) {
+      const jobId = Number(job?.id);
+      if (!Number.isFinite(jobId)) continue;
+      if (jobId <= sinceJobId) continue;
+      if (untilJobId != null && Number.isFinite(untilJobId) && jobId > untilJobId) continue;
+      const used = Number(attributedUsed(job, spoolId));
+      if (Number.isFinite(used) && used > 0) protectedIds.add(jobId);
+    }
+  }
+  return protectedIds;
+}
+
+/**
+ * 履歴jobの識別子候補を文字列集合として生成する。
+ *
+ * 【詳細説明】
+ * - K2/PrintBinding側では`printJobId`がprotocol/job文字列で保持され、従来K1履歴では
+ *   数値`id`が主キーとして使われるため、retention保護では両方を照合候補にする。
+ *
+ * @private
+ * @function _collectHistoryJobIdentityKeys
+ * @param {Object|null|undefined} job - printStore.history entry。
+ * @returns {Set<string>} job identity候補。
+ */
+function _collectHistoryJobIdentityKeys(job) {
+  return new Set([
+    job?.printJobId,
+    job?.jobId,
+    job?.id,
+    job?.starttime
+  ].map((value) => String(value ?? "").trim()).filter(Boolean));
+}
+
+/**
+ * PrintBinding未完了判定用のsource job keyを生成する。
+ *
+ * 【詳細説明】
+ * - `printJobId`は機器側のepoch秒などで複数device間に衝突し得るため、pending判定では
+ *   deviceIdとprintPlanIdも含めたkeyでsnapshot/segmentを照合する。
+ * - 空の`printJobId`は履歴へ戻せる保護対象を特定できないため、空文字として扱い除外する。
+ *
+ * @private
+ * @function _createPrintBindingPendingProtectionKey
+ * @param {Object|null|undefined} record - PrintBinding snapshotまたはsegment候補。
+ * @returns {{key:string,printJobId:string}} pending判定keyと履歴照合用printJobId。
+ */
+function _createPrintBindingPendingProtectionKey(record) {
+  const printJobId = String(record?.printJobId ?? record?.jobId ?? record?.printId ?? record?.id ?? "").trim();
+  if (!printJobId) {
+    return { key: "", printJobId: "" };
+  }
+  return {
+    key: [
+      String(record?.deviceId ?? "").trim(),
+      printJobId,
+      String(record?.printPlanId ?? record?.planId ?? "").trim()
+    ].join("\u0000"),
+    printJobId
+  };
+}
+
+/**
+ * completion attributionが未commitのPrintBinding jobをretention保護対象として収集する。
+ *
+ * 【詳細説明】
+ * - print-start snapshotだけがCAS保存済みでcompletion segmentがまだ無いjobでは、
+ *   後続retryが`printStore.history`のraw materialUsed CSVを再読する。
+ * - その履歴をretentionで削除すると、authorityはfail-closedするがsource-aware accountingを
+ *   後から完成できなくなるため、segmentが揃うまではjob履歴を保持する。
+ * - 複数K2で同じ`printJobId`が出た場合でも、別deviceの完了segmentでpending snapshotを
+ *   完了扱いしないよう、pending判定はdevice + job + plan単位で行う。
+ *
+ * @private
+ * @function _collectPrintBindingProtectedPrintJobIds
+ * @param {Array<Object>} history - 新しい順に並ぶprintStore.history。
+ * @returns {Set<number>} 保護対象の数値job id集合。
+ */
+function _collectPrintBindingProtectedPrintJobIds(history) {
+  const protectedIds = new Set();
+  const store = monitorData.materialAccountingPrintBindingStore;
+  if (!store || typeof store !== "object" || !Array.isArray(history) || history.length === 0) {
+    return protectedIds;
+  }
+  const snapshotsByKey = new Map();
+  const printJobIdsByKey = new Map();
+  for (const snapshot of Array.isArray(store.printStartSnapshots) ? store.printStartSnapshots : []) {
+    const identity = _createPrintBindingPendingProtectionKey(snapshot);
+    if (!identity.key || !identity.printJobId) continue;
+    snapshotsByKey.set(identity.key, (snapshotsByKey.get(identity.key) || 0) + 1);
+    printJobIdsByKey.set(identity.key, identity.printJobId);
+  }
+  if (snapshotsByKey.size === 0) {
+    return protectedIds;
+  }
+  const segmentsByKey = new Map();
+  for (const segment of Array.isArray(store.jobMaterialSegments) ? store.jobMaterialSegments : []) {
+    const identity = _createPrintBindingPendingProtectionKey(segment);
+    if (!identity.key) continue;
+    segmentsByKey.set(identity.key, (segmentsByKey.get(identity.key) || 0) + 1);
+  }
+  const pendingJobIds = new Set();
+  for (const [key, snapshotCount] of snapshotsByKey.entries()) {
+    if ((segmentsByKey.get(key) || 0) < snapshotCount) {
+      pendingJobIds.add(printJobIdsByKey.get(key));
+    }
+  }
+  if (pendingJobIds.size === 0) {
+    return protectedIds;
+  }
+  for (const job of history) {
+    const numericJobId = Number(job?.id);
+    if (!Number.isFinite(numericJobId)) continue;
+    const keys = _collectHistoryJobIdentityKeys(job);
+    if ([...keys].some((key) => pendingJobIds.has(key))) {
+      protectedIds.add(numericJobId);
+    }
+  }
+  return protectedIds;
+}
+
+/**
+ * 明示retentionにより履歴全体の総量再計算authorityが不完全になったことを記録する。
+ *
+ * 【詳細説明】
+ * - ユーザー設定による保持上限は正常な操作なので、bounded recoveryのように
+ *   active anchor deriveまで停止する必要はない。
+ * - 一方で履歴全体を合算するmanual recomputeは成立しないため、totalLifetimeCompleteだけを
+ *   falseにし、ledger側が総量再計算だけfail-closedできるようにする。
+ *
+ * @private
+ * @function _markExplicitPrintHistoryRetentionCoverage
+ * @param {Object|null|undefined} printStore - 対象printStore。
+ * @param {number} sourceLength - retention適用前の履歴件数。
+ * @param {number} retainedLength - retention適用後の履歴件数。
+ * @param {number} limit - 設定保持上限。
+ * @param {string=} host - active anchor coverageを評価する対象ホスト名。
+ * @returns {void}
+ */
+function _markExplicitPrintHistoryRetentionCoverage(printStore, sourceLength, retainedLength, limit, host = "") {
+  if (!printStore || typeof printStore !== "object" || !(sourceLength > retainedLength)) {
+    return;
+  }
+  const existingCoverage = printStore.historyCoverage && typeof printStore.historyCoverage === "object"
+    ? printStore.historyCoverage
+    : {};
+  const activeAnchorSinceJobIds = _collectActiveLedgerAnchorSinceJobIds(host);
+  const existingActiveAnchorComplete = typeof existingCoverage.activeAnchorComplete === "boolean"
+    ? existingCoverage.activeAnchorComplete
+    : activeAnchorSinceJobIds.length === 0;
+  printStore.historyCoverage = {
+    ...existingCoverage,
+    activeAnchorComplete: printStore.historyAuthorityIncomplete === true ? false : existingActiveAnchorComplete,
+    totalLifetimeComplete: false,
+    source: "print-history-retention",
+    sourceLength,
+    retainedLength,
+    limit
+  };
+}
+
+/**
+ * 指定ホストの現在のactive mount anchorを収集する。
+ *
+ * 【詳細説明】
+ * - print idはK1/K2とも連番とは限らずepoch秒が使われるため、`sinceJobId + 1`のような
+ *   算術的sentinelでは履歴被覆を証明できない。
+ * - ここではledger projectionから最新の有効区間だけを取り出し、fetch windowがそのanchorを
+ *   実際に跨いだかどうかを判定するための入力に限定する。
+ *
+ * @private
+ * @function _collectActiveLedgerAnchorSinceJobIds
+ * @param {string} host - 対象ホスト名。
+ * @returns {number[]} active anchor sinceJobId配列。
+ */
+function _collectActiveLedgerAnchorSinceJobIds(host) {
+  const anchors = [];
+  if (!host) return anchors;
+  const spools = Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [];
+  for (const spool of spools) {
+    const spoolId = spool?.id;
+    if (!spoolId) continue;
+    let intervals = [];
+    try {
+      intervals = getSpoolIntervals(spoolId) || [];
+    } catch {
+      intervals = [];
+    }
+    const activeIntervals = intervals.filter((interval) => interval && !interval.superseded && interval.host === host);
+    const openIntervals = activeIntervals.filter((interval) => interval.untilJobId == null);
+    if (activeIntervals.length === 0 || openIntervals.length >= 2) continue;
+    const interval = openIntervals[0] || activeIntervals[activeIntervals.length - 1];
+    if (!interval || interval.boundaryStatus === "unknown") continue;
+    const sinceJobId = Number(interval.sinceJobId) || 0;
+    if (sinceJobId > 0) anchors.push(sinceJobId);
+  }
+  return anchors;
+}
+
+/**
+ * プリンタから取得した履歴windowがactive anchorを被覆しているか記録する。
+ *
+ * 【詳細説明】
+ * - この関数は`parseRawHistoryList()`からretention適用前の「今回プリンタが返した履歴window」を
+ *   受け取り、storage内のmerged historyとは分けてcoverageを記録する。
+ * - 連番性は仮定しない。新しい順に得られたwindowの最古IDがactive anchor以下なら、
+ *   「少なくともanchorを跨ぐ範囲を今回fetchできた」と判断する。
+ * - windowがanchorまで届かない、または履歴が空の場合はactiveAnchorComplete=falseとして
+ *   ledgerのverified/debit authorityをfail-closedへ倒す。
+ *
+ * @function recordPrintHistoryFetchCoverage
+ * @param {string} host - 対象ホスト名。
+ * @param {Array<Object>} historyWindow - retention適用前のparsed print history。
+ * @returns {{recorded:boolean,activeAnchorComplete:boolean|null,oldestPrintJobId:number|null,newestPrintJobId:number|null,anchorSinceJobIds:number[]}} 記録結果。
+ */
+export function recordPrintHistoryFetchCoverage(host, historyWindow) {
+  if (!host) {
+    return {
+      recorded: false,
+      activeAnchorComplete: null,
+      oldestPrintJobId: null,
+      newestPrintJobId: null,
+      anchorSinceJobIds: []
+    };
+  }
+  ensureMachineData(host);
+  const printStore = monitorData.machines[host].printStore;
+  const ids = (Array.isArray(historyWindow) ? historyWindow : [])
+    .map((job) => Number(job?.id))
+    .filter(Number.isFinite);
+  const oldestPrintJobId = ids.length > 0 ? Math.min(...ids) : null;
+  const newestPrintJobId = ids.length > 0 ? Math.max(...ids) : null;
+  const anchorSinceJobIds = _collectActiveLedgerAnchorSinceJobIds(host);
+  const activeAnchorComplete = anchorSinceJobIds.length === 0
+    ? true
+    : (
+      oldestPrintJobId !== null &&
+      newestPrintJobId !== null &&
+      anchorSinceJobIds.every((sinceJobId) => oldestPrintJobId <= sinceJobId && sinceJobId <= newestPrintJobId)
+    );
+  printStore.historyCoverage = {
+    ...(printStore.historyCoverage && typeof printStore.historyCoverage === "object" ? printStore.historyCoverage : {}),
+    activeAnchorComplete: printStore.historyAuthorityIncomplete === true ? false : activeAnchorComplete,
+    source: "print-history-fetch",
+    observedAt: getCurrentTimestamp(),
+    newestPrintJobId,
+    oldestPrintJobId,
+    anchorSinceJobIds,
+    coverageProof: "fetch-window-crosses-active-anchor"
+  };
+  return {
+    recorded: true,
+    activeAnchorComplete: printStore.historyCoverage.activeAnchorComplete,
+    oldestPrintJobId,
+    newestPrintJobId,
+    anchorSinceJobIds
+  };
+}
+
+/**
+ * 指定ホストのactive anchor coverageを再probe待ちへ戻す。
+ *
+ * 【詳細説明】
+ * - `activeAnchorComplete:true`は、現在の接続世代でプリンタから取得した履歴windowが
+ *   active anchorを跨いだ場合だけ使用できる揮発的な証明として扱う。
+ * - WebSocket切断、再接続開始、同一プロセス内の接続差し替えでは、前接続で得たtrueを
+ *   新しい接続世代へ持ち越さないようfalseへ落とす。
+ * - `totalLifetimeComplete:false`は履歴全体の不完全性を示す耐久メタデータなので保持する。
+ *
+ * @function markPrintHistoryActiveCoverageRequiresReprobe
+ * @param {string} host - 対象ホスト名。
+ * @param {Object} [options={}] - 再probe化オプション。
+ * @param {string} [options.source="print-history-active-reprobe-required"] - coverage source名。
+ * @returns {{changed:boolean,activeAnchorComplete:boolean|null,staleSource:string|null}} 更新結果。
+ */
+export function markPrintHistoryActiveCoverageRequiresReprobe(host, options = {}) {
+  const source = typeof options.source === "string" && options.source
+    ? options.source
+    : "print-history-active-reprobe-required";
+  const machine = host ? monitorData.machines?.[host] : null;
+  const coverage = machine?.printStore?.historyCoverage;
+  if (!coverage || typeof coverage !== "object") {
+    return {
+      changed: false,
+      activeAnchorComplete: null,
+      staleSource: null
+    };
+  }
+  if (coverage.activeAnchorComplete !== true) {
+    return {
+      changed: false,
+      activeAnchorComplete: coverage.activeAnchorComplete === false ? false : null,
+      staleSource: coverage.staleSource || null
+    };
+  }
+  const staleSource = coverage.source || "unknown";
+  machine.printStore.historyCoverage = {
+    ...coverage,
+    activeAnchorComplete: false,
+    source,
+    staleSource,
+    staleActiveAnchorComplete: true,
+    reprobeRequiredAt: getCurrentTimestamp()
+  };
+  return {
+    changed: true,
+    activeAnchorComplete: false,
+    staleSource
+  };
+}
+
+/**
+ * 印刷履歴配列へ設定済みの自動削除上限を適用する。
+ *
+ * 【詳細説明】
+ * - 履歴配列は既存のprintmanager契約どおり「新しい順」に並んでいる前提で扱う。
+ * - 上限0の場合は配列をコピーして返すだけで、古い履歴を削除しない。
+ * - 上限1以上の場合は先頭側の新しい履歴だけを保持し、末尾側の古い履歴を削除する。
+ *
+ * @function applyPrintHistoryRetention
+ * @param  {Array<Object>} history - 新しい順に並んだ印刷履歴配列。
+ * @param  {Object|null|undefined} settings - monitorData.appSettings相当の設定オブジェクト。
+ * @param  {Object} [options={}] - retention補助オプション。
+ * @param  {string} [options.host] - 台帳保護ジョブを判定する対象ホスト名。
+ * @returns {Array<Object>} 保持設定を反映した新しい配列。
+ */
+export function applyPrintHistoryRetention(history, settings = monitorData.appSettings, options = {}) {
+  const list = Array.isArray(history) ? history : [];
+  const limit = resolvePrintHistoryRetentionLimit(settings);
+  if (limit <= 0) return list.slice();
+  const retained = list.slice(0, limit);
+  const seen = new Set(retained.map((job) => Number(job?.id)).filter(Number.isFinite));
+  const protectedIds = new Set([
+    ..._collectLedgerProtectedPrintJobIds(options.host, list),
+    ..._collectPrintBindingProtectedPrintJobIds(list)
+  ]);
+  if (protectedIds.size > 0) {
+    for (const job of list.slice(limit)) {
+      const jobId = Number(job?.id);
+      if (!Number.isFinite(jobId) || seen.has(jobId) || !protectedIds.has(jobId)) continue;
+      retained.push(job);
+      seen.add(jobId);
+    }
+  }
+  if (options.host) {
+    const machine = monitorData.machines?.[options.host];
+    _markExplicitPrintHistoryRetentionCoverage(machine?.printStore, list.length, retained.length, limit, options.host);
+  }
+  return retained;
+}
+
+/**
+ * 現在の保持設定を全ホストの保存済み印刷履歴へ即時適用する。
+ *
+ * 【詳細説明】
+ * - ストレージ設定UIで自動削除をON/OFFした直後、既存履歴にも同じ契約を反映するための
+ *   明示的なチョークポイント。
+ * - 上限0の場合は削除を行わず、結果だけを返す。
+ * - 1件以上の削除があったホストでは `_historyRev` を加算し、relay差分検出が履歴短縮を
+ *   見落とさないようにする。保存自体は呼び出し元が行う。
+ *
+ * @function applyConfiguredPrintHistoryRetentionToAllMachines
+ * @returns {{changedHosts:Array<string>, removedJobs:number, limit:number}} 適用結果。
+ */
+export function applyConfiguredPrintHistoryRetentionToAllMachines() {
+  const limit = resolvePrintHistoryRetentionLimit(monitorData.appSettings);
+  const changedHosts = [];
+  let removedJobs = 0;
+  if (limit <= 0) return { changedHosts, removedJobs, limit };
+
+  for (const [host, machine] of Object.entries(monitorData.machines || {})) {
+    if (host === PLACEHOLDER_HOSTNAME) continue;
+    const history = machine?.printStore?.history;
+    if (!Array.isArray(history) || history.length <= limit) continue;
+    const retained = applyPrintHistoryRetention(history, monitorData.appSettings, { host });
+    machine.printStore.history = retained;
+    _markExplicitPrintHistoryRetentionCoverage(machine.printStore, history.length, retained.length, limit, host);
+    machine.printStore._historyRev = (Number(machine.printStore._historyRev) || 0) + 1;
+    changedHosts.push(host);
+    removedJobs += history.length - retained.length;
+  }
+
+  return { changedHosts, removedJobs, limit };
+}
+
+/**
+ * フィラメント使用履歴の自動削除上限を正規化する。
+ *
+ * 【詳細説明】
+ * - 0は「自動削除しない」を表す。
+ * - 未設定、null、負数、不正値も0へ倒し、CFS/ItemKeeper連携で必要な過去履歴を
+ *   既定では失わない。
+ * - 1以上の有限数だけを件数上限として採用する。
+ *
+ * @function resolveUsageHistoryRetentionLimit
+ * @param  {Object|null|undefined} settings - monitorData.appSettings相当の設定オブジェクト。
+ * @returns {number} 0または1以上の整数。0は無制限を示す。
+ */
+export function resolveUsageHistoryRetentionLimit(settings = monitorData.appSettings) {
+  return _resolveRetentionLimitStrict(settings?.usageHistoryMaxEntries);
+}
 
 /**
  * フィラメント使用履歴配列が上限を超えた場合に古い記録を削除する。
@@ -1104,7 +2145,8 @@ export const MAX_USAGE_HISTORY = 4500;
  */
 export function trimUsageHistory() {
   const logs = monitorData.usageHistory;
-  if (logs.length <= MAX_USAGE_HISTORY) return;
+  const limit = resolveUsageHistoryRetentionLimit(monitorData.appSettings);
+  if (limit <= 0 || logs.length <= limit) return;
 
   // 各スプールの最新の startLength エントリ（装着記録）を保護
   // これが失われると autoCorrectCurrentSpool が残量を再計算できなくなる
@@ -1117,7 +2159,7 @@ export function trimUsageHistory() {
     }
   }
 
-  const cutoff = logs.length - MAX_USAGE_HISTORY;
+  const cutoff = logs.length - limit;
   const trimmed = logs.filter((_, i) => i >= cutoff || protectedIdx.has(i));
   // ★ レビュー指摘#8: トリム（先頭側の中間削除）でも rev を加算し変更検出を確実にする。
   if (trimmed.length !== logs.length) {
@@ -1180,18 +2222,927 @@ export async function saveUnifiedStorageDurably() {
 }
 
 /**
+ * MaterialAccounting PrintBinding shadow storeをCAS境界で耐久保存する。
+ *
+ * 【詳細説明】
+ * - print binding storeはまだ残量debit権威ではないが、後続のsource-specific usage attributionの
+ *   根拠になるため、print-start snapshotをqueue投入だけで成功扱いしない。
+ * - IndexedDB shared store上の現在digestが`baseStoreDigest`と一致した場合だけ`nextStore`を書き込み、
+ *   transaction完了後に初めて`monitorData.materialAccountingPrintBindingStore`を更新する。
+ * - IndexedDB未使用、CAS不一致、保存失敗ではメモリ上のstoreも進めない。
+ *
+ * @function commitMaterialAccountingPrintBindingStoreDurably
+ * @param {Object} input - commit入力。
+ * @param {string} input.baseStoreDigest - runtimeが準備時に見たbase store digest。
+ * @param {Object} input.nextStore - CAS成功時に保存する次store。
+ * @returns {Promise<{ok:boolean,casApplied:boolean,backend:string,key:string,reason:string,currentDigest?:string,nextDigest?:string,error?:string}>} commit結果。
+ * @example
+ * const result = await commitMaterialAccountingPrintBindingStoreDurably({ baseStoreDigest, nextStore });
+ */
+export async function commitMaterialAccountingPrintBindingStoreDurably(input = {}) {
+  const commitPromise = _printBindingCommitMutex.then(() => _commitMaterialAccountingPrintBindingStoreDurably(input));
+  _printBindingCommitMutex = commitPromise.catch(() => {});
+  return commitPromise;
+}
+
+/**
+ * PrintBinding store commitの実処理を行う。
+ *
+ * @private
+ * @function _commitMaterialAccountingPrintBindingStoreDurably
+ * @param {Object} input - commit入力。
+ * @returns {Promise<{ok:boolean,casApplied:boolean,backend:string,key:string,reason:string,currentDigest?:string,nextDigest?:string,error?:string}>} commit結果。
+ */
+async function _commitMaterialAccountingPrintBindingStoreDurably(input = {}) {
+  const key = "materialAccountingPrintBindingStore";
+  const baseStoreDigest = String(input.baseStoreDigest || "").trim();
+  if (!baseStoreDigest) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "base-store-digest-required" };
+  }
+  if (!_idbInitialized || !isIdbAvailable()) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "production-cas-unavailable" };
+  }
+
+  const normalizedNextStore = normalizeStoredMaterialAccountingPrintBindingStore(input.nextStore);
+  const result = await compareAndSwapSharedValue({
+    key,
+    expectedDigest: baseStoreDigest,
+    createDigest: createMaterialAccountingPrintBindingStoreDigest,
+    nextValue: normalizedNextStore,
+  });
+  if (!result || result.ok !== true || result.casApplied !== true) {
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key,
+      reason: result?.reason || "durable-cas-not-applied",
+      currentDigest: result?.currentDigest,
+      nextDigest: result?.nextDigest,
+      error: result?.error,
+    };
+  }
+
+  monitorData.materialAccountingPrintBindingStore = normalizedNextStore;
+  return {
+    ok: true,
+    casApplied: true,
+    backend: "indexedDB",
+    key,
+    reason: "cas-applied",
+    currentDigest: result.currentDigest,
+    nextDigest: result.nextDigest,
+  };
+}
+
+/**
+ * importされたPrintBinding shadow storeをCAS成功後だけruntimeへ反映する。
+ *
+ * 【詳細説明】
+ * - import payloadは外部入力なので、source-specific usage/debit根拠を通常mergeだけで現在authorityへ昇格しない。
+ * - 現在runtime storeをbase `C`、incomingをmergeした結果をtarget `R`として構築し、
+ *   IndexedDB shared keyがまだ`C`であることをCASで確認できた場合だけ`monitorData`へ反映する。
+ * - IndexedDB CASが使えない環境では成功扱いせず、既存runtime storeを維持する。
+ *
+ * @private
+ * @function _importMaterialAccountingPrintBindingStoreDurably
+ * @param {Object|null|undefined} incomingStore - import候補PrintBinding store。
+ * @returns {Promise<Object|null>} CAS結果、または処理対象外ならnull。
+ */
+async function _importMaterialAccountingPrintBindingStoreDurably(incomingStore) {
+  if (!incomingStore || typeof incomingStore !== "object" || Array.isArray(incomingStore)) {
+    return null;
+  }
+  const baseStore = normalizeStoredMaterialAccountingPrintBindingStore(
+    monitorData.materialAccountingPrintBindingStore
+  );
+  const targetStore = _createMergedMaterialAccountingPrintBindingStoreTarget(baseStore, incomingStore);
+  const baseDigest = createMaterialAccountingPrintBindingStoreDigest(baseStore);
+  const targetDigest = createMaterialAccountingPrintBindingStoreDigest(targetStore);
+  if (baseDigest === targetDigest) {
+    monitorData.materialAccountingPrintBindingStore = targetStore;
+    return {
+      ok: true,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingPrintBindingStore",
+      reason: "unchanged",
+    };
+  }
+  if (!_idbInitialized || !isIdbAvailable()) {
+    console.warn("[importAllData] PrintBinding store import skipped: IndexedDB CAS is unavailable.");
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key: "materialAccountingPrintBindingStore",
+      reason: "production-cas-unavailable",
+    };
+  }
+  const result = await compareAndSwapSharedValue({
+    key: "materialAccountingPrintBindingStore",
+    expectedDigest: baseDigest,
+    createDigest: createMaterialAccountingPrintBindingStoreDigest,
+    nextValue: targetStore,
+  });
+  if (result?.ok === true && result.casApplied === true) {
+    monitorData.materialAccountingPrintBindingStore = targetStore;
+    return result;
+  }
+  console.warn(
+    `[importAllData] PrintBinding store import CASが未適用: ${result?.reason || result?.error || "unknown"}`
+  );
+  return result || {
+    ok: false,
+    casApplied: false,
+    backend: "indexedDB",
+    key: "materialAccountingPrintBindingStore",
+    reason: "durable-cas-not-applied",
+  };
+}
+
+/**
+ * SpoolMount authority precondition用digestを生成する。
+ *
+ * @private
+ * @function _createSpoolMountAuthorityPreconditionDigest
+ * @param {string} namespace - digest namespace。
+ * @param {*} value - digest対象値。
+ * @returns {string} deterministic digest。
+ */
+function _createSpoolMountAuthorityPreconditionDigest(namespace, value) {
+  return `fnv1a128:${createPrinterCoreV3DeterministicId(namespace, [
+    stableStringifyPrinterCoreV3Value(value ?? null),
+  ])}`;
+}
+
+/**
+ * 現在の3DPmon管理spoolを取得する。
+ *
+ * @private
+ * @function _findCurrentManagedSpoolForPrecondition
+ * @param {string} spoolId - managed spool ID。
+ * @returns {?Object} managed spool。
+ */
+function _findCurrentManagedSpoolForPrecondition(spoolId) {
+  const target = String(spoolId || "").trim();
+  return (Array.isArray(monitorData.filamentSpools) ? monitorData.filamentSpools : [])
+    .find((spool) => String(spool?.id || spool?.spoolId || "").trim() === target) || null;
+}
+
+/**
+ * 現在のlegacy hostSpoolMap占有を取得する。
+ *
+ * @private
+ * @function _findCurrentLegacyOccupancyForPrecondition
+ * @param {string} spoolId - managed spool ID。
+ * @param {string} expectedDeviceId - 期待device ID。
+ * @returns {?Object} legacy占有。未占有ならnull。
+ */
+function _findCurrentLegacyOccupancyForPrecondition(spoolId, expectedDeviceId) {
+  const target = String(spoolId || "").trim();
+  const expected = String(expectedDeviceId || "").trim();
+  const hostSpoolMap = monitorData.hostSpoolMap && typeof monitorData.hostSpoolMap === "object"
+    ? monitorData.hostSpoolMap
+    : {};
+  for (const [host, mountedSpoolId] of Object.entries(hostSpoolMap)) {
+    if (String(mountedSpoolId || "").trim() !== target) {
+      continue;
+    }
+    return {
+      host,
+      spoolId: target,
+      reason: String(host || "").trim() === expected
+        ? "legacy-spool-occupancy-requires-migration"
+        : "legacy-spool-already-mounted",
+    };
+  }
+  return null;
+}
+
+/**
+ * MaterialSource kindからFilamentUnit kindを推定する。
+ *
+ * @private
+ * @function _resolveSpoolMountPreconditionUnitKind
+ * @param {string} sourceKind - MaterialSource kind。
+ * @returns {string} FilamentUnit kind。
+ */
+function _resolveSpoolMountPreconditionUnitKind(sourceKind) {
+  if (sourceKind === MATERIAL_SOURCE_KIND.CFS_C_SLOT) {
+    return FILAMENT_UNIT_KIND.CFS_C;
+  }
+  if (sourceKind === MATERIAL_SOURCE_KIND.CFS_SLOT) {
+    return FILAMENT_UNIT_KIND.CFS;
+  }
+  return FILAMENT_UNIT_KIND.PRINTER_DIRECT;
+}
+
+/**
+ * 現在観測snapshotからMaterialSource kindを解決する。
+ *
+ * @private
+ * @function _resolveSpoolMountPreconditionSourceKind
+ * @param {Object} snapshot - read-only source snapshot。
+ * @returns {?string} MaterialSource kind。
+ */
+function _resolveSpoolMountPreconditionSourceKind(snapshot) {
+  const kind = String(snapshot?.kind || "").trim();
+  if (kind === MATERIAL_SOURCE_KIND.CFS_SLOT ||
+      kind === MATERIAL_SOURCE_KIND.CFS_C_SLOT ||
+      kind === MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL ||
+      kind === MATERIAL_SOURCE_KIND.DIRECT_FEED) {
+    return kind;
+  }
+  if (String(snapshot?.providerKind || "").trim() === "cfs-c") {
+    return MATERIAL_SOURCE_KIND.CFS_C_SLOT;
+  }
+  if (String(snapshot?.type || "").trim() === "external") {
+    return MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL;
+  }
+  return null;
+}
+
+/**
+ * 現在観測snapshotからidentity strengthを解決する。
+ *
+ * @private
+ * @function _resolveSpoolMountPreconditionIdentityStrength
+ * @param {Object} snapshot - read-only source snapshot。
+ * @param {Object} deviceRecord - device observation record。
+ * @returns {?string} identity strength。
+ */
+function _resolveSpoolMountPreconditionIdentityStrength(snapshot, deviceRecord) {
+  const allowed = new Set(Object.values(MATERIAL_IDENTITY_STRENGTH));
+  const candidates = [
+    snapshot?.materialSourceIdentityStrength,
+    snapshot?.identityStrength,
+    deviceRecord?.identityStrength,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate || "").trim();
+    if (!value) {
+      continue;
+    }
+    return allowed.has(value) ? value : null;
+  }
+  return MATERIAL_IDENTITY_STRENGTH.UNKNOWN;
+}
+
+/**
+ * 観測snapshotから現在CAS precondition用MaterialSource recordを再構築する。
+ *
+ * 【詳細説明】
+ * - 観測storeのキーはtransport-local aliasであり、永続IDとして扱わない。
+ * - storage CASではruntime resolverと同じdevice-scoped MaterialSource IDを再生成し、aliasとcanonical IDの
+ *   どちらでpreconditionが来ても同じbinding digestへ解決できるようにする。
+ *
+ * @private
+ * @function _createSpoolMountPreconditionMaterialSourceRecord
+ * @param {Object} snapshot - read-only source snapshot。
+ * @param {Object} deviceRecord - device observation record。
+ * @param {string} deviceId - Device ID。
+ * @param {string} sourceLookupId - latestBySourceId内の検索キー。
+ * @returns {?Object} MaterialSource record。
+ */
+function _createSpoolMountPreconditionMaterialSourceRecord(snapshot, deviceRecord, deviceId, sourceLookupId) {
+  if (!snapshot || typeof snapshot !== "object") {
+    return null;
+  }
+
+  const kind = _resolveSpoolMountPreconditionSourceKind(snapshot);
+  const identityStrength = _resolveSpoolMountPreconditionIdentityStrength(snapshot, deviceRecord);
+  if (!kind || !identityStrength) {
+    return null;
+  }
+
+  const rawLocator = snapshot.locator && typeof snapshot.locator === "object" ? snapshot.locator : {};
+  const locator = createMaterialSourceLocator({
+    kind,
+    index: rawLocator.index ?? snapshot.index ?? (kind === MATERIAL_SOURCE_KIND.EXTERNAL_SPOOL ? 0 : null),
+    unitIndex: rawLocator.unitIndex ?? snapshot.unitIndex ?? snapshot.boxIndex ?? snapshot.boxId ?? null,
+    boxId: rawLocator.boxId ?? snapshot.boxId ?? null,
+    slotIndex: rawLocator.slotIndex ?? snapshot.slotIndex ?? snapshot.slotId ?? snapshot.protocolSlotId ?? null,
+    protocolSlotId: rawLocator.protocolSlotId ?? snapshot.protocolSlotId ?? snapshot.slotId ?? null,
+  });
+  const unitKind = _resolveSpoolMountPreconditionUnitKind(kind);
+  const unitId = String(snapshot.unitId || "").trim() ||
+    String(snapshot.providerId || "").trim() ||
+    `material-unit:${deviceId}:${unitKind}:${locator.unitIndex ?? locator.index ?? 0}`;
+  const identity = createMaterialSourceIdentity({
+    deviceId,
+    unitId,
+    kind,
+    slotIndex: locator.slotIndex,
+    index: locator.index,
+  });
+
+  return createMaterialSourceRecord({
+    deviceId,
+    unitId,
+    kind,
+    locator,
+    identity,
+    identityStrength,
+    displayLabel: snapshot.displayLabel || snapshot.label || sourceLookupId,
+    aliases: [sourceLookupId, snapshot.sourceId, snapshot.materialSourceId, snapshot.id]
+      .map((value) => String(value ?? "").trim())
+      .filter((value, index, list) => value && list.indexOf(value) === index),
+  });
+}
+
+/**
+ * CAS precondition用MaterialSource recordからbinding digestを生成する。
+ *
+ * @private
+ * @function _createSpoolMountPreconditionSourceBindingDigest
+ * @param {Object} source - MaterialSource record。
+ * @returns {string} source identity digest。
+ */
+function _createSpoolMountPreconditionSourceBindingDigest(source) {
+  return createPrinterCoreV3DeterministicId("material-source-binding", [
+    source.deviceId,
+    source.materialSourceId,
+    source.unitId,
+    source.kind,
+    source.identityStrength,
+    source.identity,
+    source.locator,
+  ]);
+}
+
+/**
+ * 現在観測storeからMaterialSource binding digestを再計算する。
+ *
+ * @private
+ * @function _createCurrentMaterialSourceBindingDigestForPrecondition
+ * @param {Object} precondition - materialSource precondition。
+ * @returns {?string} source identity digest。再計算不能ならnull。
+ */
+function _createCurrentMaterialSourceBindingDigestForPrecondition(precondition) {
+  const deviceId = String(precondition?.deviceId || "").trim();
+  const materialSourceId = String(precondition?.materialSourceId || "").trim();
+  const expectedDigest = String(precondition?.sourceIdentityDigest || "").trim();
+  const byDeviceId = monitorData.materialSourceObservations?.byDeviceId &&
+    typeof monitorData.materialSourceObservations.byDeviceId === "object"
+      ? monitorData.materialSourceObservations.byDeviceId
+      : {};
+  const deviceRecord = byDeviceId[deviceId];
+  const latestBySourceId = deviceRecord?.latestBySourceId && typeof deviceRecord.latestBySourceId === "object"
+    ? deviceRecord.latestBySourceId
+    : {};
+  if (!deviceRecord || !materialSourceId) {
+    return null;
+  }
+
+  const candidates = [];
+  if (latestBySourceId[materialSourceId]) {
+    candidates.push([materialSourceId, latestBySourceId[materialSourceId]]);
+  }
+  for (const entry of Object.entries(latestBySourceId)) {
+    if (entry[0] !== materialSourceId) {
+      candidates.push(entry);
+    }
+  }
+
+  for (const [lookupId, snapshot] of candidates) {
+    const source = _createSpoolMountPreconditionMaterialSourceRecord(snapshot, deviceRecord, deviceId, lookupId);
+    if (!source) {
+      continue;
+    }
+    const digest = _createSpoolMountPreconditionSourceBindingDigest(source);
+    const aliases = Array.isArray(source.aliases) ? source.aliases : [];
+    if (source.materialSourceId === materialSourceId || aliases.includes(materialSourceId) || digest === expectedDigest) {
+      return digest;
+    }
+  }
+  return null;
+}
+
+/**
+ * operation eventがprecondition必須のoperator operationか判定する。
+ *
+ * @private
+ * @function _isSpoolMountPreconditionRequiredOperation
+ * @param {Object} operation - operation event。
+ * @returns {boolean} precondition必須ならtrue。
+ */
+function _isSpoolMountPreconditionRequiredOperation(operation) {
+  return ["operator-mount", "operator-replace"].includes(String(operation?.kind || "").trim());
+}
+
+/**
+ * 正規化済みnextStoreにoperationがactive evidenceとして残っているか検証する。
+ *
+ * @private
+ * @function _validateSpoolMountOperationInNextStore
+ * @param {Object} normalizedNextStore - 正規化済みnext store。
+ * @param {Object} operation - serviceが送信時に生成したoperation event。
+ * @returns {{ok:boolean, reason:string}} 検証結果。
+ */
+function _validateSpoolMountOperationInNextStore(normalizedNextStore, operation) {
+  const targetEventId = String(operation?.eventId || "").trim();
+  const activeEvent = (normalizedNextStore.events || [])
+    .find((event) => String(event?.eventId || "").trim() === targetEventId);
+  if (!activeEvent) {
+    return { ok: false, reason: "operation-not-active-in-next-store" };
+  }
+  for (const key of ["kind", "operatorActionId", "operationId", "payloadDigest"]) {
+    if (String(activeEvent[key] || "").trim() !== String(operation[key] || "").trim()) {
+      return { ok: false, reason: "operation-evidence-mismatch" };
+    }
+  }
+  const activePayloadDigest = _createSpoolMountAuthorityPreconditionDigest(
+    "material-accounting-spool-mount-operation-payload",
+    operation.payload || {},
+  );
+  if (String(operation.payloadDigest || "").trim() !== activePayloadDigest) {
+    return { ok: false, reason: "operation-payload-digest-mismatch" };
+  }
+  const recordRefs = Array.isArray(activeEvent.recordRefs)
+    ? activeEvent.recordRefs.map((ref) => String(ref || "").trim()).filter(Boolean)
+    : [];
+  if (["operator-mount", "operator-unmount", "operator-replace"].includes(String(activeEvent.kind || "").trim()) &&
+      recordRefs.length === 0) {
+    return { ok: false, reason: "operation-record-refs-required" };
+  }
+  return { ok: true, reason: "" };
+}
+
+/**
+ * SpoolMount production commitの現在値preconditionを検証する。
+ *
+ * @private
+ * @function _validateSpoolMountCommitPreconditions
+ * @param {Object|null} preconditions - serviceが送信時に束縛したprecondition群。
+ * @returns {{ok:boolean, reason:string, currentDigest?:string, expectedDigest?:string}} 検証結果。
+ */
+function _validateSpoolMountCommitPreconditions(preconditions) {
+  if (!preconditions || typeof preconditions !== "object") {
+    return { ok: false, reason: "operation-preconditions-required" };
+  }
+
+  const materialSource = preconditions.materialSource && typeof preconditions.materialSource === "object"
+    ? preconditions.materialSource
+    : null;
+  if (!materialSource ||
+      !String(materialSource.deviceId || "").trim() ||
+      !String(materialSource.materialSourceId || "").trim() ||
+      !String(materialSource.sourceIdentityDigest || "").trim()) {
+    return { ok: false, reason: "operation-preconditions-required" };
+  }
+  const currentSourceDigest = _createCurrentMaterialSourceBindingDigestForPrecondition(materialSource);
+  if (!currentSourceDigest) {
+    return {
+      ok: false,
+      reason: "material-source-precondition-missing",
+      currentDigest: null,
+      expectedDigest: materialSource.sourceIdentityDigest,
+    };
+  }
+  if (currentSourceDigest !== materialSource.sourceIdentityDigest) {
+    return {
+      ok: false,
+      reason: "material-source-precondition-changed",
+      currentDigest: currentSourceDigest,
+      expectedDigest: materialSource.sourceIdentityDigest,
+    };
+  }
+
+  const managedSpool = preconditions.managedSpool && typeof preconditions.managedSpool === "object"
+    ? preconditions.managedSpool
+    : null;
+  if (!managedSpool || !String(managedSpool.spoolId || "").trim() || !String(managedSpool.digest || "").trim()) {
+    return { ok: false, reason: "operation-preconditions-required" };
+  }
+  if (managedSpool) {
+    const currentSpool = _findCurrentManagedSpoolForPrecondition(managedSpool.spoolId);
+    const currentDigest = _createSpoolMountAuthorityPreconditionDigest(
+      "material-accounting-managed-spool-precondition",
+      currentSpool,
+    );
+    if (!currentSpool) {
+      return {
+        ok: false,
+        reason: "managed-spool-precondition-missing",
+        currentDigest,
+        expectedDigest: managedSpool.digest,
+      };
+    }
+    if (currentDigest !== managedSpool.digest) {
+      return {
+        ok: false,
+        reason: "managed-spool-precondition-changed",
+        currentDigest,
+        expectedDigest: managedSpool.digest,
+      };
+    }
+  }
+
+  const legacyOccupancy = preconditions.legacyOccupancy && typeof preconditions.legacyOccupancy === "object"
+    ? preconditions.legacyOccupancy
+    : null;
+  if (!legacyOccupancy || !String(legacyOccupancy.spoolId || "").trim() || !String(legacyOccupancy.digest || "").trim()) {
+    return { ok: false, reason: "operation-preconditions-required" };
+  }
+  if (legacyOccupancy) {
+    const currentOccupancy = _findCurrentLegacyOccupancyForPrecondition(
+      legacyOccupancy.spoolId,
+      legacyOccupancy.expectedDeviceId,
+    );
+    const currentDigest = _createSpoolMountAuthorityPreconditionDigest(
+      "material-accounting-legacy-occupancy-precondition",
+      currentOccupancy,
+    );
+    if (currentDigest !== legacyOccupancy.digest) {
+      return {
+        ok: false,
+        reason: "legacy-occupancy-precondition-changed",
+        currentDigest,
+        expectedDigest: legacyOccupancy.digest,
+      };
+    }
+  }
+
+  return { ok: true, reason: "" };
+}
+
+/**
+ * MaterialAccounting SpoolMount storeをproduction CAS境界で耐久保存する。
+ *
+ * 【詳細説明】
+ * - operator mount/unmount/replaceは物理運用上の権威操作なので、通常のthrottled saveや
+ *   localStorage fallbackを成功境界として扱わない。
+ * - IndexedDB shared store上の現在digestが`baseStoreDigest`と一致した場合だけ`nextStore`を書き込み、
+ *   transaction完了後に初めて`monitorData.materialAccountingSpoolMountStore`を更新する。
+ * - CAS不一致、IndexedDB未使用、operation証跡欠落、保存失敗ではメモリ上のstoreも変更しない。
+ *
+ * @function commitMaterialAccountingSpoolMountStoreDurably
+ * @param {Object} input - commit入力。
+ * @param {string} input.baseStoreDigest - serviceが準備時に見たbase store digest。
+ * @param {Object} input.nextStore - CAS成功時に保存する次store。
+ * @param {Object} input.operation - mount/unmount/replace operation event証跡。
+ * @param {Object|null=} input.preconditions - managed spool / legacy occupancy の送信時precondition群。
+ * @returns {Promise<{ok:boolean, casApplied:boolean, backend:string, reason:string, key:string, currentDigest?:string, nextDigest?:string, error?:string}>} commit結果。
+ * @example
+ * const result = await commitMaterialAccountingSpoolMountStoreDurably({ baseStoreDigest, nextStore, operation });
+ */
+export async function commitMaterialAccountingSpoolMountStoreDurably(input = {}) {
+  const commitPromise = _spoolMountCommitMutex.then(() => _commitMaterialAccountingSpoolMountStoreDurably(input));
+  _spoolMountCommitMutex = commitPromise.catch(() => {});
+  return commitPromise;
+}
+
+/**
+ * SpoolMount store commitの実処理を行う。
+ *
+ * @private
+ * @function _commitMaterialAccountingSpoolMountStoreDurably
+ * @param {Object} input - commit入力。
+ * @returns {Promise<{ok:boolean, casApplied:boolean, backend:string, reason:string, key:string, currentDigest?:string, nextDigest?:string, error?:string}>} commit結果。
+ */
+async function _commitMaterialAccountingSpoolMountStoreDurably(input = {}) {
+  const key = "materialAccountingSpoolMountStore";
+  const baseStoreDigest = String(input.baseStoreDigest || "").trim();
+  const operation = input.operation && typeof input.operation === "object" ? input.operation : null;
+  if (!baseStoreDigest) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "base-store-digest-required" };
+  }
+  if (!operation || !String(operation.eventId || "").trim() || !String(operation.payloadDigest || "").trim()) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "operation-evidence-required" };
+  }
+  if (!_idbInitialized || !isIdbAvailable()) {
+    return { ok: false, casApplied: false, backend: "indexedDB", key, reason: "production-cas-unavailable" };
+  }
+
+  const normalizedNextStore = normalizeStoredMaterialAccountingSpoolMountStore(input.nextStore);
+  const operationValidation = _validateSpoolMountOperationInNextStore(normalizedNextStore, operation);
+  if (!operationValidation.ok) {
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key,
+      reason: operationValidation.reason,
+    };
+  }
+  const preconditionValidation = _isSpoolMountPreconditionRequiredOperation(operation) || input.preconditions
+    ? _validateSpoolMountCommitPreconditions(input.preconditions)
+    : { ok: true, reason: "" };
+  if (!preconditionValidation.ok) {
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key,
+      reason: preconditionValidation.reason,
+      currentDigest: preconditionValidation.currentDigest,
+      expectedDigest: preconditionValidation.expectedDigest,
+    };
+  }
+  const result = await compareAndSwapSharedValue({
+    key,
+    expectedDigest: baseStoreDigest,
+    createDigest: createMaterialAccountingSpoolMountStoreDigest,
+    nextValue: normalizedNextStore,
+  });
+  if (!result || result.ok !== true || result.casApplied !== true) {
+    return {
+      ok: false,
+      casApplied: false,
+      backend: "indexedDB",
+      key,
+      reason: result?.reason || "durable-cas-not-applied",
+      currentDigest: result?.currentDigest,
+      nextDigest: result?.nextDigest,
+      error: result?.error,
+    };
+  }
+
+  monitorData.materialAccountingSpoolMountStore = normalizedNextStore;
+  return {
+    ok: true,
+    casApplied: true,
+    backend: "indexedDB",
+    key,
+    reason: "cas-applied",
+    currentDigest: result.currentDigest,
+    nextDigest: result.nextDigest,
+  };
+}
+
+/**
+ * localStorage回復バックアップ用に履歴配列を近傍snapshotへ制限する。
+ *
+ * 【詳細説明】
+ * - 正本がIndexedDBにある場合でも、障害時復元用にlocalStorageへ定期バックアップする。
+ * - ただし全履歴をlocalStorageへ書くとquotaで保存全体が失敗し得るため、バックアップだけを
+ *   既存の安全上限に制限し、切り詰めた事実をmetadataとして残す。
+ *
+ * @private
+ * @function _boundedRecoveryArray
+ * @param {Array<Object>} list - 保存候補の履歴配列。
+ * @param {number} limit - バックアップ上限件数。
+ * @param {"head"|"tail"} direction - headは先頭側、tailは末尾側を保持する。
+ * @returns {{items:Array<Object>, truncated:boolean,totalCount:number,limit:number}} 制限後の配列とmetadata。
+ */
+function _boundedRecoveryArray(list, limit, direction) {
+  const source = Array.isArray(list) ? list : [];
+  const safeLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : source.length;
+  if (source.length <= safeLimit) {
+    return { items: source.slice(), truncated: false, totalCount: source.length, limit: safeLimit };
+  }
+  const items = direction === "tail" ? source.slice(-safeLimit) : source.slice(0, safeLimit);
+  return { items, truncated: true, totalCount: source.length, limit: safeLimit };
+}
+
+/**
+ * PrintBinding storeのlocalStorage回復バックアップ用bounded snapshotを生成する。
+ *
+ * 【詳細説明】
+ * - PrintBinding storeはsource-aware使用量証跡として長期運用で増え続けるため、IndexedDB利用時の
+ *   localStorage回復バックアップへ丸ごと複製するとquotaを圧迫する。
+ * - 正本は専用CAS/IndexedDBに残し、localStorageには直近側のbounded snapshotだけを置く。
+ * - truncation metadataを`storageRecoveryBackup`へ返し、復元時に不完全なbackupをauthorityとして
+ *   扱わないための判定材料にする。
+ *
+ * @private
+ * @function _createPrintBindingLocalStorageRecoverySnapshot
+ * @param {Object|null|undefined} store - PrintBinding store候補。
+ * @returns {{store:Object,metadata:Object}} bounded backup storeとmetadata。
+ */
+function _createPrintBindingLocalStorageRecoverySnapshot(store) {
+  const source = store && typeof store === "object" && !Array.isArray(store)
+    ? store
+    : {};
+  const result = _cloneStorageJsonValue(source);
+  const metadata = {
+    truncated: false,
+    backupLimit: LOCAL_STORAGE_PRINT_BINDING_BACKUP_LIMIT,
+  };
+  for (const field of PRINT_BINDING_RECOVERY_ARRAY_FIELDS) {
+    const bounded = _boundedRecoveryArray(
+      Array.isArray(source[field]) ? source[field] : [],
+      LOCAL_STORAGE_PRINT_BINDING_BACKUP_LIMIT,
+      "tail"
+    );
+    result[field] = bounded.items.map((entry) => _cloneStorageJsonValue(entry));
+    metadata[`${field}Truncated`] = bounded.truncated;
+    metadata[`${field}SourceLength`] = bounded.totalCount;
+    if (bounded.truncated) {
+      metadata.truncated = true;
+    }
+  }
+  // process-local operation cacheはrestart後のauthorityに使わないため、回復バックアップでも落とす。
+  result.operationsById = {};
+  return { store: result, metadata };
+}
+
+/**
+ * per-host localStorageへ保存するmachine snapshotを生成する。
+ *
+ * 【詳細説明】
+ * - runtimeDataは常に除外する。
+ * - IndexedDB利用時の回復バックアップではprintStore.historyだけを近傍snapshotへ制限し、
+ *   正本の無制限履歴はIndexedDBに任せる。
+ *
+ * @private
+ * @function _createLocalStorageMachineSnapshot
+ * @param {Object} machine - monitorData.machines配下のmachine。
+ * @param {Object} options - 保存オプション。
+ * @param {boolean} [options.boundedRecoveryBackup=false] - trueなら回復バックアップ上限を適用する。
+ * @returns {Object} JSON保存用machine snapshot。
+ */
+function _createLocalStorageMachineSnapshot(machine, options = {}) {
+  const { runtimeData: _omit, ...serializableMachine } = machine || {};
+  if (options.boundedRecoveryBackup && Array.isArray(serializableMachine.printStore?.history)) {
+    const bounded = _boundedRecoveryArray(
+      serializableMachine.printStore.history,
+      LOCAL_STORAGE_PRINT_HISTORY_BACKUP_LIMIT,
+      "head"
+    );
+    serializableMachine.printStore = {
+      ...serializableMachine.printStore,
+      history: bounded.items,
+      historyBackupTruncated: bounded.truncated,
+      historyBackupSourceLength: bounded.totalCount,
+      historyBackupLimit: bounded.limit
+    };
+  }
+  return serializableMachine;
+}
+
+/**
+ * localStorage回復バックアップ由来のmachine snapshotに履歴authority不完全フラグを付ける。
+ *
+ * 【詳細説明】
+ * - IndexedDBが正本の環境では、localStorage側の履歴はquota回避のためbounded backupになり得る。
+ * - そのbackupから復元した履歴を完全な台帳根拠として扱うと、欠落した古い消費が消えたぶんだけ
+ *   残量が巻き戻るため、復元時点でprintStoreへ明示フラグを残す。
+ * - 画面表示や履歴閲覧は維持しつつ、ledger側はこのフラグを見て自動derive/recomputeを停止する。
+ *
+ * @private
+ * @function _markLocalStorageRecoveryHistoryAuthority
+ * @param {Object|null|undefined} machineData - localStorageから読んだmachine snapshot。
+ * @param {Object} options - 復元オプション。
+ * @param {string=} options.source - 復元元名。
+ * @returns {Object|null|undefined} 必要ならprintStoreへauthority不完全metadataを付けたsnapshot。
+ */
+function _markLocalStorageRecoveryHistoryAuthority(machineData, options = {}) {
+  if (
+    options.source !== "localStorage" ||
+    !machineData ||
+    typeof machineData !== "object" ||
+    machineData.printStore?.historyBackupTruncated !== true
+  ) {
+    return machineData;
+  }
+  const sourceLength = Number(machineData.printStore.historyBackupSourceLength);
+  const limit = Number(machineData.printStore.historyBackupLimit);
+  machineData.printStore = {
+    ...machineData.printStore,
+    historyAuthorityIncomplete: true,
+    historyAuthoritySource: "localStorage-bounded-recovery-backup",
+    historyCoverage: {
+      ...(machineData.printStore.historyCoverage && typeof machineData.printStore.historyCoverage === "object"
+        ? machineData.printStore.historyCoverage
+        : {}),
+      activeAnchorComplete: false,
+      totalLifetimeComplete: false,
+      source: "localStorage-bounded-recovery-backup",
+      sourceLength: Number.isSafeInteger(sourceLength) && sourceLength >= 0
+        ? sourceLength
+        : null,
+      retainedLength: Array.isArray(machineData.printStore.history)
+        ? machineData.printStore.history.length
+        : null,
+      limit: Number.isSafeInteger(limit) && limit >= 0
+        ? limit
+        : null
+    },
+    historyAuthoritySourceLength: Number.isSafeInteger(sourceLength) && sourceLength >= 0
+      ? sourceLength
+      : null,
+    historyAuthorityLimit: Number.isSafeInteger(limit) && limit >= 0
+      ? limit
+      : null
+  };
+  return machineData;
+}
+
+/**
+ * 復元されたtotal lifetime proofを再利用してよいか判定する。
+ *
+ * 【詳細説明】
+ * - 現在のproductionには総履歴完全性を発行する正式issuerがまだ無いため、通常の復元値は
+ *   安全側で未証明へ戻す。
+ * - 将来issuerを追加する場合も、ledger moduleのWeakSet registryに登録されたproof objectだけを
+ *   trueの持ち越し許可に使う。保存・importされたplain JSONはobject identityを失うため信頼しない。
+ *
+ * @private
+ * @function _isTrustedRestoredTotalLifetimeCoverage
+ * @param {Object} coverage - 復元されたhistoryCoverage。
+ * @returns {boolean} 復元後もtotalLifetimeComplete:trueを信頼してよい場合true。
+ */
+function _isTrustedRestoredTotalLifetimeCoverage(coverage) {
+  return isTrustedTotalLifetimeCoverageProof(coverage?.totalLifetimeProof);
+}
+
+/**
+ * 復元されたprint history coverageを再probe待ちへ戻す。
+ *
+ * 【詳細説明】
+ * - `activeAnchorComplete:true`は、現在起動中の3DPmonがプリンタから実際に受け取った
+ *   履歴windowだけを根拠にする。
+ * - 明示retention後の`source:"print-history-retention"`も元は同じfresh fetch proofから派生する。
+ *   再起動後は停止中に印刷がなかったことを証明しないため、最初の履歴再取得が終わるまで
+ *   active anchor coverageをfail-closedにする。
+ * - `totalLifetimeComplete:false`は明示retention済みの総履歴不完全性なので保持する。
+ *
+ * @private
+ * @function _markRestoredFetchCoverageRequiresReprobe
+ * @param {Object|null|undefined} machineData - 復元候補machine snapshot。
+ * @returns {Object|null|undefined} fetch coverageを再probe待ちへ正規化したsnapshot。
+ */
+function _markRestoredFetchCoverageRequiresReprobe(machineData) {
+  const coverage = machineData?.printStore?.historyCoverage;
+  const shouldDemoteActiveCoverage = coverage?.activeAnchorComplete === true;
+  const shouldDemoteTotalLifetime = coverage?.totalLifetimeComplete === true &&
+    !_isTrustedRestoredTotalLifetimeCoverage(coverage);
+  if (
+    !machineData ||
+    typeof machineData !== "object" ||
+    !coverage ||
+    typeof coverage !== "object" ||
+    (!shouldDemoteActiveCoverage && !shouldDemoteTotalLifetime)
+  ) {
+    return machineData;
+  }
+  const restoredAt = getCurrentTimestamp();
+  machineData.printStore = {
+    ...machineData.printStore,
+    historyCoverage: {
+      ...coverage,
+      ...(shouldDemoteActiveCoverage ? {
+        activeAnchorComplete: false,
+        staleActiveAnchorComplete: true
+      } : {}),
+      ...(shouldDemoteTotalLifetime ? {
+        totalLifetimeComplete: false,
+        staleTotalLifetimeComplete: true
+      } : {}),
+      source: "print-history-restore-reprobe-required",
+      staleSource: coverage.source || "unknown",
+      restoredAt
+    }
+  };
+  return machineData;
+}
+
+/**
  * monitorData を per-host 分割形式で localStorage に書き込む。
  * グローバルデータは LS_KEY_GLOBAL に、per-host データは LS_KEY_HOST_PREFIX+hostname に書き込む。
  * 前回書き込みと同一ならスキップする。
  *
  * @private
+ * @param {Object} [options={}] - 保存オプション。
+ * @param {boolean} [options.boundedRecoveryBackup=false] - trueならlocalStorageを回復用bounded snapshotにする。
  * @returns {void}
  */
-function _writePerHostLocalStorage() {
+function _writePerHostLocalStorage(options = {}) {
   // グローバルデータ
   const globalData = {};
   for (const field of LS_GLOBAL_FIELDS) {
     if (field in monitorData) globalData[field] = monitorData[field];
+  }
+  if (options.boundedRecoveryBackup && Array.isArray(globalData.usageHistory)) {
+    const boundedUsage = _boundedRecoveryArray(
+      globalData.usageHistory,
+      LOCAL_STORAGE_USAGE_HISTORY_BACKUP_LIMIT,
+      "tail"
+    );
+    globalData.usageHistory = boundedUsage.items;
+    globalData.storageRecoveryBackup = {
+      ...(globalData.storageRecoveryBackup || {}),
+      usageHistoryTruncated: boundedUsage.truncated,
+      usageHistorySourceLength: boundedUsage.totalCount,
+      usageHistoryBackupLimit: boundedUsage.limit
+    };
+  }
+  if (
+    options.boundedRecoveryBackup &&
+    globalData.materialAccountingPrintBindingStore &&
+    typeof globalData.materialAccountingPrintBindingStore === "object" &&
+    !Array.isArray(globalData.materialAccountingPrintBindingStore)
+  ) {
+    const boundedPrintBinding = _createPrintBindingLocalStorageRecoverySnapshot(
+      globalData.materialAccountingPrintBindingStore
+    );
+    globalData.materialAccountingPrintBindingStore = boundedPrintBinding.store;
+    globalData.storageRecoveryBackup = {
+      ...(globalData.storageRecoveryBackup || {}),
+      materialAccountingPrintBindingStore: boundedPrintBinding.metadata,
+    };
   }
   const globalJson = JSON.stringify(globalData);
   if (globalJson !== _lastSavedJson) {
@@ -1207,7 +3158,7 @@ function _writePerHostLocalStorage() {
     const hostKey = LS_KEY_HOST_PREFIX + _encodeHostKey(host);
     /* ★ runtimeData は揮発状態のため永続化から除外
        (IndexedDB パスでは queueMachineWrite が除外済み、localStorage パスは未対応だった) */
-    const { runtimeData: _omit, ...serializableMachine } = machine;
+    const serializableMachine = _createLocalStorageMachineSnapshot(machine, options);
     const hostJson = JSON.stringify(serializableMachine);
     // per-host のデデュープは簡易チェック（サイズ比較）
     const prev = localStorage.getItem(hostKey);
@@ -1295,8 +3246,10 @@ function _flushStorage() {
       queueSharedWrite("materialAccountingMigrationJournal", monitorData.materialAccountingMigrationJournal);
       // ★ Gate 18.9D-2: durable shadow commit storeを証跡として保存する。
       queueSharedWrite("materialAccountingMigrationShadowStore", monitorData.materialAccountingMigrationShadowStore);
-      // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを証跡として保存する。
-      queueSharedWrite("materialAccountingPrintBindingStore", monitorData.materialAccountingPrintBindingStore);
+      // ★ Gate 18.9I: PrintBinding storeはsource-specific debit rootになるため通常queueへ積まない。
+      //   runtime/importの成功判定とIndexedDB書き込みは専用CASだけで行い、localStorage backup/exportで可視性だけ維持する。
+      // ★ Gate 18.9H: operator-managed SpoolMount storeは通常queueへ積まない。
+      //   production成功判定とIndexedDB書き込みは専用CASだけで行い、localStorage backup/exportで可視性だけ維持する。
       // ★ Gate 19 prep: 物理コマンド復旧ラッチは未解決確認の証跡のみ保存し、自動再送材料は保存しない。
       queueSharedWrite("physicalCommandRecoveryLatch", monitorData.physicalCommandRecoveryLatch);
       // ★ currentSpoolId は廃止済み。保存しない。hostSpoolMap のみが権威。
@@ -1317,7 +3270,7 @@ function _flushStorage() {
       if (!_lastLsBackupEpoch || now - _lastLsBackupEpoch > 60000) {
         _lastLsBackupEpoch = now;
         try {
-          _writePerHostLocalStorage();
+          _writePerHostLocalStorage({ boundedRecoveryBackup: true });
         } catch (e) {
           console.warn("[saveUnifiedStorage] localStorage バックアップ失敗:", e.message);
         }
@@ -1372,7 +3325,7 @@ export function restoreUnifiedStorage() {
   // IndexedDB キャッシュがあればそこから復元
   const idbCache = getIdbCache();
   if (idbCache) {
-    _restoreFromData(idbCache.shared, idbCache.machines);
+    _restoreFromData(idbCache.shared, idbCache.machines, { source: "indexedDB" });
     console.debug("[restoreUnifiedStorage] IndexedDB から復元しました");
     Object.keys(monitorData.machines).forEach(host => ensureMachineData(host));
     _reconcileAfterRestore();
@@ -1394,7 +3347,7 @@ export function restoreUnifiedStorage() {
           machines[host] = JSON.parse(hostData);
         }
       }
-      _restoreFromData(shared, machines);
+      _restoreFromData(shared, machines, { source: "localStorage" });
       _lastSavedJson = globalSaved;
       console.debug(`[restoreUnifiedStorage] localStorage (per-host) から復元: ${hostKeys.size}ホスト`);
     } catch (e) {
@@ -1454,8 +3407,9 @@ function _reconcileAfterRestore() {
  * @private
  * @param {Object} shared - shared データ（appSettings, filamentSpools 等）
  * @param {Object} [machines] - per-host マシンデータ
+ * @param {{source?:string}=} options - 復元元情報。
  */
-function _restoreFromData(shared, machines) {
+function _restoreFromData(shared, machines, options = {}) {
   if (shared?.appSettings && typeof shared.appSettings === "object") {
     // ★ deep merge: connectionTargets等のネスト配列を保護
     for (const [key, val] of Object.entries(shared.appSettings)) {
@@ -1488,7 +3442,10 @@ function _restoreFromData(shared, machines) {
       }
     }
     const hostnameKeys = new Set(Object.keys(machines));
-    for (const [host, machineData] of Object.entries(machines)) {
+    for (const [host, rawMachineData] of Object.entries(machines)) {
+      const machineData = _markRestoredFetchCoverageRequiresReprobe(
+        _markLocalStorageRecoveryHistoryAuthority(rawMachineData, options)
+      );
       // IPキーで、かつ同一プリンタのホスト名キーが存在する場合はスキップ
       const resolvedHostname = ipToHostname.get(host);
       if (resolvedHostname && hostnameKeys.has(resolvedHostname) && host !== resolvedHostname) {
@@ -1759,10 +3716,13 @@ function _restoreFromData(shared, machines) {
     );
     for (const [host, spoolId] of Object.entries(shared.hostSpoolMap)) {
       if (spoolId && !monitorData.hostSpoolMap[host]) {
-        if (validSpoolIds.has(spoolId)) {
+        if (_canImportLegacyHostSpoolAssignment({
+          host,
+          spoolId,
+          validSpoolIds,
+          contextLabel: "_restoreFromData",
+        })) {
           monitorData.hostSpoolMap[host] = spoolId;
-        } else {
-          console.warn(`[_restoreFromData] hostSpoolMap["${host}"]: スプール "${spoolId}" が存在しないためスキップ`);
         }
       }
     }
@@ -1836,13 +3796,43 @@ function _restoreFromData(shared, machines) {
 
   // ★ Gate 18.9E: print-start binding / source-aware usage shadow storeを復元する。
   //   復元してもlegacy usageHistoryやspool残量へは投影しない。
-  if (shared?.materialAccountingPrintBindingStore && typeof shared.materialAccountingPrintBindingStore === "object") {
+  if (
+    options.source === "localStorage" &&
+    shared?.storageRecoveryBackup?.materialAccountingPrintBindingStore?.truncated === true
+  ) {
+    console.warn("[restoreUnifiedStorage] PrintBinding store restore skipped: localStorage recovery backup is truncated.");
+    monitorData.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(
+      monitorData.materialAccountingPrintBindingStore
+    );
+  } else if (shared?.materialAccountingPrintBindingStore && typeof shared.materialAccountingPrintBindingStore === "object") {
     _mergeMaterialAccountingPrintBindingStore(shared.materialAccountingPrintBindingStore);
   } else {
     monitorData.materialAccountingPrintBindingStore = normalizeStoredMaterialAccountingPrintBindingStore(
       monitorData.materialAccountingPrintBindingStore
     );
   }
+
+  // ★ Gate 18.9H: operator-managed SpoolMount production storeを復元する。
+  //   復元してもlegacy hostSpoolMapやusage ledgerへは投影せず、専用storeとしてだけ保持する。
+  if (
+    shared?.materialAccountingSpoolMountStore &&
+    typeof shared.materialAccountingSpoolMountStore === "object" &&
+    options.source === "indexedDB" &&
+    _idbInitialized &&
+    isIdbAvailable()
+  ) {
+    _mergeMaterialAccountingSpoolMountStore(shared.materialAccountingSpoolMountStore);
+  } else if (shared?.materialAccountingSpoolMountStore && typeof shared.materialAccountingSpoolMountStore === "object") {
+    console.warn("[restoreUnifiedStorage] SpoolMount store restore skipped: IndexedDB CAS authority is unavailable.");
+    monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore(
+      monitorData.materialAccountingSpoolMountStore
+    );
+  } else {
+    monitorData.materialAccountingSpoolMountStore = normalizeStoredMaterialAccountingSpoolMountStore(
+      monitorData.materialAccountingSpoolMountStore
+    );
+  }
+  _reconcileCurrentMaterialAccountingSpoolMountStoreWithCurrentBackends();
 
   // ★ Gate 19 prep: 物理コマンド復旧ラッチを復元する。
   //   復元してもcommand frame再送・CFS操作・legacy ledger投影は行わず、人間確認が必要な証跡だけを残す。
@@ -2019,7 +4009,12 @@ export function loadPrintHistory(hostname) {
 }
 
 /**
- * 印刷履歴を保存する（過去データは古いものから削除）。
+ * 印刷履歴を保存する。
+ *
+ * 【詳細説明】
+ * - 既定では印刷履歴を自動削除しない。
+ * - `appSettings.printHistoryMaxEntries` が1以上の場合だけ、既存契約どおり新しい順の
+ *   配列先頭を保持し、末尾側の古い履歴を削除する。
  *
  * @param {Array<Object>} history - 保存対象の履歴配列
  */
@@ -2028,7 +4023,9 @@ export function savePrintHistory(history, hostname) {
   if (!host) return;
   ensureMachineData(host);
   const ps = monitorData.machines[host].printStore;
-  ps.history = history.slice(0, MAX_PRINT_HISTORY);
+  const sourceLength = Array.isArray(history) ? history.length : 0;
+  ps.history = applyPrintHistoryRetention(history, monitorData.appSettings, { host });
+  _markExplicitPrintHistoryRetentionCoverage(ps, sourceLength, ps.history.length, resolvePrintHistoryRetentionLimit(monitorData.appSettings), host);
   // ★ 監査§6: 履歴 revision を単調インクリメント。relay delta の変更検出署名は
   //   O(1) の軽量サンプル（末尾ジョブ＋現在ジョブ）で、履歴中間の filamentInfo 編集・
   //   分割 upsert・reconcile 等（件数・末尾不変）を取りこぼしうる。履歴を実際に書き換える

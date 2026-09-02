@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1566 (PR #439)
+ * @version 1.390.1647 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-08-31 21:24:10
+ * @lastModified 2026-09-02 16:08:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -31,6 +31,10 @@ import {
   createCfsCertificationPanelViewModel,
   renderCfsCertificationPanel,
 } from "../../3dp_lib/printer_core/dashboard_cfs_certification_panel.js";
+import {
+  createCfsDeviceCorrelationValue,
+  createCfsSessionCorrelationValue,
+} from "../../3dp_lib/printer_core/dashboard_cfs_session_correlation.js";
 
 /**
  * CFS Certification パネル用の代表material view modelを生成する。
@@ -241,6 +245,11 @@ describe("dashboard_cfs_certification_panel", () => {
           semanticStatus: "uncertified",
         },
       },
+      arm: {
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+      },
       evidence: {
         info: {
           observedAt: "2026-08-29T10:00:00.000Z",
@@ -256,6 +265,9 @@ describe("dashboard_cfs_certification_panel", () => {
           { kind: "marker", name: "operator-cfs-load" },
         ],
       },
+      export: {
+        sessionCorrelationSalt: "test-session-salt",
+      },
     });
 
     const bundle = createCfsCertificationExportBundle(viewModel);
@@ -269,11 +281,22 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(serialized).not.toContain("192.168.54.153");
     expect(serialized).not.toContain("K2Pro-69E7");
     expect(serialized).not.toContain("ABCDEF123456");
+    expect(serialized).not.toContain("session-1");
+    expect(serialized).not.toContain("device-k2");
     expect(serialized).toContain("<MAC_001>");
     expect(serialized).toContain("<SERIAL_001>");
     expect(serialized).toContain("<IP_001>");
     expect(serialized).toContain("<HOSTNAME_001>");
     expect(serialized).toContain("<RFID_001>");
+    expect(bundle.manifest.printer.sessionId).toMatch(/^<ID_\d+>$/u);
+    expect(bundle.manifest.sessionCorrelation).toMatchObject({
+      salt: "test-session-salt",
+      value: createCfsSessionCorrelationValue("session-1", "test-session-salt"),
+    });
+    expect(bundle.manifest.deviceCorrelation).toMatchObject({
+      salt: "test-session-salt",
+      value: createCfsDeviceCorrelationValue("device-k2", "test-session-salt"),
+    });
   });
 
   it("export bundleはboxsInfo probe summaryをraw evidenceとは別に抽出する", () => {
@@ -849,6 +872,56 @@ describe("dashboard_cfs_certification_panel", () => {
     });
     expect(viewModel.liveSend.enabled).toBe(false);
     expect(viewModel.liveSend.reason).toBe("preflight-failed:printer-idle");
+  });
+
+  it("printer stateがidleでもpartial/unknown-core-state観測ならLIVE不可理由として表示する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-08-29T10:00:00.000Z"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "idle",
+        statusProbeStatus: "partial",
+        printActivityState: "unknown-core-state",
+        coreStateComplete: false,
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+      arm: {
+        armed: true,
+        expiresAt: "2026-08-29T10:01:00.000Z",
+        boundDeviceId: "device-k2",
+        boundSessionId: "session-1",
+        boundSourceId: "cfs:1:slot:2",
+        boundCommandKind: "cfs-load",
+      },
+    });
+
+    const printerIdle = viewModel.preflight.find((item) => item.key === "printer-idle");
+    const container = document.createElement("div");
+    renderCfsCertificationPanel(container, viewModel);
+
+    expect(printerIdle).toMatchObject({
+      state: "fail",
+      detail: "idle未証明: partial / unknown-core-state",
+    });
+    expect(viewModel.liveSend.enabled).toBe(false);
+    expect(viewModel.liveSend.reason).toBe("preflight-failed:printer-idle");
+    expect(container.textContent).toContain("idle未証明: partial / unknown-core-state");
   });
 
   it("認証未完了はpreflight項目名ではなくcertification-uncertifiedとしてLIVE不可理由にする", () => {

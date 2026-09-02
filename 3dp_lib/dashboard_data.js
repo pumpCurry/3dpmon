@@ -19,9 +19,9 @@
  * - {@link getDisplayValue}：表示用値取得
  * - {@link markAllKeysDirty}：全キーを変更済みにマーク
  *
- * @version 1.390.1543 (PR #439)
+ * @version 1.390.1641 (PR #441)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-08-31 19:10:36
+ * @lastModified 2026-09-02 13:38:32
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -31,6 +31,7 @@
 
 // プリセットフィラメント情報を取り込む
 import { FILAMENT_PRESETS } from "./dashboard_filament_presets.js";
+import { createEmptyMaterialAccountingSpoolMountStore } from "./printer_core/dashboard_material_accounting_mount_store.js";
 
 
 /**
@@ -183,7 +184,9 @@ export function ensureMachineData(host) {
  *     wsDest: string,
  *     cameraToggle: boolean,
  *     notificationSettings: Record<string, any>,
- *     negativeRemainingDisplayMode: string
+ *     negativeRemainingDisplayMode: string,
+ *     printHistoryMaxEntries: number,
+ *     usageHistoryMaxEntries: number
  *   },
  *   machines: Record<string, MachineData>,
  *   filamentSpools: Array<Object>,
@@ -202,6 +205,8 @@ export const monitorData = {
     updateInterval: 500,
     logMaxLines: 1000,
     chartWindowMin: 15,   // 温度グラフの保持/表示時間枠（分）。古い点は破棄しメモリ無制限化を防ぐ
+    printHistoryMaxEntries: 0, // 印刷履歴の自動削除上限。0=無制限（Electron版の保存容量を前提に既定OFF）
+    usageHistoryMaxEntries: 0, // フィラメント使用履歴の自動削除上限。0=無制限（CFS/ItemKeeper用の蓄積を優先）
     logLevel: "info",
     logReceivedRaw: false, // 受信生ログをログパネルに流す（K1系のみ）。既定OFF=CPU/ログ汚染防止
 
@@ -426,6 +431,15 @@ export const monitorData = {
       materialSourceLedgerWrites: "shadow-only",
     },
   },
+  /**
+   * Gate 18.9H: operator-managed MaterialSource SpoolMount production store。
+   * CFS/CFS-C/外部スプールを含む任意のMaterialSourceへ、3DPmon管理スプールを
+   * operator確認付きでmount/unmount/replaceするための権威storeである。
+   * ここへ保存してもlegacy hostSpoolMap、usageHistory、スプール残量、print bindingへは
+   * 自動投影しない。production操作の成功判定はIndexedDB CAS成功時だけ行う。
+   * @type {{schemaVersion:number, authority:string, storeRevision:number, storeDigest:string, spoolMounts:Array<Object>, events:Array<Object>, conflicts:Array<Object>, retainedUnsupportedEntries:Array<Object>, invariants:Object}}
+   */
+  materialAccountingSpoolMountStore: createEmptyMaterialAccountingSpoolMountStore(),
    /**
    * Gate 19 prep: 物理コマンド復旧ラッチ。
    * CFS select/load/unloadなど物理状態を変えるコマンドがsubmitted/post-observed/unknownで終わった場合に、

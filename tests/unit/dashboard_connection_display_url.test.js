@@ -47,7 +47,10 @@ vi.mock("../../3dp_lib/dashboard_panel_factory.js", () => ({
   removePanelsForHost: vi.fn(),
   updateAllPanelHeaders: vi.fn(),
 }));
-vi.mock("../../3dp_lib/dashboard_storage.js", () => ({ saveUnifiedStorage: vi.fn() }));
+vi.mock("../../3dp_lib/dashboard_storage.js", () => ({
+  markPrintHistoryActiveCoverageRequiresReprobe: vi.fn(),
+  saveUnifiedStorage: vi.fn()
+}));
 vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({ showConfirmDialog: vi.fn() }));
 
 const { getDisplayBaseUrl } = await import("../../3dp_lib/dashboard_connection.js");

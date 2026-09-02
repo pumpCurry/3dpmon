@@ -4,9 +4,9 @@
  * - K2/F012 live certification前に、/info、printer status、boxsInfoを副作用なしで観測することを検証する。
  * - read-only calibrationがCFS操作frameを送らず、複数probe結果をJSONへ保持することを検証する。
  *
- * @version 1.390.1551 (PR #439)
+ * @version 1.390.1618 (PR #440)
  * @since 1.390.1545 (PR #439)
- * @lastModified 2026-08-31 19:51:15
+ * @lastModified 2026-09-02 00:18:00
  */
 
 import { EventEmitter } from "node:events";
@@ -30,6 +30,8 @@ const PRINTER_STATUS_GET_FRAME = {
     printFileName: 1,
     fileName: 1,
     printId: 1,
+    nozzleTemp: 1,
+    bedTemp0: 1,
     targetNozzleTemp: 1,
     targetBedTemp0: 1,
   },
@@ -278,6 +280,205 @@ describe("capture_k2_cfs_readonly_calibration", () => {
       { direction: "out", kind: "boxsInfo-get", probe: 1 },
       { direction: "in", kind: "boxsInfo", probe: 1 },
     ]);
+  });
+
+  it("printer status probeがdelta-only応答だけを受けた場合はtimeoutではなくpartial観測として保持する", async () => {
+    class DeltaOnlyStatusWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.statusProbeCount = 0;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          this.statusProbeCount += 1;
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              bedTemp0: 27.8,
+              nozzleTemp: 28.4,
+            }));
+          }, 1);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({ boxsInfo: { materialBoxs: [] } }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {}
+    }
+
+    const result = await runK2CfsReadOnlyCalibration({
+      ...parseArgs([
+        "--host",
+        "192.168.54.153",
+        "--probe-timeout-ms",
+        "1000",
+        "--status-probe-count",
+        "2",
+        "--status-probe-interval-ms",
+        "0",
+        "--boxsinfo-probe-count",
+        "1",
+        "--require-info-model",
+        "F012",
+      ]),
+      fetchInfo: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ model: "F012", version: "1.0.0" }),
+      }),
+      openWs: async () => new DeltaOnlyStatusWs(),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      status: "partial",
+      reason: "read-only-calibration-incomplete",
+      statusProbeCount: 2,
+      observedStatusProbeCount: 0,
+      partialStatusProbeCount: 2,
+      timeoutStatusProbeCount: 0,
+      errorStatusProbeCount: 0,
+      failedStatusProbeCount: 2,
+      boxsInfoProbeCount: 1,
+      observedBoxsInfoProbeCount: 1,
+      failedBoxsInfoProbeCount: 0,
+    });
+    expect(result.printerStatusSeries).toEqual([
+      expect.objectContaining({
+        status: "partial",
+        summary: expect.objectContaining({
+          complete: false,
+          idle: false,
+          bedTemp0: 27.8,
+          nozzleTemp: 28.4,
+        }),
+      }),
+      expect.objectContaining({
+        status: "partial",
+        summary: expect.objectContaining({
+          complete: false,
+          idle: false,
+        }),
+      }),
+    ]);
+    expect(result.wsTimeline.map((entry) => ({
+      direction: entry.direction,
+      kind: entry.kind,
+      probe: entry.probe,
+    }))).toEqual([
+      { direction: "out", kind: "printer-status-get", probe: 1 },
+      { direction: "in", kind: "ws-in", probe: 1 },
+      { direction: "out", kind: "printer-status-get", probe: 2 },
+      { direction: "in", kind: "ws-in", probe: 2 },
+      { direction: "out", kind: "boxsInfo-get", probe: 1 },
+      { direction: "in", kind: "boxsInfo", probe: 1 },
+    ]);
+    expect(result.assembledPrinterStatus).toMatchObject({
+      status: "unknown",
+      reason: "complete-baseline-missing",
+      idle: false,
+      complete: false,
+      baselineProbeMode: null,
+      appliedDeltaProbeCount: 0,
+    });
+  });
+
+  it("complete baseline後のdelta-only statusを同一session projectionとして累積する", async () => {
+    class BaselineThenDeltaStatusWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.statusProbeCount = 0;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          this.statusProbeCount += 1;
+          const response = this.statusProbeCount === 1
+            ? {
+                state: 0,
+                deviceState: 0,
+                printProgress: 100,
+                printJobTime: 0,
+                printLeftTime: 0,
+                targetNozzleTemp: 0,
+                targetBedTemp0: 0,
+                nozzleTemp: 27.2,
+                bedTemp0: 26.8,
+              }
+            : {
+                nozzleTemp: 28.4,
+                bedTemp0: 27.8,
+              };
+          setTimeout(() => {
+            this.emit("message", JSON.stringify(response));
+          }, 1);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({ boxsInfo: { materialBoxs: [] } }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {}
+    }
+
+    const result = await runK2CfsReadOnlyCalibration({
+      ...parseArgs([
+        "--host",
+        "192.168.54.153",
+        "--probe-timeout-ms",
+        "1000",
+        "--status-probe-count",
+        "2",
+        "--status-probe-interval-ms",
+        "0",
+        "--boxsinfo-probe-count",
+        "0",
+        "--require-info-model",
+        "F012",
+      ]),
+      fetchInfo: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ model: "F012", version: "1.0.0" }),
+      }),
+      openWs: async () => new BaselineThenDeltaStatusWs(),
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      status: "partial",
+      observedStatusProbeCount: 1,
+      partialStatusProbeCount: 1,
+    });
+    expect(result.assembledPrinterStatus).toMatchObject({
+      status: "observed",
+      reason: "assembled-current-status",
+      idle: true,
+      active: false,
+      complete: true,
+      baselineProbeMode: "printer-status:1",
+      lastAppliedProbeMode: "printer-status:2",
+      appliedDeltaProbeCount: 1,
+      snapshot: {
+        state: 0,
+        deviceState: 0,
+        nozzleTemp: 28.4,
+        bedTemp0: 27.8,
+      },
+    });
   });
 
   it("output-dir指定時はcalibration resultを保存する", async () => {

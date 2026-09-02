@@ -54,6 +54,7 @@ const pmMock = await import('../../3dp_lib/dashboard_printmanager.js');
 let rebaselineSpy;
 
 function reset() {
+  ledger.clearTrustedTotalLifetimeCoverageProofsForTest();
   mockMonitorData.machines = {};
   mockMonitorData.filamentSpools = [];
   mockMonitorData.usageHistory = [];
@@ -71,8 +72,21 @@ function job(id, usedMm, extra = {}) {
 }
 
 function setupHost(host, { history = [], currentId = '', used = NaN, state = 1 } = {}) {
+  const historyIds = history.map((entry) => Number(entry?.id)).filter(Number.isFinite);
   mockMonitorData.machines[host] = {
-    printStore: { current: currentId ? { id: currentId } : null, history },
+    printStore: {
+      current: currentId ? { id: currentId } : null,
+      history,
+      historyCoverage: {
+        activeAnchorComplete: true,
+        totalLifetimeComplete: true,
+        totalLifetimeProof: ledger.createTrustedTotalLifetimeCoverageProofForTest({ host }),
+        source: 'test-complete-history',
+        oldestPrintJobId: historyIds.length > 0 ? Math.min(...historyIds) : 0,
+        newestPrintJobId: historyIds.length > 0 ? Math.max(...historyIds) : 0,
+        anchorSinceJobIds: historyIds,
+      },
+    },
     storedData: {
       usedMaterialLength: Number.isFinite(used) ? { rawValue: used } : undefined,
       state: { rawValue: state },

@@ -180,6 +180,69 @@ and a trusted issuer has created source-specific usage and print-start binding
 evidence. Restart or reconnect does not close the mount, but fresh source
 observation is required before a new automatic debit.
 
+Source continuity for provisional sources is an interval fact, not just a final
+freshness fact. The observation used for debit eligibility must be tied to the
+same print interval: it must be observed no earlier than the trusted
+print-start snapshot and no later than the trusted completion observation. A
+MaterialSource observation received after completion must not be retroactively
+used to prove that the source was fresh at completion time.
+
+MaterialSource continuity uses the 3dpmon receipt-time domain, not printer clock
+timestamps. `capturedAt` and `completedAt` remain device evidence for the print
+job timeline, while `printStartObservedReceivedAt`, `completionObservedReceivedAt`,
+and MaterialSource `lastObservedAt` form the causal observation interval used
+for provisional debit eligibility. Source freshness must be calculated from the
+source-specific observation timestamp, never from a fresher device-level
+observation belonging to another source. The MaterialSource event log is
+bounded, so absence of a source change event is trusted only when the retained
+event coverage starts at or before the operator-confirmed mount open time.
+Operator reconfirmation is not trusted until a typed durable reconfirm event is
+introduced; imported/restored timestamp fields cannot move the continuity start
+forward. If
+device-level coverage is missing, source-specific coverage is missing, or
+either coverage starts after that continuity start, the usage evidence remains
+shadow evidence and does not become a managed remaining debit candidate. A
+source first observed after the mount-open continuity start
+cannot borrow an older device-level coverage start.
+Device-level provider gaps also break provisional continuity:
+`provider-disconnected`, `provider-reconnected`, and provider generation changes
+observed during the print interval apply to every provisional source on that
+device even when the same slot/material state is later observed again.
+
+K2/CFS print-start binding must distinguish printer-reported job start time
+from 3dpmon receipt time. `devicePrintStartTime` may be used as the immutable
+print-start snapshot time, but causality against a just-submitted transport
+command is decided by local `observedReceivedAt`. A device clock or firmware
+start timestamp that predates the local submit instant must not by itself reject
+a newly received job observation. Conversely, an observation received before the
+command was submitted is treated as stale or pre-command evidence even if its
+device timestamp looks newer.
+
+K2/CFS print-completion binding also uses 3dpmon receipt time as interval
+evidence. The first local receipt time for a completion observation is fixed on
+the pending bridge record and reused for runtime/CAS retries. A later retry must
+not move `completionObservedReceivedAt` forward, because MaterialSource
+observations received after the first completion notification are not evidence
+that the same source was continuous during the print interval.
+
+MaterialBindingPlan is not sufficient unless it is digest-bound to the actual
+transport command request. The command binding includes command ID, device ID,
+session ID, connection generation, remote path, file hash, and the material
+assignment digest. The live bridge recomputes that binding from the request at
+pending registration time; mismatch blocks the binding before any runtime
+snapshot is recorded.
+
+MaterialSource aliases are convenience identifiers only. If a single alias maps
+to multiple canonical MaterialSource IDs, print-start binding for that alias
+must fail closed as `ambiguous-material-source-alias` instead of choosing the
+first record in array order.
+
+Manual SpoolMount assignment requires a confirmed 3dpmon managed spool. An
+`inferred:true` spool or an `isPending:true` spool is not assignable to a
+MaterialSource until the operator confirms it as a real managed spool. This
+prevents provisional legacy lifecycle flows from deleting or rewriting a spool
+that Universal SpoolMount already references.
+
 Multi-source jobs with total-only usage are never split by color, material,
 source count, elapsed time, or display order. They are recorded as pending or
 unattributed usage until source-specific evidence exists.
@@ -422,6 +485,40 @@ Gate 18.9G:
   device/job/plan/source set
 - no production spool debit, legacy usage write, or remaining mutation
 
+Gate 18.9H:
+
+- production Operator SpoolMount authority split into H-1a pure store/service
+  contract and H-1b durable persistence
+- dedicated `materialAccountingSpoolMountStore`, separate from migration shadow
+  and print-binding shadow stores
+- durable operation indexes are rebuilt from mount records and events after
+  restart; generic `operationsById` is not stored as authority
+- production writes require durable CAS evidence with `casApplied:true`
+- legacy `hostSpoolMap` is read-only compatibility evidence and same-spool
+  cross-backend occupancy blocks Universal mount until explicit migration
+- transport-local source IDs remain aliases; durable MaterialSource IDs are
+  device-scoped, and storage CAS preconditions re-resolve current observations
+  by canonical ID, alias, or source binding digest
+- import only treats current committed Universal `OPEN` mounts or in-flight
+  reservations as reasons to skip legacy `hostSpoolMap`; incoming Universal
+  conflicts are quarantined by the SpoolMount store reconciliation path
+- operator mount / replace require fresh current MaterialSource observation at
+  send time, while unmount can remove an existing 3DPmon-managed mount without
+  requiring fresh provider data
+- legacy spool deletion and other destructive lifecycle mutations, including
+  `revertInferredSpool()` and `updateSpool()` patches that set deleted flags or
+  change spool identity, are blocked while a Universal `OPEN` mount or in-flight
+  reservation still references the managed spool
+- inferred or pending managed spools are excluded from H-2 mount candidates and
+  rejected by the SpoolMount service as `managed-spool-not-confirmed`
+- device observations, RFID, selected state, empty/unloaded state, stale
+  providers, and physical CFS commands do not close or rewrite SpoolMounts
+- no production spool debit, legacy usage write, physical command enable, or
+  ItemKeeper projection
+
+Detailed H-1 implementation boundaries are defined in
+`docs/develop/printer-core-v3-gate18-9h-spool-mount-authority.md`.
+
 Gate 20 extension:
 
 - restart recovery
@@ -449,6 +546,159 @@ Gate 18.9 must cover:
 - confirmed unused sources remaining distinct from unknown sources
 - print-start snapshot preserving historical attribution even if current mount
   changes later
+- print-start binding accepting a job ID only after it matches the current
+  machine-observed job ID and the current Printer Core v3 device/session
+  observation, requiring matching connection generation when the caller binds
+  one, resolving print-start time from machine observation or an
+  existing snapshot rather than caller authority, issuing runtime snapshots
+  through the trusted print-start issuer, keeping duplicate print-start
+  observations idempotent, then committing the snapshot through a durable CAS
+  boundary before advancing runtime state. PrintBinding store import uses the
+  same CAS boundary, normal shared flush cannot write this key, and restore
+  quarantines same-ID payload conflicts instead of picking a silent winner.
+- completion binding accepting source-specific usage only after the completed
+  job is observed in machine history with matching Printer Core v3
+  device/session evidence and any caller-bound connection generation. Caller
+  supplied completion time, usage payload, total usage, or source continuity
+  object alone is insufficient.
+- K2/Creality `materialUsed` CSV is parsed in saved print-start snapshot order,
+  not completion-time caller PrintPlan assignment order. CSV cardinality must
+  match the saved source snapshot set; extra or missing values are blocked
+  instead of being silently dropped.
+- Runtime source continuity is resolved from module-owned MaterialSource
+  observations and the official freshness TTL before debit-candidate
+  evaluation. TTL-expired, provider-disconnected, or restored-last-known
+  observations may still produce source-specific JobMaterialSegment / shadow
+  ledger evidence, but they do not become managed remaining debit candidates.
+  Freshness is evaluated with the source-specific observation timestamp. A fresh
+  device-level topology observation for another source cannot refresh a stale
+  provisional source. Runtime interval checks use 3dpmon receipt times
+  (`printStartObservedReceivedAt`, `completionObservedReceivedAt`, and
+  MaterialSource `lastObservedAt`) instead of mixing printer clock `capturedAt`
+  / `completedAt` with local observation clocks. A fresh completion-time
+  topology observation is not enough by itself: if the
+  MaterialSource change log records `source-changed`, `source-disappeared`,
+  `source-merge-conflict`, a device-level provider disconnect/reconnect, or a
+  provider generation change after the operator-confirmed mount open and before
+  completion, the runtime marks the segment as a
+  physical discontinuity and keeps
+  `sourceContinuity:false`. The same check also requires retained event
+  coverage from at least the operator-confirmed mount open time at both the
+  device-event-log level and the individual MaterialSource snapshot level.
+  Plain `reconfirmedAt` / `operatorReconfirmedAt` fields are not authority; a
+  future reconfirm flow must add typed durable operator evidence before it can
+  reset this interval. Old restored records, sources first observed after the
+  continuity start, or records whose event log has already trimmed past that
+  point fail closed.
+  Gate 18.9I-2 does not mutate managed spool remaining or legacy
+  `usageHistory`.
+- ItemKeeper payload generation may read same-device `observed-used` /
+  `confirmed-unused` JobMaterialSegment records as a projection source when
+  `job.filamentInfo[]` is absent only when the segment is debit eligible and
+  the source-specific projection is live certified through the module-owned
+  ItemKeeper projection registry and `usedLengthMm` is an explicit non-negative
+  number. Plain imported/restored `itemKeeperProjection.status:"certified"`
+  fields are not sufficient; the projection evidence must carry the registry
+  authority and a digest that still matches the current segment. The current
+  release intentionally has no production issuer for this registry, so public
+  helper calls cannot enable source-aware ItemKeeper projection. This projection
+  sends per-spool `filaments[]` evidence without mutating 3dpmon inventory
+  state.
+  Gate 18.9J-2 introduces the reviewed fixture registry scaffold without adding
+  a production fixture entry. Public registration may evaluate caller-provided
+  fixture receipt metadata, but it mints certification only when the segment
+  digest and fixture metadata match a module-owned immutable registry entry.
+  Fixture readiness may use `JobMaterialSegment.evidence.completionEvidence`
+  as a raw K2 `materialUsed` CSV fallback after print history retention removes
+  the target history row, but parser/profile metadata and every parsed CSV value
+  must still match the corresponding `JobMaterialSegment.usedLengthMm` in
+  print-start binding order. If both target machine history raw and durable
+  segment completion raw exist for the same job, history raw remains canonical
+  and the segment raw must match it exactly; mismatches or mixed segment raw
+  values reject the fixture/analyzer candidate. Certification exports must carry
+  `manifest.deviceCorrelation` and `manifest.sessionCorrelation` as
+  `{algorithm,salt,value}` evidence; the analyzer/builder recomputes the local
+  identity/session correlation and rejects missing or mismatched evidence with
+  explicit readiness reasons such as
+  `certification-device-correlation-missing`,
+  `certification-device-id-mismatch`, and their session counterparts. A persisted
+  `historyCoverage.activeAnchorComplete:true` is not reused after restart,
+  storage restore, disconnect, or reconnect; it is demoted to
+  re-probe-required until the current process receives a new print history
+  window that covers the current active anchor
+  (`oldestPrintJobId <= anchorSinceJobId <= newestPrintJobId`) and records that
+  same anchor in `anchorSinceJobIds`.
+  A `sinceJobId:0` interval is not treated as covered by default; if the
+  interval is `unknown` it keeps the anchor remaining value without retroactive
+  subtraction, and if it is `known` it still needs positive total-lifetime
+  authority before old jobs can be debited. Restored
+  `totalLifetimeComplete:true` is demoted unless a future trusted issuer proof
+  is present, because ordinary persisted booleans are not lifetime authority.
+  The trusted proof must be validated by module-owned registry membership, not
+  by JSON fields such as `trusted:true`; plain saved/imported proof objects are
+  diagnostic only.
+  Manual history filament edits must visibly warn the operator and keep the
+  cached remaining length when total-history completeness has no positive
+  authority. Completeness checks for manual recompute are scoped to hosts that
+  actually mention the target spool by mount interval, current legacy mount, or
+  explicit history attribution. Ordinary recent-history fetches do not mint
+  `totalLifetimeComplete:true`. Durable completionEvidence fallback requires
+  parser version, ordering profile, source count, and part count metadata.
+  With the registry empty, production registration remains fail-closed with
+  `reviewed-live-fixture-registry-entry-required`.
+- K2/CFS UI print-start sends create a module-attested MaterialBindingPlan
+  separate from the transport command request, register it as prepared pending
+  state immediately before transport dispatch, mark it submitted only after
+  transport send success, drop that pending record on dispatch failure, and
+  only connect it to print binding runtime after a new machine-observed
+  `printStartTime` / PrintJob ID and completed history are observed. The
+  MaterialBindingPlan attests tool/source/asset/session/generation binding;
+  `spoolId` is optional at this boundary so an unmounted 3dpmon spool does not
+  block physical K2/CFS print transport. The accounting runtime must still find
+  an active `OPEN` SpoolMount at print-start time before saving a managed spool
+  snapshot. Transport-local source IDs are aliases; repositories re-resolve
+  canonical MaterialSource IDs and aliases, then persist canonical
+  `materialSourceId` in snapshots. The
+  observed start must not match the pre-submit baseline job, must be observed at
+  or after `submittedAt`, and must match the same session and connection
+  generation. Completion success removes the pending record so the material
+  binding cannot be re-bound to later manual jobs. Trusted print-start
+  snapshots include durable issuance evidence for device ID, session ID,
+  connection generation, PrintJob ID, and first observed time. The SpoolMount
+  open time used as the source-continuity lower bound is saved as signed
+  top-level `mountOpenedAt`; embedded `spoolMount.openedAt` remains diagnostic
+  evidence and cannot move the debit continuity window after the snapshot is
+  issued. Trusted snapshots also carry a signed canonical `bindingAuthority`
+  containing tool ID, protocol tool alias, order, canonical MaterialSource
+  semantics, and SpoolMount debit semantics. K2 `materialUsed` CSV values are
+  mapped by this authority order, not by mutable diagnostic payload. Debit
+  eligibility reconstructs its mount/source input from `bindingAuthority`;
+  nested `spoolMount` and `materialSource` are diagnostic-only. Tampering with
+  `bindingAuthority` invalidates the trusted snapshot, while changing
+  diagnostic fields such as `spoolMount.verification` or
+  `materialSource.displayLabel` does not change debit authority.
+- Source-continuity lookup IDs are derived from `bindingAuthority.source` and
+  the current completion-time MaterialSource observation only. Diagnostic
+  `snapshot.materialSource` IDs and aliases are intentionally excluded so that
+  imported/restored diagnostic payload edits cannot change continuity results.
+  The mount source identity digest is copied from the canonical SpoolMount
+  `sourceBindingAtOpen.sourceIdentityDigest` field into `bindingAuthority`.
+- The trusted print binding repository factory is not re-exported from the
+  public print binding barrel. Production print binding runtime does not accept
+  caller-supplied `data` or `persist` dependency injection. Tests must use the
+  dedicated `createMaterialAccountingPrintBindingRuntimeForTest()` helper,
+  which is unavailable outside the test environment.
+  ESLint enforces the trusted factory, issuer-injected repository, and test-only
+  runtime helper import allowlist across all `3dp_lib/**/*.js` production
+  modules, not only inside `printer_core`. The same production lint boundary
+  also rejects dynamic imports of these restricted authority modules, so callers
+  cannot bypass the static import allowlist by loading the whole module.
+  Production dynamic imports must use string literals, preventing variable,
+  concatenated, or template-computed specifiers from hiding restricted authority
+  module paths from lint.
+- trusted print-start snapshots restored from same-process CAS store may regain
+  debit eligibility only through module-owned attestation validation. Restart
+  or import loses that process-local trust and must revalidate before debit.
 - legacy cutover sealing future jobs out of legacy intervals
 
 ## Consequences

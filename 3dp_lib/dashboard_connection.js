@@ -33,9 +33,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1452 (PR #435)
+ * @version 1.390.1667 (PR #440)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-08-28 14:28:57
+ * @lastModified 2026-09-02 19:43:12
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -64,7 +64,7 @@ import { startCameraStream, stopCameraStream } from "./dashboard_camera_ctrl.js"
 import { getCurrentTimestamp } from "./dashboard_utils.js";
 import { updatePanelMenuHosts } from "./dashboard_panel_menu.js";
 import { migratePanelsToHost, renamePanelsHost, ensureHostPanels, removePanelsForHost, recreatePanelsForHost, updateAllPanelHeaders } from "./dashboard_panel_factory.js";
-import { saveUnifiedStorage } from "./dashboard_storage.js";
+import { markPrintHistoryActiveCoverageRequiresReprobe, saveUnifiedStorage } from "./dashboard_storage.js";
 import { showConfirmDialog } from "./dashboard_ui_confirm.js";
 import {
   createMoonrakerSession,
@@ -1166,6 +1166,7 @@ function _ensurePrinterCoreV3LiveShadowSession(host, state, identityResult, fami
       host,
       deviceId: state.printerCoreV3ShadowDeviceId,
       sessionId: state.printerCoreV3ShadowSessionId,
+      connectionGeneration: Number(state.printerCoreV3ConnectionGeneration) || null,
     });
   }
   return {
@@ -2147,6 +2148,7 @@ export function connectWs(hostOrDest) {
      これにより、再接続時に connectionMap に IP キーの孤立エントリが生まれる問題を防ぐ。 */
   const target = _findConnectionTarget(dest);
   const host = (target?.hostname) || ip;
+  _invalidatePrintHistoryActiveCoverageForConnection(host, "print-history-socket-connect-reprobe-required");
 
   // ★ Moonraker(Fluidd/Klipper)機: 別プロトコルのため専用アダプタへ委譲する。
   //   K1 系の生 WebSocket・ハートビート・履歴フェッチ処理は一切通さない。
@@ -2291,6 +2293,9 @@ function connectMoonraker(dest, host) {
     onLog: (msg, level = "info") => pushLog(msg, level, false, host),
     onState: (s) => {
       st.state = s;
+      if (["connecting", "waiting", "disconnected"].includes(s)) {
+        _invalidatePrintHistoryActiveCoverageForConnection(host, "print-history-external-session-reprobe-required");
+      }
       updateConnectionUI(s, {}, host);
       updatePrinterListUI();
       // 接続確立時に集計ループを起動（K1 の handleSocketOpen 相当）
@@ -2623,6 +2628,7 @@ function handleSocketMessage(event, host) {
           deviceId: shadowSession.deviceId,
           sessionId: shadowSession.sessionId,
           frame: data,
+          connectionGeneration: Number(st.printerCoreV3ConnectionGeneration) || null,
         };
         if (shadowSession.family === "k2") {
           const snapshotCompleteness = _classifyK2BoxsInfoSnapshotCompleteness(st, data);
@@ -2709,6 +2715,28 @@ function handleSocketError(error, host) {
   console.error("[ws.onerror]", error);
 };
 
+/**
+ * 接続世代の切り替わりでactive history coverageを再probe待ちへ戻す。
+ *
+ * 【詳細説明】
+ * - active anchor coverageはプリンタ履歴windowを接続中に取得した事実へ依存するため、
+ *   切断または新規接続開始後は、次の履歴取得が完了するまで残量authorityへ使わない。
+ * - storage層へ直接依頼し、対象hostにcoverageが無い場合はno-opとして扱う。
+ *
+ * @private
+ * @function _invalidatePrintHistoryActiveCoverageForConnection
+ * @param {string} host - 対象ホスト名。
+ * @param {string} source - invalidation理由を示すsource名。
+ * @returns {void}
+ */
+function _invalidatePrintHistoryActiveCoverageForConnection(host, source) {
+  try {
+    markPrintHistoryActiveCoverageRequiresReprobe(host, { source });
+  } catch (error) {
+    console.warn(`[connection] active history coverage invalidation skipped (${host}):`, error?.message || error);
+  }
+}
+
 
 /**
  * 接続終了時の処理。
@@ -2725,6 +2753,7 @@ function handleSocketClose(host) {
  // 切断直後は該当ホストの通知を抑制する（他ホストには影響しない）
   setNotificationSuppressed(true, host);
   const st = getState(host);
+  _invalidatePrintHistoryActiveCoverageForConnection(host, "print-history-socket-close-reprobe-required");
   _endPrinterCoreV3LiveShadowSession(host, st);
   _closeSecondaryMaterialProviderSession(host, st);
 
@@ -2899,6 +2928,7 @@ export function stopHeartbeat(host) {
 export function disconnectWs(host) {
   const st = getState(host);
   st.userDisc = true;
+  _invalidatePrintHistoryActiveCoverageForConnection(host, "print-history-user-disconnect-reprobe-required");
 
   // pending な自動再接続タイマーをキャンセル
   if (st.retryTimer) {
@@ -3789,6 +3819,50 @@ function _getK2MoonrakerFallbackBaseUrl(host) {
 }
 
 /**
+ * K2補助HTTP fallback開始時の接続scopeを取得する。
+ *
+ * 【詳細説明】
+ * - `server/history/list` や `server/files/list` はWebSocketとは別HTTP requestで返るため、
+ *   再接続後に古い応答が戻ると現在接続の履歴・ファイル一覧へ誤って混入し得る。
+ * - `/info` probeと同じstate object / connectionGeneration / dest境界を再利用し、
+ *   request開始時点で既に現在接続ではない場合はfallback自体を開始しない。
+ *
+ * @private
+ * @function _captureK2MoonrakerFallbackConnectionScope
+ * @param {string} host - hostname または接続キー
+ * @returns {{state:ConnectionState|null,connectionGeneration:number,connectionDest:string,connectionHost:string}|null} 現在接続scope、または不採用。
+ */
+function _captureK2MoonrakerFallbackConnectionScope(host) {
+  const st = connectionMap[host];
+  const target = _findConnectionTarget(st?.dest || host) || _findConnectionTarget(host);
+  const scope = _captureHttpInfoProbeConnectionScope(st?.dest || host, host, target);
+  return _isK2MoonrakerFallbackConnectionScopeCurrent(scope) ? scope : null;
+}
+
+/**
+ * K2補助HTTP fallbackのscopeが現在のOPEN接続として採用可能か判定する。
+ *
+ * 【詳細説明】
+ * - generation一致だけでは、同じ接続世代がcloseした直後に遅延HTTP応答が戻った場合を
+ *   rejectできない。
+ * - 履歴coverageやファイル一覧UIを現在値として扱うには、同一scopeに加えて
+ *   `state === "connected"` かつ対応WebSocketがOPENであることを必須にする。
+ *
+ * @private
+ * @function _isK2MoonrakerFallbackConnectionScopeCurrent
+ * @param {object|null|undefined} scope - {@link _captureK2MoonrakerFallbackConnectionScope} の戻り値候補。
+ * @returns {boolean} fallback応答を現在接続由来として採用できる場合true。
+ */
+function _isK2MoonrakerFallbackConnectionScopeCurrent(scope) {
+  return Boolean(
+    _isHttpInfoProbeConnectionScopeCurrent(scope) &&
+    scope?.state?.state === "connected" &&
+    scope.state.ws &&
+    scope.state.ws.readyState === WebSocket.OPEN
+  );
+}
+
+/**
  * timeout付きでJSON endpointを取得する。
  *
  * 【詳細説明】
@@ -3842,7 +3916,15 @@ async function _fetchK2MoonrakerHistoryFallback(host) {
   if (!baseUrl) {
     return false;
   }
+  const scope = _captureK2MoonrakerFallbackConnectionScope(host);
+  if (!scope) {
+    return false;
+  }
   const body = await _fetchJsonWithTimeout(`${baseUrl}/server/history/list`);
+  if (!_isK2MoonrakerFallbackConnectionScopeCurrent(scope)) {
+    pushLog("K2履歴fallbackの古い応答を破棄しました（接続scopeが失効済み）", "warn", false, host);
+    return false;
+  }
   const jobs = body?.result?.jobs;
   if (!Array.isArray(jobs)) {
     return false;
@@ -3876,7 +3958,15 @@ async function _fetchK2MoonrakerFileListFallback(host) {
   if (!baseUrl) {
     return false;
   }
+  const scope = _captureK2MoonrakerFallbackConnectionScope(host);
+  if (!scope) {
+    return false;
+  }
   const body = await _fetchJsonWithTimeout(`${baseUrl}/server/files/list?root=gcodes`);
+  if (!_isK2MoonrakerFallbackConnectionScopeCurrent(scope)) {
+    pushLog("K2ファイル一覧fallbackの古い応答を破棄しました（接続scopeが失効済み）", "warn", false, host);
+    return false;
+  }
   const files = body?.result;
   if (!Array.isArray(files)) {
     return false;
