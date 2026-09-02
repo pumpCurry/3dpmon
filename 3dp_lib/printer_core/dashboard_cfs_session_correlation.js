@@ -14,12 +14,14 @@
  * 【公開関数一覧】
  * - {@link createCfsSessionCorrelationSalt}：exportごとの公開saltを生成
  * - {@link createCfsSessionCorrelationEvidence}：session correlation evidenceを生成
+ * - {@link createCfsDeviceCorrelationEvidence}：device correlation evidenceを生成
  * - {@link normalizeCfsSessionCorrelationEvidence}：correlation evidenceを検査して正規化
  * - {@link doesCfsSessionMatchCorrelationEvidence}：session IDとcorrelation evidenceの一致を判定
+ * - {@link doesCfsDeviceMatchCorrelationEvidence}：device IDとcorrelation evidenceの一致を判定
  *
- * @version 1.390.1645 (PR #440)
+ * @version 1.390.1646 (PR #440)
  * @since   1.390.1645 (PR #440)
- * @lastModified 2026-09-02 15:26:05
+ * @lastModified 2026-09-02 15:42:55
  * -----------------------------------------------------------
  * @todo
  * - cryptographic hashが必要になった場合はWeb Crypto / Node cryptoを使うv2 algorithmへ移行する
@@ -43,6 +45,17 @@ import {
  * @constant {string}
  */
 export const CFS_SESSION_CORRELATION_ALGORITHM = "printer-core-cfs-session-correlation-fnv1a128:v1";
+
+/**
+ * CFS device correlation evidenceのalgorithm識別子。
+ *
+ * 【詳細説明】
+ * - session correlationと同じく、raw device IDを標準Certification exportへ残さず、
+ *   all-data export側のdevice候補と照合するためだけに使う。
+ *
+ * @constant {string}
+ */
+export const CFS_DEVICE_CORRELATION_ALGORITHM = "printer-core-cfs-device-correlation-fnv1a128:v1";
 
 /**
  * 任意値をtrim済み文字列へ正規化する。
@@ -80,6 +93,34 @@ export function createCfsSessionCorrelationSalt(options = {}) {
 }
 
 /**
+ * identity値とsaltからcorrelation valueを生成する。
+ *
+ * 【詳細説明】
+ * - session/deviceのどちらも同じ形で、raw identityをexportへ残さず照合用digestへ寄せる。
+ * - 非暗号digestなので機密値の保護には使わず、redaction済みreview artifactの相関証跡に限定する。
+ *
+ * @private
+ * @function createCfsIdentityCorrelationValue
+ * @param {string} kind - deterministic ID kind。
+ * @param {string} algorithm - correlation algorithm識別子。
+ * @param {*} identityValue - raw identity値。
+ * @param {*} salt - export-local salt。
+ * @returns {string} correlation value。入力不足時は空文字。
+ */
+function createCfsIdentityCorrelationValue(kind, algorithm, identityValue, salt) {
+  const normalizedIdentity = toText(identityValue);
+  const normalizedSalt = toText(salt);
+  if (!normalizedIdentity || !normalizedSalt) {
+    return "";
+  }
+  return createPrinterCoreV3DeterministicId(kind, [
+    algorithm,
+    normalizedSalt,
+    stableStringifyPrinterCoreV3Value(normalizedIdentity),
+  ]);
+}
+
+/**
  * session IDとsaltからcorrelation valueを生成する。
  *
  * 【詳細説明】
@@ -94,16 +135,34 @@ export function createCfsSessionCorrelationSalt(options = {}) {
  * const value = createCfsSessionCorrelationValue("session-1", "salt-1");
  */
 export function createCfsSessionCorrelationValue(sessionId, salt) {
-  const normalizedSessionId = toText(sessionId);
-  const normalizedSalt = toText(salt);
-  if (!normalizedSessionId || !normalizedSalt) {
-    return "";
-  }
-  return createPrinterCoreV3DeterministicId("cfs-session-correlation", [
+  return createCfsIdentityCorrelationValue(
+    "cfs-session-correlation",
     CFS_SESSION_CORRELATION_ALGORITHM,
-    normalizedSalt,
-    stableStringifyPrinterCoreV3Value(normalizedSessionId),
-  ]);
+    sessionId,
+    salt
+  );
+}
+
+/**
+ * device IDとsaltからcorrelation valueを生成する。
+ *
+ * 【詳細説明】
+ * - 複数K2を含むall-data exportで、redacted certification device IDとtarget deviceを照合するために使う。
+ *
+ * @function createCfsDeviceCorrelationValue
+ * @param {*} deviceId - raw device ID。
+ * @param {*} salt - export-local salt。
+ * @returns {string} correlation value。入力不足時は空文字。
+ * @example
+ * const value = createCfsDeviceCorrelationValue("serial:k2", "salt-1");
+ */
+export function createCfsDeviceCorrelationValue(deviceId, salt) {
+  return createCfsIdentityCorrelationValue(
+    "cfs-device-correlation",
+    CFS_DEVICE_CORRELATION_ALGORITHM,
+    deviceId,
+    salt
+  );
 }
 
 /**
@@ -131,6 +190,30 @@ export function createCfsSessionCorrelationEvidence(sessionId, options = {}) {
 }
 
 /**
+ * CFS device correlation evidenceを生成する。
+ *
+ * 【詳細説明】
+ * - raw device IDは返さず、algorithm/salt/valueだけを返す。
+ * - session correlationと同じsaltを渡せば、1つのexport-local saltでdevice/session両方を照合できる。
+ *
+ * @function createCfsDeviceCorrelationEvidence
+ * @param {*} deviceId - raw device ID。
+ * @param {Object=} options - evidence生成options。
+ * @param {string=} options.salt - export-local salt。省略時は新規生成。
+ * @returns {{algorithm:string,salt:string,value:string}} correlation evidence。
+ * @example
+ * const evidence = createCfsDeviceCorrelationEvidence("serial:k2", { salt: "salt-1" });
+ */
+export function createCfsDeviceCorrelationEvidence(deviceId, options = {}) {
+  const salt = toText(options.salt) || createCfsSessionCorrelationSalt();
+  return {
+    algorithm: CFS_DEVICE_CORRELATION_ALGORITHM,
+    salt,
+    value: createCfsDeviceCorrelationValue(deviceId, salt),
+  };
+}
+
+/**
  * correlation evidence候補を正規化する。
  *
  * 【詳細説明】
@@ -144,13 +227,42 @@ export function createCfsSessionCorrelationEvidence(sessionId, options = {}) {
  * const normalized = normalizeCfsSessionCorrelationEvidence(rawEvidence);
  */
 export function normalizeCfsSessionCorrelationEvidence(evidence) {
+  return normalizeCfsIdentityCorrelationEvidence(evidence, CFS_SESSION_CORRELATION_ALGORITHM);
+}
+
+/**
+ * device correlation evidence候補を正規化する。
+ *
+ * 【詳細説明】
+ * - algorithm違い、salt欠落、value欠落は照合不可として空値へ落とす。
+ *
+ * @function normalizeCfsDeviceCorrelationEvidence
+ * @param {*} evidence - correlation evidence候補。
+ * @returns {{algorithm:string,salt:string,value:string}} 正規化済みevidence。
+ * @example
+ * const normalized = normalizeCfsDeviceCorrelationEvidence(rawEvidence);
+ */
+export function normalizeCfsDeviceCorrelationEvidence(evidence) {
+  return normalizeCfsIdentityCorrelationEvidence(evidence, CFS_DEVICE_CORRELATION_ALGORITHM);
+}
+
+/**
+ * identity correlation evidence候補を正規化する。
+ *
+ * @private
+ * @function normalizeCfsIdentityCorrelationEvidence
+ * @param {*} evidence - correlation evidence候補。
+ * @param {string} expectedAlgorithm - 期待algorithm。
+ * @returns {{algorithm:string,salt:string,value:string}} 正規化済みevidence。
+ */
+function normalizeCfsIdentityCorrelationEvidence(evidence, expectedAlgorithm) {
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
     return { algorithm: "", salt: "", value: "" };
   }
   const algorithm = toText(evidence.algorithm);
   const salt = toText(evidence.salt);
   const value = toText(evidence.value);
-  if (algorithm !== CFS_SESSION_CORRELATION_ALGORITHM || !salt || !value) {
+  if (algorithm !== expectedAlgorithm || !salt || !value) {
     return { algorithm: "", salt: "", value: "" };
   }
   return { algorithm, salt, value };
@@ -177,4 +289,26 @@ export function doesCfsSessionMatchCorrelationEvidence(sessionId, evidence) {
     return false;
   }
   return createCfsSessionCorrelationValue(sessionText, normalized.salt) === normalized.value;
+}
+
+/**
+ * raw device IDがcorrelation evidenceに一致するか判定する。
+ *
+ * 【詳細説明】
+ * - redacted certification exportとlocal exportのtarget deviceを照合するために使う。
+ *
+ * @function doesCfsDeviceMatchCorrelationEvidence
+ * @param {*} deviceId - raw device ID。
+ * @param {*} evidence - correlation evidence候補。
+ * @returns {boolean} 同じdeviceを示す場合true。
+ * @example
+ * const ok = doesCfsDeviceMatchCorrelationEvidence("serial:k2", evidence);
+ */
+export function doesCfsDeviceMatchCorrelationEvidence(deviceId, evidence) {
+  const normalized = normalizeCfsDeviceCorrelationEvidence(evidence);
+  const deviceText = toText(deviceId);
+  if (!deviceText || !normalized.value) {
+    return false;
+  }
+  return createCfsDeviceCorrelationValue(deviceText, normalized.salt) === normalized.value;
 }

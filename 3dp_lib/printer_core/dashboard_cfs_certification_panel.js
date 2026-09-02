@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1645 (PR #440)
+ * @version 1.390.1646 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-09-02 15:26:05
+ * @lastModified 2026-09-02 15:42:55
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -29,7 +29,11 @@
 "use strict";
 
 import { redactProtocolValue } from "./dashboard_protocol_recorder.js";
-import { createCfsSessionCorrelationEvidence } from "./dashboard_cfs_session_correlation.js";
+import {
+  createCfsDeviceCorrelationEvidence,
+  createCfsSessionCorrelationEvidence,
+  createCfsSessionCorrelationSalt,
+} from "./dashboard_cfs_session_correlation.js";
 
 /**
  * CFS Certification パネルViewModelのschema version。
@@ -1002,8 +1006,12 @@ function formatProbeTargetSource(probeSummary) {
 export function createCfsCertificationExportBundle(viewModel) {
   const rawEvidence = cloneJson(viewModel?.evidence?.raw) || {};
   const protocolEvents = Array.isArray(rawEvidence.events) ? rawEvidence.events : [];
+  const correlationSalt = toText(viewModel?.export?.sessionCorrelationSalt) || createCfsSessionCorrelationSalt();
   const sessionCorrelation = createCfsSessionCorrelationEvidence(viewModel?.printer?.sessionId, {
-    salt: viewModel?.export?.sessionCorrelationSalt,
+    salt: correlationSalt,
+  });
+  const deviceCorrelation = createCfsDeviceCorrelationEvidence(viewModel?.printer?.deviceId, {
+    salt: correlationSalt,
   });
   const probeSummaries = {
     before: extractProbeSummaryForExport(rawEvidence.beforeBoxsInfo),
@@ -1021,6 +1029,7 @@ export function createCfsCertificationExportBundle(viewModel) {
       displaySlot: viewModel?.command?.displaySlot || "",
       commandKind: viewModel?.command?.commandKind || "",
       sessionCorrelation,
+      deviceCorrelation,
       dryRunStatus: viewModel?.dryRun?.status || "unknown",
       liveSendEnabled: viewModel?.liveSend?.enabled === true,
       redactionApplied: false,

@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1645 (PR #440)
+ * @version 1.390.1646 (PR #440)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-09-02 15:26:05
+ * @lastModified 2026-09-02 15:42:55
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -31,7 +31,10 @@ import {
   createCfsCertificationPanelViewModel,
   renderCfsCertificationPanel,
 } from "../../3dp_lib/printer_core/dashboard_cfs_certification_panel.js";
-import { createCfsSessionCorrelationValue } from "../../3dp_lib/printer_core/dashboard_cfs_session_correlation.js";
+import {
+  createCfsDeviceCorrelationValue,
+  createCfsSessionCorrelationValue,
+} from "../../3dp_lib/printer_core/dashboard_cfs_session_correlation.js";
 
 /**
  * CFS Certification パネル用の代表material view modelを生成する。
@@ -283,6 +286,10 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(bundle.manifest.sessionCorrelation).toMatchObject({
       salt: "test-session-salt",
       value: createCfsSessionCorrelationValue("session-1", "test-session-salt"),
+    });
+    expect(bundle.manifest.deviceCorrelation).toMatchObject({
+      salt: "test-session-salt",
+      value: createCfsDeviceCorrelationValue("device-k2", "test-session-salt"),
     });
   });
 

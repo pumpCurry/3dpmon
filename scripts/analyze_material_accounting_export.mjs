@@ -18,9 +18,9 @@
  * - {@link analyzeMaterialAccountingExport}：export payloadを診断reportへ変換
  * - {@link runMaterialAccountingExportAnalyzer}：CLI指定のJSONを読み込みreportを出力
  *
- * @version 1.390.1645 (PR #440)
+ * @version 1.390.1646 (PR #440)
  * @since   1.390.1620 (PR #440)
- * @lastModified 2026-09-02 15:26:05
+ * @lastModified 2026-09-02 15:42:55
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9I live certification fixtureが増えた後、known-good result setとの比較modeを追加する
@@ -38,7 +38,9 @@ import {
   resolveK2MaterialUsedSourceCsv,
 } from "../3dp_lib/printer_core/dashboard_material_used_csv_parser.js";
 import {
+  doesCfsDeviceMatchCorrelationEvidence,
   doesCfsSessionMatchCorrelationEvidence,
+  normalizeCfsDeviceCorrelationEvidence,
   normalizeCfsSessionCorrelationEvidence,
 } from "../3dp_lib/printer_core/dashboard_cfs_session_correlation.js";
 
@@ -1096,8 +1098,11 @@ function summarizeCertification(payload) {
     generatedAt: toText(payload.manifest?.generatedAt),
     printerModel: toText(payload.manifest?.printer?.model),
     printerDeviceId: toText(payload.manifest?.printer?.deviceId),
+    printerDeviceIdRedacted: toText(payload.manifest?.printer?.deviceId).startsWith("<"),
+    printerDeviceCorrelation: normalizeCfsDeviceCorrelationEvidence(payload.manifest?.deviceCorrelation),
     printerFirmwareVersion: toText(payload.manifest?.printer?.firmwareVersion),
     printerSessionId: toText(payload.manifest?.printer?.sessionId),
+    printerSessionIdRedacted: toText(payload.manifest?.printer?.sessionId).startsWith("<"),
     printerSessionCorrelation: normalizeCfsSessionCorrelationEvidence(payload.manifest?.sessionCorrelation),
     sourceId: toText(payload.manifest?.sourceId),
     displaySlot: toText(payload.manifest?.displaySlot),
@@ -1148,10 +1153,16 @@ function isConcreteIdentityText(value) {
  * @returns {Object[]} readiness判定対象device配列。
  */
 function selectGate18_9J2TargetDevices(candidateDevices, certificationSummary) {
-  if (!isConcreteIdentityText(certificationSummary?.printerDeviceId)) {
-    return candidateDevices;
+  if (isConcreteIdentityText(certificationSummary?.printerDeviceId)) {
+    return candidateDevices.filter((device) => device.deviceId === certificationSummary.printerDeviceId);
   }
-  return candidateDevices.filter((device) => device.deviceId === certificationSummary.printerDeviceId);
+  const deviceCorrelation = normalizeCfsDeviceCorrelationEvidence(certificationSummary?.printerDeviceCorrelation);
+  if (deviceCorrelation.value) {
+    return candidateDevices.filter((device) => (
+      doesCfsDeviceMatchCorrelationEvidence(device.deviceId, deviceCorrelation)
+    ));
+  }
+  return candidateDevices;
 }
 
 /**
@@ -1324,7 +1335,13 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
     const certificationSessionCorrelation = normalizeCfsSessionCorrelationEvidence(
       certificationSummary?.printerSessionCorrelation
     );
-    const requiresCertificationSession = Boolean(certificationSessionId || certificationSessionCorrelation.value);
+    const certificationSessionCorrelationMissing = certificationSummary?.printerSessionIdRedacted === true &&
+      !certificationSessionCorrelation.value;
+    const requiresCertificationSession = Boolean(
+      certificationSessionId ||
+      certificationSessionCorrelation.value ||
+      certificationSummary?.printerSessionIdRedacted === true
+    );
     const jobReports = device.printBinding.candidateJobs.map((job) => {
       const jobReasons = [];
       if (job.printStartSnapshotCount <= 0) {
@@ -1365,6 +1382,9 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
       }
       if (job.reviewableProjectionCandidateSegmentCount !== job.jobMaterialSegmentCount) {
         jobReasons.push("reviewable-projection-candidate-result-set-incomplete");
+      }
+      if (certificationSessionCorrelationMissing) {
+        jobReasons.push("certification-session-correlation-missing");
       }
       if (requiresCertificationSession && job.sessionIds.length <= 0) {
         jobReasons.push("certification-session-id-missing");
@@ -1408,6 +1428,9 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
     if (!hasReadyJob && jobReports.some((job) => job.reasons.includes("candidate-session-id-ambiguous"))) {
       reasons.push("candidate-session-id-ambiguous");
     }
+    if (!hasReadyJob && jobReports.some((job) => job.reasons.includes("certification-session-correlation-missing"))) {
+      reasons.push("certification-session-correlation-missing");
+    }
     if (!hasReadyJob && jobReports.some((job) => job.reasons.includes("certification-session-id-mismatch"))) {
       reasons.push("certification-session-id-mismatch");
     }
@@ -1433,8 +1456,14 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
   if (!certificationSummary) {
     reasons.push("cfs-certification-panel-export-missing");
   } else {
+    const certificationDeviceCorrelation = normalizeCfsDeviceCorrelationEvidence(
+      certificationSummary.printerDeviceCorrelation
+    );
     if (certificationSummary.panel !== "cfs-debug-certification") {
       reasons.push("certification-panel-kind-mismatch");
+    }
+    if (certificationSummary.printerDeviceIdRedacted === true && !certificationDeviceCorrelation.value) {
+      reasons.push("certification-device-correlation-missing");
     }
     if (certificationSummary.liveSendEnabled) {
       reasons.push("certification-panel-live-send-enabled");
@@ -1448,6 +1477,13 @@ function createGate18_9J2CaptureReadinessReport({ deviceSummaries, certification
         isConcreteIdentityText(certificationDeviceId) &&
         device.deviceId &&
         certificationDeviceId !== device.deviceId
+      ) {
+        reasons.push(`${device.hostname}:certification-device-id-mismatch`);
+      }
+      if (
+        certificationDeviceCorrelation.value &&
+        device.deviceId &&
+        !doesCfsDeviceMatchCorrelationEvidence(device.deviceId, certificationDeviceCorrelation)
       ) {
         reasons.push(`${device.hostname}:certification-device-id-mismatch`);
       }

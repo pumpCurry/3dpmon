@@ -18,9 +18,9 @@
  * - {@link buildItemKeeperSourceUsageFixture}：export payloadからfixture artifactを生成
  * - {@link runItemKeeperSourceUsageFixtureBuilder}：CLI指定ファイルを読み書きする
  *
- * @version 1.390.1645 (PR #440)
+ * @version 1.390.1646 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 15:26:05
+ * @lastModified 2026-09-02 15:42:55
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2 registry entry追加時にreviewed registry entry skeleton出力を追加する
@@ -44,7 +44,9 @@ import {
   resolveK2MaterialUsedSourceCsv,
 } from "../3dp_lib/printer_core/dashboard_material_used_csv_parser.js";
 import {
+  doesCfsDeviceMatchCorrelationEvidence,
   doesCfsSessionMatchCorrelationEvidence,
+  normalizeCfsDeviceCorrelationEvidence,
   normalizeCfsSessionCorrelationEvidence,
 } from "../3dp_lib/printer_core/dashboard_cfs_session_correlation.js";
 
@@ -540,10 +542,24 @@ function isConcreteIdentityText(value) {
 function createIdentityReviewBlockers({ device, certificationPayload, options, sessionEvidence = null }) {
   const blockers = [];
   const certificationPrinter = resolveCertificationPrinter(certificationPayload);
+  const certificationDeviceCorrelation = normalizeCfsDeviceCorrelationEvidence(
+    certificationPayload?.manifest?.deviceCorrelation
+  );
+  const certificationDeviceRedacted = toText(certificationPrinter.deviceId).startsWith("<");
+  if (certificationDeviceRedacted && !certificationDeviceCorrelation.value) {
+    blockers.push("certification-device-correlation-missing");
+  }
   if (
     isConcreteIdentityText(certificationPrinter.deviceId) &&
     device.deviceId &&
     certificationPrinter.deviceId !== device.deviceId
+  ) {
+    blockers.push("certification-device-id-mismatch");
+  }
+  if (
+    certificationDeviceCorrelation.value &&
+    device.deviceId &&
+    !doesCfsDeviceMatchCorrelationEvidence(device.deviceId, certificationDeviceCorrelation)
   ) {
     blockers.push("certification-device-id-mismatch");
   }
@@ -573,8 +589,17 @@ function createIdentityReviewBlockers({ device, certificationPayload, options, s
   const certificationSessionCorrelation = normalizeCfsSessionCorrelationEvidence(
     certificationPayload?.manifest?.sessionCorrelation
   );
-  const requiresCertificationSession = Boolean(certificationSessionId || certificationSessionCorrelation.value);
+  const certificationSessionRedacted = toText(certificationPrinter.sessionId).startsWith("<");
+  const certificationSessionCorrelationMissing = certificationSessionRedacted && !certificationSessionCorrelation.value;
+  const requiresCertificationSession = Boolean(
+    certificationSessionId ||
+    certificationSessionCorrelation.value ||
+    certificationSessionRedacted
+  );
   const sessionIds = Array.isArray(sessionEvidence?.sessionIds) ? sessionEvidence.sessionIds : [];
+  if (certificationSessionCorrelationMissing) {
+    blockers.push("certification-session-correlation-missing");
+  }
   if (requiresCertificationSession && sessionIds.length <= 0) {
     blockers.push("certification-session-id-missing");
   } else if (requiresCertificationSession && sessionIds.length > 1) {
