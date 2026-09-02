@@ -558,7 +558,8 @@ Gate 18.9I-4:
   `3dp_lib/**/*.js` のproduction module全体へESLint allowlistとして固定する。allowed module以外の
   relative path違いimportもrelease前lintで失敗させる。P2-9 follow-upとして、
   restricted authority moduleをdynamic importする経路もproduction moduleでは
-  `no-restricted-syntax`で失敗させる。
+  `no-restricted-syntax`で失敗させる。production dynamic importはliteral必須とし、
+  computed pathでrestricted module名を隠す経路も同じlint境界で拒否する。
 - ItemKeeper source-aware projectionのdigest/registry判定は
   `dashboard_itemkeeper_source_usage_projection_certification.js` に分離する。
   `dashboard_integration_itemkeeper.js` はproduction placeholder登録とdigestだけを公開し、

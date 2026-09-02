@@ -36,6 +36,10 @@ const TRUSTED_PRINT_BINDING_IMPORT_RESTRICTIONS_FOR_RUNTIME = TRUSTED_PRINT_BIND
 
 const TRUSTED_PRINT_BINDING_DYNAMIC_IMPORT_RESTRICTIONS = [
   {
+    selector: 'ImportExpression:not([source.type="Literal"])',
+    message: 'Production dynamic imports must use a string literal so authority-module restrictions remain enforceable.',
+  },
+  {
     selector: 'ImportExpression[source.value=/dashboard_material_accounting_contract\\.js$/]',
     message: 'Trusted print binding contract module must not be dynamically imported by production modules; use the static allowlisted runtime path.',
   },

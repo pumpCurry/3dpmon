@@ -223,8 +223,9 @@ module-owned immutable entryとして組み込む後続Gate 18.9J-2までHOLDす
   `createMaterialAccountingPrintBindingRuntimeForTest()` に分離し、test環境以外では使用できない。
   trusted factory / issuer-injected repository / test-only runtime factory のimport境界は
   `3dp_lib/**/*.js` のproduction module全体にESLint allowlistで固定する。
-  static importだけでなく、restricted authority moduleへのdynamic importも
-  release前lintで失敗させる。
+  static importだけでなく、restricted authority moduleへのliteral dynamic importも
+  release前lintで失敗させる。さらにproduction dynamic importはliteral必須にし、
+  文字列連結・変数・template literalでauthority module制限を迂回できないようにする。
   print-start local receiptと同一msのsource/provider breaking eventは、print interval内の
   physical discontinuityとして扱い、debit候補へ昇格しない。
   この接続もshadow attributionまでで、managed spool残量debitやlegacy usage writeは行わない。

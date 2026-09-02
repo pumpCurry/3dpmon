@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1635 (PR #440)
+ * @version 1.390.1636 (PR #440)
  * @since   1.390.1630 (PR #440)
- * @lastModified 2026-09-02 10:00:00
+ * @lastModified 2026-09-02 10:33:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -154,5 +154,20 @@ export const value = [
     expect(messagesForRule(messages, "no-restricted-syntax")).toHaveLength(1);
     expect(messagesForRule(messages, "no-restricted-syntax")[0])
       .toContain("ItemKeeper source usage projection test issuer module must not be dynamically imported by production modules");
+  });
+
+  it("production moduleはcomputed dynamic importでauthority module制限を迂回できない", async () => {
+    const messages = await lintSyntheticProductionModule(
+      "3dp_lib/dashboard_panel_init.js",
+      `const moduleName = "./printer_core/" + "dashboard_itemkeeper_source_usage_projection_certification.js";
+export async function loadIssuerForProduction() {
+  return import(moduleName);
+}
+`
+    );
+
+    expect(messagesForRule(messages, "no-restricted-syntax")).toHaveLength(1);
+    expect(messagesForRule(messages, "no-restricted-syntax")[0])
+      .toContain("Production dynamic imports must use a string literal");
   });
 });
