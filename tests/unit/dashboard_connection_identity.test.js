@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1667 (PR #440)
+ * @version 1.390.1669 (PR #440)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-09-02 19:43:12
+ * @lastModified 2026-09-02 20:03:58
  *
  * @vitest-environment jsdom
  */
@@ -949,6 +949,61 @@ describe("Printer Core v3 identity dry-run", () => {
 
       expect(printManagerMock.updateHistoryList).not.toHaveBeenCalled();
       expect(mod.getPrinterCoreV3ConnectionGeneration("203.0.113.54")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("K2 Moonrakerファイル一覧fallbackは旧connectionGeneration応答を現在UIへ描画しない", async () => {
+    vi.useFakeTimers();
+    let resolveFileResponse;
+    window.fetch = vi.fn((url) => {
+      const text = String(url || "");
+      if (text.includes("/server/history/list")) {
+        return Promise.resolve({
+          ok: true,
+          json: vi.fn(async () => ({
+            result: {
+              jobs: [
+                { filename: "fresh-history.gcode", start_time: 1784100120 },
+              ],
+            },
+          })),
+        });
+      }
+      if (text.includes("/server/files/list")) {
+        return new Promise((resolve) => {
+          resolveFileResponse = resolve;
+        });
+      }
+      return Promise.resolve({ ok: false, json: vi.fn() });
+    });
+
+    try {
+      mod.connectWithType("203.0.113.55:9999", "creality-k2");
+      const firstWs = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+      firstWs.onopen();
+      await vi.advanceTimersByTimeAsync(1000 + 6000 * 6);
+      expect(window.fetch).toHaveBeenCalledWith(
+        "http://203.0.113.55:4408/server/files/list?root=gcodes",
+        expect.objectContaining({ cache: "no-store" })
+      );
+
+      printManagerMock.renderFileList.mockClear();
+      mod.connectWs("203.0.113.55:9999");
+      resolveFileResponse({
+        ok: true,
+        json: vi.fn(async () => ({
+          result: [
+            { path: "gcodes/stale-generation.gcode", size: 1234, modified: 1784100180 },
+          ],
+        })),
+      });
+      await flushAsyncProbe();
+
+      expect(printManagerMock.renderFileList).not.toHaveBeenCalled();
+      expect(dataMock.monitorData.machines["203.0.113.55"]?._cachedFileInfo).toBeUndefined();
+      expect(mod.getPrinterCoreV3ConnectionGeneration("203.0.113.55")).toBe(0);
     } finally {
       vi.useRealTimers();
     }

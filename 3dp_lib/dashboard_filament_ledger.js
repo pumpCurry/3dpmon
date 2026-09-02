@@ -26,9 +26,9 @@
  * - {@link getOpenFilamentEvent}：未解決のイベント文脈を取得（ADR-0005）
  * - {@link resolveFilamentEvent}：イベント文脈を解決済みにする（ADR-0005）
  *
- * @version 1.390.1668 (PR #440)
+ * @version 1.390.1669 (PR #440)
  * @since   2.2.1012
- * @lastModified 2026-09-02 19:52:10
+ * @lastModified 2026-09-02 20:03:58
  * -----------------------------------------------------------
  */
 
@@ -47,7 +47,26 @@ import { wallNowMs, randomEventId } from "./dashboard_time.js";
  *
  * @constant {WeakSet<object>}
  */
-const TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS = new WeakSet();
+let TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS = new WeakSet();
+
+/**
+ * unit test runtimeかどうかを判定する。
+ *
+ * 【詳細説明】
+ * - test-only issuerはproduction moduleからexportされているため、広い `NODE_ENV=test` だけを
+ *   authority境界にしない。
+ * - Vitestがmoduleへ注入する `import.meta.vitest` を主判定にし、テスト対象moduleへ注入されない
+ *   runnerではVitest worker固有の環境変数だけを補助的に許可する。
+ *
+ * @private
+ * @function _isTrustedTotalLifetimeCoverageTestRuntime
+ * @returns {boolean} Vitest上のテスト実行時だけtrue。
+ */
+function _isTrustedTotalLifetimeCoverageTestRuntime() {
+  const vitestWorkerId = typeof process !== "undefined" ? process.env?.VITEST_WORKER_ID : "";
+  const vitestFlag = typeof process !== "undefined" ? process.env?.VITEST : "";
+  return Boolean(import.meta?.vitest || vitestWorkerId || vitestFlag === "true");
+}
 
 /**
  * 値を [min, max] の範囲にクランプする。
@@ -158,8 +177,7 @@ export function isTrustedTotalLifetimeCoverageProof(proof) {
  * @returns {Object} テスト環境ではWeakSet登録済みproof、それ以外ではblocked proof。
  */
 export function createTrustedTotalLifetimeCoverageProofForTest(input = {}) {
-  const isTestRuntime = globalThis?.process?.env?.NODE_ENV === "test" ||
-    globalThis?.process?.env?.VITEST === "true";
+  const isTestRuntime = _isTrustedTotalLifetimeCoverageTestRuntime();
   const proof = Object.freeze({
     ...input,
     issuer: "3dpmon-total-lifetime-coverage:v1",
@@ -186,7 +204,9 @@ export function createTrustedTotalLifetimeCoverageProofForTest(input = {}) {
  * @returns {void}
  */
 export function clearTrustedTotalLifetimeCoverageProofsForTest() {
-  // WeakSetは列挙・clearできないため、テスト間では新規proofを都度発行してobject identityを分離する。
+  if (_isTrustedTotalLifetimeCoverageTestRuntime()) {
+    TRUSTED_TOTAL_LIFETIME_COVERAGE_PROOFS = new WeakSet();
+  }
 }
 
 /**

@@ -42,6 +42,7 @@ const {
   getOpenFilamentEvent,
   resolveFilamentEvent,
   runoutGateHeld,
+  isTrustedTotalLifetimeCoverageProof,
   createTrustedTotalLifetimeCoverageProofForTest,
   clearTrustedTotalLifetimeCoverageProofsForTest
 } = await import("../../3dp_lib/dashboard_filament_ledger.js");
@@ -139,6 +140,24 @@ describe("attributedUsed", () => {
 
   it("null ジョブ → 0", () => {
     expect(attributedUsed(null, "sp1")).toBe(0);
+  });
+});
+
+// =====================================================================
+// 1.5. total lifetime coverage proof registry
+// =====================================================================
+describe("total lifetime coverage proof registry", () => {
+  beforeEach(reset);
+
+  it("test-only trusted proof registryはclearでobject identityを失効させる", () => {
+    const proof = createTrustedTotalLifetimeCoverageProofForTest({ host: "h" });
+
+    expect(isTrustedTotalLifetimeCoverageProof(proof)).toBe(true);
+
+    clearTrustedTotalLifetimeCoverageProofsForTest();
+
+    expect(isTrustedTotalLifetimeCoverageProof(proof)).toBe(false);
+    expect(isTrustedTotalLifetimeCoverageProof({ ...proof })).toBe(false);
   });
 });
 
