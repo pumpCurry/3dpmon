@@ -27,7 +27,7 @@ Gate 18.9H の Operator SpoolMount production authority 仕様は
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
 | Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service implemented, H-1b durable persistence implemented, trusted resolver + CAS precondition hardening added, H-2 filament manager source mount UI added, destructive spool lifecycle guarded | H-1a/H-1b/H-2 tested | n/a | CAS-backed 3DPmon management only / physical command and debit disabled |
 | Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests create a separate module-attested MaterialBindingPlan, hold it as prepared pending state, mark it submitted only after transport send success, and connect it to runtime only after a new machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence and signed canonical `bindingAuthority`; command binding semantic cross-check, first local receipt freeze, and read-only export analyzer are in place | runtime + durable CAS + live bridge + MaterialBindingPlan composition + export analyzer tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
-| Gate 18.9J ItemKeeper Source Usage Fixture | J-1 pure fixture receipt evaluator added; K2 `materialUsed` CSV parser is shared by runtime and fixture validation; fixture receipt never mutates projection registry | parser + fixture receipt tests added | pending fixture capture | receipt-only / ItemKeeper source-aware send remains disabled |
+| Gate 18.9J ItemKeeper Source Usage Fixture | J-1 pure fixture receipt evaluator added; K2 `materialUsed` CSV parser is shared by runtime and fixture validation; fixture receipt never mutates projection registry. J-2 reviewed fixture registry evaluator scaffold added with an empty production registry | parser + fixture receipt + reviewed registry evaluator tests added | pending fixture capture | receipt-only / ItemKeeper source-aware send remains disabled until a reviewed registry entry exists |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
 | K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
 
@@ -72,6 +72,11 @@ runtime共通resolverで選ばれるraw文字列との一致を要求する。�
 runtime `module-owned-live-certification-registry` へdigestを登録しない。production issuerと
 ItemKeeper source-aware `jobs[].filaments[]` 送信解禁は、review済みfixture registryを
 module-owned immutable entryとして組み込む後続Gate 18.9J-2までHOLDする。
+Gate 18.9J-2 scaffoldでは、caller supplied fixture receipt、reviewedCommit、captureSha256が
+揃っていても、module-owned reviewed fixture registry entryが空の間は
+`reviewed-live-fixture-registry-entry-required` としてproduction registrationを拒否する。
+registry照合はpure evaluatorでテスト可能にし、実機fixture review後にのみimmutable entryを
+追加する。
 
 ## 未実装と分かっているもの
 

@@ -10,13 +10,14 @@
  * 【機能内容サマリ】
  * - Gate 18.9J-1 のlive fixture receiptがruntime projection registryを開かないことを検証
  * - K2 materialUsed CSV parserをfixture評価とruntimeで共有できる契約として検証
+ * - Gate 18.9J-2 のreview済みfixture registry照合がcaller証跡だけで開かないことを検証
  *
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1634 (PR #440)
+ * @version 1.390.1637 (PR #440)
  * @since   1.390.1632 (PR #440)
- * @lastModified 2026-09-02 09:58:00
+ * @lastModified 2026-09-02 11:36:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -24,8 +25,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  createItemKeeperSourceUsageProjectionCertificationDigest,
+  evaluateItemKeeperSourceUsageReviewedFixtureRegistryMatch,
   evaluateItemKeeperSourceUsageLiveFixture,
   isItemKeeperProjectionCertified,
+  registerItemKeeperSourceUsageProjectionCertification,
 } from "../../3dp_lib/printer_core/dashboard_itemkeeper_source_usage_projection_certification.js";
 import {
   parseK2MaterialUsedSourceCsv,
@@ -323,6 +327,113 @@ describe("evaluateItemKeeperSourceUsageLiveFixture", () => {
       itemKeeperProjection: result,
     };
     expect(isItemKeeperProjectionCertified(copiedFixtureReceiptSegment)).toBe(false);
+  });
+
+  it("public production registrationはcaller supplied fixture receiptだけではprojection registryを開かない", () => {
+    const segment = createJobMaterialSegments()[0];
+    const fixtureReceipt = evaluateItemKeeperSourceUsageLiveFixture({
+      fixtureEvidence: createFixtureEvidence(),
+      printStartSnapshots: createPrintStartSnapshots(),
+      jobMaterialSegments: createJobMaterialSegments(),
+    });
+
+    const registration = registerItemKeeperSourceUsageProjectionCertification(segment, {
+      fixtureReceipt,
+      reviewedCommit: createFixtureEvidence().reviewedCommit,
+      captureSha256: createFixtureEvidence().artifact.captureSha256,
+    });
+    const copiedSegment = {
+      ...segment,
+      itemKeeperProjection: registration,
+    };
+
+    expect(registration).toMatchObject({
+      status: "uncertified",
+      authority: "module-owned-live-certification-registry",
+      reason: "reviewed-live-fixture-registry-entry-required",
+    });
+    expect(isItemKeeperProjectionCertified(copiedSegment)).toBe(false);
+  });
+
+  it("review済みfixture registry evaluatorはsegment digestとfixture metadataが一致する場合だけmatchする", () => {
+    const fixtureEvidence = createFixtureEvidence();
+    const segment = createJobMaterialSegments()[0];
+    const fixtureReceipt = evaluateItemKeeperSourceUsageLiveFixture({
+      fixtureEvidence,
+      printStartSnapshots: createPrintStartSnapshots(),
+      jobMaterialSegments: createJobMaterialSegments(),
+    });
+    const segmentDigest = createItemKeeperSourceUsageProjectionCertificationDigest(segment);
+
+    const match = evaluateItemKeeperSourceUsageReviewedFixtureRegistryMatch(segment, {
+      fixtureReceipt,
+      reviewedCommit: fixtureEvidence.reviewedCommit,
+      captureSha256: fixtureEvidence.artifact.captureSha256,
+      device: fixtureEvidence.device,
+    }, [
+      {
+        schemaVersion: 1,
+        authority: "itemkeeper-source-usage-reviewed-fixture-registry",
+        gate: "18.9J-2",
+        registryEntryId: "reviewed-fixture:k2-pro-f012-20260902",
+        fixtureDigest: fixtureReceipt.fixtureDigest,
+        reviewedCommit: fixtureEvidence.reviewedCommit,
+        parserVersion: fixtureReceipt.parserVersion,
+        sourceOrderingProfile: fixtureReceipt.sourceOrderingProfile,
+        device: fixtureEvidence.device,
+        artifact: {
+          captureSha256: fixtureEvidence.artifact.captureSha256,
+        },
+        projectionDigests: [segmentDigest],
+      },
+    ]);
+
+    expect(match).toMatchObject({
+      ok: true,
+      status: "reviewed-fixture-match",
+      registryEntryId: "reviewed-fixture:k2-pro-f012-20260902",
+      fixtureDigest: fixtureReceipt.fixtureDigest,
+      projectionDigest: segmentDigest,
+    });
+  });
+
+  it("review済みfixture registry evaluatorは未登録segment digestをmatchしない", () => {
+    const fixtureEvidence = createFixtureEvidence();
+    const segment = createJobMaterialSegments()[0];
+    const fixtureReceipt = evaluateItemKeeperSourceUsageLiveFixture({
+      fixtureEvidence,
+      printStartSnapshots: createPrintStartSnapshots(),
+      jobMaterialSegments: createJobMaterialSegments(),
+    });
+
+    const match = evaluateItemKeeperSourceUsageReviewedFixtureRegistryMatch(segment, {
+      fixtureReceipt,
+      reviewedCommit: fixtureEvidence.reviewedCommit,
+      captureSha256: fixtureEvidence.artifact.captureSha256,
+      device: fixtureEvidence.device,
+    }, [
+      {
+        schemaVersion: 1,
+        authority: "itemkeeper-source-usage-reviewed-fixture-registry",
+        gate: "18.9J-2",
+        registryEntryId: "reviewed-fixture:k2-pro-f012-20260902",
+        fixtureDigest: fixtureReceipt.fixtureDigest,
+        reviewedCommit: fixtureEvidence.reviewedCommit,
+        parserVersion: fixtureReceipt.parserVersion,
+        sourceOrderingProfile: fixtureReceipt.sourceOrderingProfile,
+        device: fixtureEvidence.device,
+        artifact: {
+          captureSha256: fixtureEvidence.artifact.captureSha256,
+        },
+        projectionDigests: ["fnv1a128:not-the-segment-digest"],
+      },
+    ]);
+
+    expect(match).toMatchObject({
+      ok: false,
+      status: "reviewed-fixture-mismatch",
+      reason: "segment-digest-not-reviewed",
+    });
   });
 
   it("CSV件数とsource集合件数が一致しないlive fixtureはrejectする", () => {

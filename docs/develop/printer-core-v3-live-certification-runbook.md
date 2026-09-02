@@ -132,6 +132,11 @@ and a digest-consistent projection receipt in the export. The read-only analyzer
 cannot prove process-local runtime registry membership, so
 `canProjectItemKeeperSourceUsage` remains false unless a later production issuer
 exports runtime-certified evidence.
+Gate 18.9J-2 adds the reviewed fixture registry scaffold, but its production
+registry intentionally remains empty until a K2 live fixture is captured and
+reviewed. Caller-supplied fixture receipts, reviewed commits, or capture hashes
+must still report `reviewed-live-fixture-registry-entry-required` until that
+module-owned immutable registry entry is added.
 
 Required sequence:
 

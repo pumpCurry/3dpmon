@@ -371,6 +371,33 @@ HOLD境界:
   current model / firmware / parser / sourceOrderingProfile / result set と照合する
   Gate 18.9J-2 までHOLDする。
 
+### Gate 18.9J-2: Reviewed Fixture Registry Scaffold
+
+Gate 18.9J-2 scaffoldでは、J-1で作ったfixture receiptをcallerが渡すだけでは
+ItemKeeper projection registryを開かない。production `registerItemKeeperSourceUsageProjectionCertification()`
+は、module-owned immutable reviewed fixture registryと一致する場合だけ内部issuer tokenで
+`module-owned-live-certification-registry` へ登録できる。
+
+現時点のproduction registryは空であり、J-2用のK2実機fixture captureがreviewされるまで
+`reviewed-live-fixture-registry-entry-required` でfail-closedする。pure evaluator
+`evaluateItemKeeperSourceUsageReviewedFixtureRegistryMatch()` は、fixtureDigest、reviewedCommit、
+parserVersion、sourceOrderingProfile、captureSha256、device scope、projection digestを照合する。
+これにより、fixture receiptやexport JSON上の文字列だけを後付けしてもproduction ItemKeeper
+source-aware送信には昇格しない。
+
+実機fixture review後にregistry entryを追加する場合は、entryを以下へbindする。
+
+- `registryEntryId`
+- `fixtureDigest`
+- `reviewedCommit`
+- `parserVersion`
+- `sourceOrderingProfile`
+- `captureSha256`
+- `device.printerType`
+- `device.model`
+- `device.firmwareVersion`
+- `projectionDigests[]`
+
 ## P0/P1 Tests
 
 H-1a/H-1b では最低限以下を固定する。

@@ -18,14 +18,15 @@
  * - {@link registerItemKeeperSourceUsageProjectionCertification}：production placeholder receiptを生成
  * - {@link registerItemKeeperSourceUsageProjectionCertificationForTest}：test専用にregistryへ登録
  * - {@link clearItemKeeperSourceUsageProjectionCertificationsForTest}：test専用registryを初期化
+ * - {@link evaluateItemKeeperSourceUsageReviewedFixtureRegistryMatch}：review済みfixture registryとの照合結果を評価
  * - {@link isExplicitNonNegativeItemKeeperUsedLength}：使用量が明示的な非負値か判定
  * - {@link toExplicitNonNegativeItemKeeperUsedLengthMm}：使用量をprojection用数値へ変換
  * - {@link isItemKeeperProjectionCertified}：segmentがregistry認証済みか判定
  * - {@link evaluateItemKeeperSourceUsageLiveFixture}：live fixture result setをreceipt化
  *
- * @version 1.390.1634 (PR #440)
+ * @version 1.390.1637 (PR #440)
  * @since   1.390.1631 (PR #440)
- * @lastModified 2026-09-02 09:58:00
+ * @lastModified 2026-09-02 11:36:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2でreviewed fixture registryとproduction issuer enableを追加する
@@ -54,6 +55,12 @@ const ITEMKEEPER_SOURCE_USAGE_LIVE_FIXTURE_AUTHORITY = "itemkeeper-source-usage-
 const ITEMKEEPER_SOURCE_USAGE_LIVE_FIXTURE_SCHEMA_VERSION = 1;
 /** ItemKeeper source-aware live fixtureのGate名 */
 const ITEMKEEPER_SOURCE_USAGE_LIVE_FIXTURE_GATE = "18.9J-1";
+/** Gate 18.9J-2 reviewed fixture registryのauthority名 */
+const ITEMKEEPER_SOURCE_USAGE_REVIEWED_FIXTURE_REGISTRY_AUTHORITY = "itemkeeper-source-usage-reviewed-fixture-registry";
+/** Gate 18.9J-2 reviewed fixture registryのschema version */
+const ITEMKEEPER_SOURCE_USAGE_REVIEWED_FIXTURE_REGISTRY_SCHEMA_VERSION = 1;
+/** reviewed fixture registryを有効化するGate名 */
+const ITEMKEEPER_SOURCE_USAGE_REVIEWED_FIXTURE_REGISTRY_GATE = "18.9J-2";
 /** live certification済みsource-aware projection digest集合 */
 const ITEMKEEPER_SOURCE_USAGE_PROJECTION_CERTIFICATIONS = new Set();
 /** productionでは未実装のlive issuerだけがregistryを更新できるようにする内部token */
@@ -109,6 +116,27 @@ function deepFreezeJson(value) {
   }
   return value;
 }
+
+/**
+ * productionに組み込まれたreview済みfixture registryを生成する。
+ *
+ * 【詳細説明】
+ * - Gate 18.9J-2はcaller supplied fixture receiptをそのままauthorityにしない。
+ * - 実機captureをreviewした後、module-owned immutable entryとしてこの配列へ追加する。
+ * - 現時点ではreview済みfixture未投入のため空配列であり、production issuerはfail-closedのままになる。
+ *
+ * @private
+ * @function createReviewedItemKeeperSourceUsageFixtureRegistry
+ * @param {Object[]} entries - review済みfixture registry entry配列。
+ * @returns {Object[]} freeze済みregistry entry配列。
+ */
+function createReviewedItemKeeperSourceUsageFixtureRegistry(entries) {
+  return deepFreezeJson((Array.isArray(entries) ? entries : []).map((entry) => cloneJsonValue(entry)));
+}
+
+/** module-owned reviewed fixture registry。実機fixture review後にのみentryを追加する。 */
+const REVIEWED_ITEMKEEPER_SOURCE_USAGE_FIXTURE_REGISTRY =
+  createReviewedItemKeeperSourceUsageFixtureRegistry([]);
 
 /**
  * 文字列が空でないISO時刻として解釈できるか判定する。
@@ -809,6 +837,194 @@ export function createItemKeeperSourceUsageProjectionCertificationDigest(segment
 }
 
 /**
+ * reviewed fixture registry照合contextをcanonical化する。
+ *
+ * 【詳細説明】
+ * - fixture receiptやcapture hashをcallerから受け取っても、それ単体ではproduction authorityにしない。
+ * - ここではmodule-owned registry entryと比較するための文字列だけを抽出する。
+ *
+ * @private
+ * @function normalizeReviewedFixtureRegistryContext
+ * @param {Object=} context - 照合context。
+ * @returns {Object} canonical context。
+ */
+function normalizeReviewedFixtureRegistryContext(context = {}) {
+  const fixtureReceipt = context.fixtureReceipt || {};
+  return {
+    fixtureDigest: toTrimmedString(context.fixtureDigest || fixtureReceipt.fixtureDigest),
+    reviewedCommit: toTrimmedString(context.reviewedCommit || fixtureReceipt.reviewedCommit).toLowerCase(),
+    parserVersion: toTrimmedString(context.parserVersion || fixtureReceipt.parserVersion),
+    sourceOrderingProfile: toTrimmedString(context.sourceOrderingProfile || fixtureReceipt.sourceOrderingProfile),
+    captureSha256: toTrimmedString(
+      context.captureSha256 ||
+      context.artifact?.captureSha256 ||
+      fixtureReceipt.artifact?.captureSha256
+    ).toLowerCase(),
+    device: {
+      deviceId: toTrimmedString(context.device?.deviceId),
+      printerType: toTrimmedString(context.device?.printerType),
+      model: toTrimmedString(context.device?.model),
+      firmwareVersion: toTrimmedString(context.device?.firmwareVersion),
+    },
+  };
+}
+
+/**
+ * reviewed fixture registry entryをcanonical化する。
+ *
+ * @private
+ * @function normalizeReviewedFixtureRegistryEntry
+ * @param {Object|null|undefined} entry - registry entry候補。
+ * @returns {Object} canonical entry。
+ */
+function normalizeReviewedFixtureRegistryEntry(entry) {
+  return {
+    schemaVersion: Number(entry?.schemaVersion),
+    authority: toTrimmedString(entry?.authority),
+    gate: toTrimmedString(entry?.gate),
+    registryEntryId: toTrimmedString(entry?.registryEntryId || entry?.entryId),
+    fixtureDigest: toTrimmedString(entry?.fixtureDigest),
+    reviewedCommit: toTrimmedString(entry?.reviewedCommit).toLowerCase(),
+    parserVersion: toTrimmedString(entry?.parserVersion),
+    sourceOrderingProfile: toTrimmedString(entry?.sourceOrderingProfile),
+    captureSha256: toTrimmedString(entry?.artifact?.captureSha256 || entry?.captureSha256).toLowerCase(),
+    device: {
+      deviceId: toTrimmedString(entry?.device?.deviceId),
+      printerType: toTrimmedString(entry?.device?.printerType),
+      model: toTrimmedString(entry?.device?.model),
+      firmwareVersion: toTrimmedString(entry?.device?.firmwareVersion),
+    },
+    projectionDigests: Array.isArray(entry?.projectionDigests)
+      ? entry.projectionDigests.map((digest) => toTrimmedString(digest)).filter(Boolean)
+      : [],
+  };
+}
+
+/**
+ * reviewed fixture registry entryのmetadataが照合contextと一致するか判定する。
+ *
+ * @private
+ * @function doesReviewedFixtureRegistryEntryMatchContext
+ * @param {Object} entry - canonical registry entry。
+ * @param {Object} context - canonical context。
+ * @returns {boolean} fixture metadataが一致すればtrue。
+ */
+function doesReviewedFixtureRegistryEntryMatchContext(entry, context) {
+  if (
+    entry.schemaVersion !== ITEMKEEPER_SOURCE_USAGE_REVIEWED_FIXTURE_REGISTRY_SCHEMA_VERSION ||
+    entry.authority !== ITEMKEEPER_SOURCE_USAGE_REVIEWED_FIXTURE_REGISTRY_AUTHORITY ||
+    entry.gate !== ITEMKEEPER_SOURCE_USAGE_REVIEWED_FIXTURE_REGISTRY_GATE ||
+    !entry.registryEntryId ||
+    entry.fixtureDigest !== context.fixtureDigest ||
+    entry.reviewedCommit !== context.reviewedCommit ||
+    entry.parserVersion !== context.parserVersion ||
+    entry.sourceOrderingProfile !== context.sourceOrderingProfile ||
+    entry.captureSha256 !== context.captureSha256
+  ) {
+    return false;
+  }
+  for (const key of ["printerType", "model", "firmwareVersion"]) {
+    if (entry.device[key] && entry.device[key] !== context.device[key]) {
+      return false;
+    }
+  }
+  if (entry.device.deviceId && context.device.deviceId && entry.device.deviceId !== context.device.deviceId) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * ItemKeeper source-aware projection候補がreview済みfixture registryに含まれるか評価する。
+ *
+ * 【詳細説明】
+ * - この関数はpure evaluatorであり、process-local projection registryへは登録しない。
+ * - production issuerはmodule-owned immutable registryだけを渡し、testやreviewは明示registry配列で
+ *   metadata照合とsegment digest照合を検証できる。
+ * - caller supplied fixture receiptが正しく見えても、同じfixtureDigest/captureSha256/reviewedCommitと
+ *   segment digestを持つmodule-owned entryが無ければmatchしない。
+ *
+ * @function evaluateItemKeeperSourceUsageReviewedFixtureRegistryMatch
+ * @param {Object|null|undefined} segment - JobMaterialSegment候補。
+ * @param {Object=} context - fixture receipt / device / capture metadata。
+ * @param {Object[]=} registryEntries - 照合に使うreview済みfixture registry entry配列。
+ * @returns {Object} match結果。
+ * @example
+ * const match = evaluateItemKeeperSourceUsageReviewedFixtureRegistryMatch(segment, context, registry);
+ */
+export function evaluateItemKeeperSourceUsageReviewedFixtureRegistryMatch(
+  segment,
+  context = {},
+  registryEntries = REVIEWED_ITEMKEEPER_SOURCE_USAGE_FIXTURE_REGISTRY
+) {
+  const projectionDigest = createItemKeeperSourceUsageProjectionCertificationDigest(segment);
+  const normalizedContext = normalizeReviewedFixtureRegistryContext(context);
+  const resultBase = {
+    projectionDigest,
+    fixtureDigest: normalizedContext.fixtureDigest,
+    reviewedCommit: normalizedContext.reviewedCommit,
+  };
+  if (!isExplicitNonNegativeItemKeeperUsedLength(segment?.usedLengthMm)) {
+    return deepFreezeJson({
+      ...resultBase,
+      ok: false,
+      status: "reviewed-fixture-mismatch",
+      reason: "used-length-mm-required",
+    });
+  }
+  if (
+    !normalizedContext.fixtureDigest ||
+    !normalizedContext.reviewedCommit ||
+    !normalizedContext.parserVersion ||
+    !normalizedContext.sourceOrderingProfile ||
+    !normalizedContext.captureSha256
+  ) {
+    return deepFreezeJson({
+      ...resultBase,
+      ok: false,
+      status: "reviewed-fixture-mismatch",
+      reason: "reviewed-fixture-context-required",
+    });
+  }
+  const entries = Array.isArray(registryEntries) ? registryEntries.map(normalizeReviewedFixtureRegistryEntry) : [];
+  if (entries.length === 0) {
+    return deepFreezeJson({
+      ...resultBase,
+      ok: false,
+      status: "reviewed-fixture-mismatch",
+      reason: "reviewed-live-fixture-registry-entry-required",
+    });
+  }
+  for (const entry of entries) {
+    if (!doesReviewedFixtureRegistryEntryMatchContext(entry, normalizedContext)) {
+      continue;
+    }
+    if (!entry.projectionDigests.includes(projectionDigest)) {
+      return deepFreezeJson({
+        ...resultBase,
+        ok: false,
+        status: "reviewed-fixture-mismatch",
+        registryEntryId: entry.registryEntryId,
+        reason: "segment-digest-not-reviewed",
+      });
+    }
+    return deepFreezeJson({
+      ...resultBase,
+      ok: true,
+      status: "reviewed-fixture-match",
+      registryEntryId: entry.registryEntryId,
+      reason: "",
+    });
+  }
+  return deepFreezeJson({
+    ...resultBase,
+    ok: false,
+    status: "reviewed-fixture-mismatch",
+    reason: "reviewed-live-fixture-registry-entry-required",
+  });
+}
+
+/**
  * 内部issuer tokenつきでItemKeeper source-aware projection registryへ登録する。
  *
  * 【詳細説明】
@@ -820,9 +1036,10 @@ export function createItemKeeperSourceUsageProjectionCertificationDigest(segment
  * @function registerItemKeeperSourceUsageProjectionCertificationWithIssuer
  * @param {Object|null|undefined} segment - 認証候補のJobMaterialSegment。
  * @param {Object} issuerToken - module-private issuer token。
+ * @param {Object=} issuerEvidence - reviewed fixture registry照合結果。
  * @returns {Object} segmentへ付与するItemKeeper projection認証receipt。
  */
-function registerItemKeeperSourceUsageProjectionCertificationWithIssuer(segment, issuerToken) {
+function registerItemKeeperSourceUsageProjectionCertificationWithIssuer(segment, issuerToken, issuerEvidence = {}) {
   const digest = createItemKeeperSourceUsageProjectionCertificationDigest(segment);
   if (issuerToken !== ITEMKEEPER_SOURCE_USAGE_PROJECTION_ISSUER_TOKEN) {
     return Object.freeze({
@@ -845,6 +1062,9 @@ function registerItemKeeperSourceUsageProjectionCertificationWithIssuer(segment,
     status: "certified",
     authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,
     digest,
+    registryEntryId: toTrimmedString(issuerEvidence.registryEntryId),
+    fixtureDigest: toTrimmedString(issuerEvidence.fixtureDigest),
+    reviewedCommit: toTrimmedString(issuerEvidence.reviewedCommit),
   });
 }
 
@@ -859,12 +1079,46 @@ function registerItemKeeperSourceUsageProjectionCertificationWithIssuer(segment,
  *
  * @function registerItemKeeperSourceUsageProjectionCertification
  * @param {Object|null|undefined} segment - 認証候補のJobMaterialSegment。
+ * @param {Object=} context - reviewed fixture照合context。
  * @returns {Object} 未認証理由を含む診断用receipt。
  * @example
  * const receipt = registerItemKeeperSourceUsageProjectionCertification(segment);
  */
-export function registerItemKeeperSourceUsageProjectionCertification(segment) {
+export function registerItemKeeperSourceUsageProjectionCertification(segment, context = {}) {
   const digest = createItemKeeperSourceUsageProjectionCertificationDigest(segment);
+  const hasReviewedFixtureContext = Boolean(
+    context &&
+    typeof context === "object" &&
+    (
+      context.fixtureReceipt ||
+      context.fixtureDigest ||
+      context.reviewedCommit ||
+      context.captureSha256 ||
+      context.artifact
+    )
+  );
+  if (hasReviewedFixtureContext) {
+    const match = evaluateItemKeeperSourceUsageReviewedFixtureRegistryMatch(
+      segment,
+      context,
+      REVIEWED_ITEMKEEPER_SOURCE_USAGE_FIXTURE_REGISTRY
+    );
+    if (!match.ok) {
+      return Object.freeze({
+        status: "uncertified",
+        authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,
+        digest,
+        reason: match.reason,
+        fixtureDigest: toTrimmedString(match.fixtureDigest),
+        reviewedCommit: toTrimmedString(match.reviewedCommit),
+      });
+    }
+    return registerItemKeeperSourceUsageProjectionCertificationWithIssuer(
+      segment,
+      ITEMKEEPER_SOURCE_USAGE_PROJECTION_ISSUER_TOKEN,
+      match
+    );
+  }
   return Object.freeze({
     status: "uncertified",
     authority: ITEMKEEPER_SOURCE_USAGE_PROJECTION_AUTHORITY,

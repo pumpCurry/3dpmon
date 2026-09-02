@@ -604,6 +604,12 @@ Gate 18.9 must cover:
   helper calls cannot enable source-aware ItemKeeper projection. This projection
   sends per-spool `filaments[]` evidence without mutating 3dpmon inventory
   state.
+  Gate 18.9J-2 introduces the reviewed fixture registry scaffold without adding
+  a production fixture entry. Public registration may evaluate caller-provided
+  fixture receipt metadata, but it mints certification only when the segment
+  digest and fixture metadata match a module-owned immutable registry entry.
+  With the registry empty, production registration remains fail-closed with
+  `reviewed-live-fixture-registry-entry-required`.
 - K2/CFS UI print-start sends create a module-attested MaterialBindingPlan
   separate from the transport command request, register it as prepared pending
   state immediately before transport dispatch, mark it submitted only after
