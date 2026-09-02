@@ -29,9 +29,9 @@
  * - {@link loadPrintCurrent}：現ジョブ読込
  * - {@link savePrintCurrent}：現ジョブ保存
  *
- * @version 1.390.1653 (PR #440)
+ * @version 1.390.1656 (PR #440)
  * @since   1.390.193 (PR #86)
- * @lastModified 2026-09-02 16:50:21
+ * @lastModified 2026-09-02 17:05:50
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1776,6 +1776,34 @@ function _collectHistoryJobIdentityKeys(job) {
 }
 
 /**
+ * PrintBinding未完了判定用のsource job keyを生成する。
+ *
+ * 【詳細説明】
+ * - `printJobId`は機器側のepoch秒などで複数device間に衝突し得るため、pending判定では
+ *   deviceIdとprintPlanIdも含めたkeyでsnapshot/segmentを照合する。
+ * - 空の`printJobId`は履歴へ戻せる保護対象を特定できないため、空文字として扱い除外する。
+ *
+ * @private
+ * @function _createPrintBindingPendingProtectionKey
+ * @param {Object|null|undefined} record - PrintBinding snapshotまたはsegment候補。
+ * @returns {{key:string,printJobId:string}} pending判定keyと履歴照合用printJobId。
+ */
+function _createPrintBindingPendingProtectionKey(record) {
+  const printJobId = String(record?.printJobId ?? record?.jobId ?? record?.printId ?? record?.id ?? "").trim();
+  if (!printJobId) {
+    return { key: "", printJobId: "" };
+  }
+  return {
+    key: [
+      String(record?.deviceId ?? "").trim(),
+      printJobId,
+      String(record?.printPlanId ?? record?.planId ?? "").trim()
+    ].join("\u0000"),
+    printJobId
+  };
+}
+
+/**
  * completion attributionが未commitのPrintBinding jobをretention保護対象として収集する。
  *
  * 【詳細説明】
@@ -1783,6 +1811,8 @@ function _collectHistoryJobIdentityKeys(job) {
  *   後続retryが`printStore.history`のraw materialUsed CSVを再読する。
  * - その履歴をretentionで削除すると、authorityはfail-closedするがsource-aware accountingを
  *   後から完成できなくなるため、segmentが揃うまではjob履歴を保持する。
+ * - 複数K2で同じ`printJobId`が出た場合でも、別deviceの完了segmentでpending snapshotを
+ *   完了扱いしないよう、pending判定はdevice + job + plan単位で行う。
  *
  * @private
  * @function _collectPrintBindingProtectedPrintJobIds
@@ -1795,25 +1825,27 @@ function _collectPrintBindingProtectedPrintJobIds(history) {
   if (!store || typeof store !== "object" || !Array.isArray(history) || history.length === 0) {
     return protectedIds;
   }
-  const snapshotsByJobId = new Map();
+  const snapshotsByKey = new Map();
+  const printJobIdsByKey = new Map();
   for (const snapshot of Array.isArray(store.printStartSnapshots) ? store.printStartSnapshots : []) {
-    const printJobId = String(snapshot?.printJobId ?? "").trim();
-    if (!printJobId) continue;
-    snapshotsByJobId.set(printJobId, (snapshotsByJobId.get(printJobId) || 0) + 1);
+    const identity = _createPrintBindingPendingProtectionKey(snapshot);
+    if (!identity.key || !identity.printJobId) continue;
+    snapshotsByKey.set(identity.key, (snapshotsByKey.get(identity.key) || 0) + 1);
+    printJobIdsByKey.set(identity.key, identity.printJobId);
   }
-  if (snapshotsByJobId.size === 0) {
+  if (snapshotsByKey.size === 0) {
     return protectedIds;
   }
-  const segmentsByJobId = new Map();
+  const segmentsByKey = new Map();
   for (const segment of Array.isArray(store.jobMaterialSegments) ? store.jobMaterialSegments : []) {
-    const printJobId = String(segment?.printJobId ?? "").trim();
-    if (!printJobId) continue;
-    segmentsByJobId.set(printJobId, (segmentsByJobId.get(printJobId) || 0) + 1);
+    const identity = _createPrintBindingPendingProtectionKey(segment);
+    if (!identity.key) continue;
+    segmentsByKey.set(identity.key, (segmentsByKey.get(identity.key) || 0) + 1);
   }
   const pendingJobIds = new Set();
-  for (const [printJobId, snapshotCount] of snapshotsByJobId.entries()) {
-    if ((segmentsByJobId.get(printJobId) || 0) < snapshotCount) {
-      pendingJobIds.add(printJobId);
+  for (const [key, snapshotCount] of snapshotsByKey.entries()) {
+    if ((segmentsByKey.get(key) || 0) < snapshotCount) {
+      pendingJobIds.add(printJobIdsByKey.get(key));
     }
   }
   if (pendingJobIds.size === 0) {
@@ -1887,12 +1919,17 @@ export function applyPrintHistoryRetention(history, settings = monitorData.appSe
     ..._collectLedgerProtectedPrintJobIds(options.host, list),
     ..._collectPrintBindingProtectedPrintJobIds(list)
   ]);
-  if (protectedIds.size === 0) return retained;
-  for (const job of list.slice(limit)) {
-    const jobId = Number(job?.id);
-    if (!Number.isFinite(jobId) || seen.has(jobId) || !protectedIds.has(jobId)) continue;
-    retained.push(job);
-    seen.add(jobId);
+  if (protectedIds.size > 0) {
+    for (const job of list.slice(limit)) {
+      const jobId = Number(job?.id);
+      if (!Number.isFinite(jobId) || seen.has(jobId) || !protectedIds.has(jobId)) continue;
+      retained.push(job);
+      seen.add(jobId);
+    }
+  }
+  if (options.host) {
+    const machine = monitorData.machines?.[options.host];
+    _markExplicitPrintHistoryRetentionCoverage(machine?.printStore, list.length, retained.length, limit);
   }
   return retained;
 }

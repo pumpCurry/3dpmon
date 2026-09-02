@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1653 (PR #440)
+ * @version 1.390.1656 (PR #440)
  * @since   1.390.1641 (PR #441)
- * @lastModified 2026-09-02 16:45:11
+ * @lastModified 2026-09-02 17:05:50
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -298,6 +298,83 @@ describe("印刷履歴保持設定", () => {
     expect(result.changedHosts).toEqual(["K2Pro"]);
     expect(result.removedJobs).toBe(1);
     expect(mocks.monitorData.machines.K2Pro.printStore.history.map((job) => job.id)).toEqual([103, 102]);
+  });
+
+  it("保持上限適用時は別deviceの同一printJobId完了segmentでpending PrintBindingを完了扱いしない", () => {
+    mocks.monitorData.appSettings.printHistoryMaxEntries = 1;
+    mocks.monitorData.materialAccountingPrintBindingStore = {
+      printStartSnapshots: [
+        {
+          snapshotId: "snapshot:pending-b",
+          printJobId: "job:shared-epoch",
+          printPlanId: "plan:k2-b",
+          deviceId: "serial:k2-b"
+        }
+      ],
+      jobMaterialSegments: [
+        {
+          segmentId: "segment:completed-a",
+          printJobId: "job:shared-epoch",
+          printPlanId: "plan:k2-a",
+          deviceId: "serial:k2-a",
+          usedLengthMm: 1234,
+          usageState: "observed-used"
+        }
+      ]
+    };
+    mocks.monitorData.machines = {
+      K2ProB: {
+        printStore: {
+          history: [
+            { id: 103, printJobId: "job:new", printPlanId: "plan:k2-b-new", filename: "new.gcode" },
+            { id: 102, printJobId: "job:shared-epoch", printPlanId: "plan:k2-b", filename: "pending-b.gcode" },
+            { id: 101, printJobId: "job:old", printPlanId: "plan:k2-b-old", filename: "old.gcode" }
+          ],
+          current: null,
+          videos: {}
+        }
+      }
+    };
+
+    const result = applyConfiguredPrintHistoryRetentionToAllMachines();
+
+    expect(result.changedHosts).toEqual(["K2ProB"]);
+    expect(result.removedJobs).toBe(1);
+    expect(mocks.monitorData.machines.K2ProB.printStore.history.map((job) => job.id)).toEqual([103, 102]);
+  });
+
+  it("保存前にapplyPrintHistoryRetentionされた履歴でも明示retention coverageを記録する", () => {
+    mocks.monitorData.appSettings.printHistoryMaxEntries = 2;
+    mocks.monitorData.machines = {
+      K2Pro: {
+        printStore: {
+          history: [
+            { id: 104, printJobId: "job:4", filename: "fourth.gcode" },
+            { id: 103, printJobId: "job:3", filename: "third.gcode" },
+            { id: 102, printJobId: "job:2", filename: "second.gcode" },
+            { id: 101, printJobId: "job:1", filename: "first.gcode" }
+          ],
+          current: null,
+          videos: {}
+        }
+      }
+    };
+
+    const retained = applyPrintHistoryRetention(
+      mocks.monitorData.machines.K2Pro.printStore.history,
+      mocks.monitorData.appSettings,
+      { host: "K2Pro" }
+    );
+
+    expect(retained.map((job) => job.id)).toEqual([104, 103]);
+    expect(mocks.monitorData.machines.K2Pro.printStore.historyCoverage).toMatchObject({
+      activeAnchorComplete: true,
+      totalLifetimeComplete: false,
+      source: "print-history-retention",
+      sourceLength: 4,
+      retainedLength: 2,
+      limit: 2
+    });
   });
 
   it("IndexedDB利用時のlocalStorage回復バックアップは無制限設定でも履歴をbounded snapshotとして保存する", async () => {

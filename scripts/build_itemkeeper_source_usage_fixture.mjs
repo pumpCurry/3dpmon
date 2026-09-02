@@ -18,9 +18,9 @@
  * - {@link buildItemKeeperSourceUsageFixture}：export payloadからfixture artifactを生成
  * - {@link runItemKeeperSourceUsageFixtureBuilder}：CLI指定ファイルを読み書きする
  *
- * @version 1.390.1646 (PR #440)
+ * @version 1.390.1656 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 15:42:55
+ * @lastModified 2026-09-02 17:05:50
  * -----------------------------------------------------------
  * @todo
  * - Gate 18.9J-2 registry entry追加時にreviewed registry entry skeleton出力を追加する
@@ -760,6 +760,33 @@ function createExpectedSourceOrder(snapshots, segments) {
 }
 
 /**
+ * JobMaterialSegmentへ保存されたcompletion raw CSV証跡を取得する。
+ *
+ * 【詳細説明】
+ * - 印刷履歴は保持上限で削除される場合があるため、builderでもsegment側に保存した
+ *   completionEvidenceを履歴CSVの代替証跡として利用する。
+ * - 同一job内で複数のraw CSVが混ざる場合は、どれか一つを選ばず理由だけを返し、
+ *   fixture receipt側でfail-closedできるようにする。
+ *
+ * @private
+ * @function resolveSegmentCompletionMaterialUsedCsv
+ * @param {Object[]} segments - JobMaterialSegment配列。
+ * @returns {{rawMaterialUsed:string,reasons:string[]}} segment completion evidence。
+ */
+function resolveSegmentCompletionMaterialUsedCsv(segments) {
+  const rawValues = [...new Set((Array.isArray(segments) ? segments : [])
+    .map((segment) => toText(segment?.evidence?.completionEvidence?.rawMaterialUsed))
+    .filter(Boolean))];
+  if (rawValues.length === 0) {
+    return { rawMaterialUsed: "", reasons: [] };
+  }
+  if (rawValues.length > 1) {
+    return { rawMaterialUsed: "", reasons: ["raw-material-used-completion-evidence-conflict"] };
+  }
+  return { rawMaterialUsed: rawValues[0], reasons: [] };
+}
+
+/**
  * fixture evidence envelopeを生成する。
  *
  * @private
@@ -772,6 +799,7 @@ function createExpectedSourceOrder(snapshots, segments) {
  * @param {string} input.captureSha256 - capture artifact SHA-256。
  * @param {Object|null} input.certificationPayload - certification payload。
  * @param {Object} input.sessionEvidence - 対象jobのsession evidence。
+ * @param {string} input.rawMaterialUsedSourceCsv - fixture raw materialUsed CSV。
  * @returns {Object} fixture evidence。
  */
 function createFixtureEvidence({
@@ -782,6 +810,7 @@ function createFixtureEvidence({
   captureSha256,
   certificationPayload,
   sessionEvidence,
+  rawMaterialUsedSourceCsv,
 }) {
   const capturedAt = toText(
     options.capturedAt ||
@@ -816,7 +845,7 @@ function createFixtureEvidence({
         : [],
     },
     raw: {
-      materialUsedSourceCsv: resolveK2MaterialUsedSourceCsv(historyEntry),
+      materialUsedSourceCsv: toText(rawMaterialUsedSourceCsv),
     },
     artifact: {
       captureSha256,
@@ -852,16 +881,29 @@ function attachPrintPlanIdToExpectedSourceOrder(expectedSourceOrder, snapshots) 
  * @param {Object[]} input.segments - JobMaterialSegment配列。
  * @param {Object|null} input.historyEntry - print history entry。
  * @param {Object|null} input.certificationPayload - certification payload。
+ * @param {string} input.rawMaterialUsedSourceCsv - fixture raw materialUsed CSV。
+ * @param {string[]} input.rawMaterialUsedReasons - raw materialUsed証跡の警告理由。
  * @returns {string[]} warning配列。
  */
-function createBuildWarnings({ device, snapshots, segments, historyEntry, certificationPayload }) {
+function createBuildWarnings({
+  device,
+  snapshots,
+  segments,
+  historyEntry,
+  certificationPayload,
+  rawMaterialUsedSourceCsv,
+  rawMaterialUsedReasons = [],
+}) {
   const warnings = [];
   if (!device.model) warnings.push("device-model-missing");
   if (!device.firmwareVersion) warnings.push("device-firmware-version-missing");
   if (snapshots.length === 0) warnings.push("print-start-snapshot-missing");
   if (segments.length === 0) warnings.push("job-material-segment-missing");
   if (!historyEntry) warnings.push("print-history-entry-missing");
-  if (!resolveK2MaterialUsedSourceCsv(historyEntry)) warnings.push("raw-material-used-source-csv-missing");
+  if (!rawMaterialUsedSourceCsv) warnings.push("raw-material-used-source-csv-missing");
+  for (const reason of rawMaterialUsedReasons) {
+    if (reason) warnings.push(reason);
+  }
   if (!certificationPayload) warnings.push("cfs-certification-panel-export-missing");
   return warnings;
 }
@@ -901,6 +943,11 @@ export function buildItemKeeperSourceUsageFixture({
   );
   const printPlanId = toText(expectedSourceOrder[0]?.printPlanId || historyEntry?.printPlanId || "");
   const sessionEvidence = createFixtureSessionEvidence({ snapshots, segments, historyEntry });
+  const historyRawMaterialUsed = resolveK2MaterialUsedSourceCsv(historyEntry);
+  const segmentCompletionEvidence = historyRawMaterialUsed
+    ? { rawMaterialUsed: "", reasons: [] }
+    : resolveSegmentCompletionMaterialUsedCsv(segments);
+  const rawMaterialUsedSourceCsv = historyRawMaterialUsed || segmentCompletionEvidence.rawMaterialUsed;
   const captureBundle = {
     schemaVersion: 1,
     authority: "itemkeeper-source-usage-capture-bundle",
@@ -917,7 +964,7 @@ export function buildItemKeeperSourceUsageFixture({
     inputHashes,
     snapshotIds: snapshots.map((snapshot) => toText(snapshot.snapshotId)),
     segmentIds: segments.map((segment) => toText(segment.segmentId)),
-    rawMaterialUsed: resolveK2MaterialUsedSourceCsv(historyEntry),
+    rawMaterialUsed: rawMaterialUsedSourceCsv,
   };
   const captureSha256 = createStableJsonSha256(captureBundle);
   const fixtureEvidence = createFixtureEvidence({
@@ -928,6 +975,7 @@ export function buildItemKeeperSourceUsageFixture({
     captureSha256,
     certificationPayload,
     sessionEvidence,
+    rawMaterialUsedSourceCsv,
   });
   fixtureEvidence.print.printPlanId = printPlanId;
   const fixtureReceipt = evaluateItemKeeperSourceUsageLiveFixture({
@@ -947,7 +995,15 @@ export function buildItemKeeperSourceUsageFixture({
     usageState: toText(segment.usageState),
     projectionDigest: createItemKeeperSourceUsageProjectionCertificationDigest(segment),
   }));
-  const warnings = createBuildWarnings({ device, snapshots, segments, historyEntry, certificationPayload });
+  const warnings = createBuildWarnings({
+    device,
+    snapshots,
+    segments,
+    historyEntry,
+    certificationPayload,
+    rawMaterialUsedSourceCsv,
+    rawMaterialUsedReasons: segmentCompletionEvidence.reasons,
+  });
   const reviewBlockers = createIdentityReviewBlockers({ device, certificationPayload, options, sessionEvidence });
   return {
     schemaVersion: 1,

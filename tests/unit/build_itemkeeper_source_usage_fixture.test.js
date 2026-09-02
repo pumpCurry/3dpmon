@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1646 (PR #440)
+ * @version 1.390.1656 (PR #440)
  * @since   1.390.1639 (PR #440)
- * @lastModified 2026-09-02 15:42:55
+ * @lastModified 2026-09-02 17:05:50
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -247,6 +247,90 @@ describe("build_itemkeeper_source_usage_fixture", () => {
     ]);
     expect(result.projectionDigests).toHaveLength(2);
     expect(result.projectionDigests[0].projectionDigest).toMatch(/^fnv1a128:/u);
+  });
+
+  it("print historyがretention済みでもsegment completionEvidenceのraw CSVからfixtureを生成する", () => {
+    const payload = createExportPayload();
+    payload.machines["K2Pro-69E7"].printStore.history = [];
+    for (const segment of payload.materialAccountingPrintBindingStore.jobMaterialSegments) {
+      segment.evidence = {
+        completionEvidence: {
+          rawMaterialUsed: "3210,0",
+          parserVersion: "k2-material-used-csv:v1",
+          sourceOrderingProfile: "print-start-binding-authority-order:v1",
+          sourceCount: 2,
+          partCount: 2,
+        },
+      };
+    }
+
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          generatedAt: "2026-09-02T01:29:00.000Z",
+          printer: {
+            model: "F012",
+            firmwareVersion: "1.1.6.7",
+          },
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-accepted");
+    expect(result.captureBundle.rawMaterialUsed).toBe("3210,0");
+    expect(result.fixtureEvidence.raw.materialUsedSourceCsv).toBe("3210,0");
+    expect(result.fixtureReceipt.rawMaterialUsed).toBe("3210,0");
+    expect(result.warnings).toContain("print-history-entry-missing");
+    expect(result.warnings).not.toContain("raw-material-used-source-csv-missing");
+  });
+
+  it("segment completionEvidenceのraw CSVが混在する場合はfixture rawを採用しない", () => {
+    const payload = createExportPayload();
+    payload.machines["K2Pro-69E7"].printStore.history = [];
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[0].evidence = {
+      completionEvidence: {
+        rawMaterialUsed: "3210,0",
+        parserVersion: "k2-material-used-csv:v1",
+        sourceOrderingProfile: "print-start-binding-authority-order:v1",
+        sourceCount: 2,
+        partCount: 2,
+      },
+    };
+    payload.materialAccountingPrintBindingStore.jobMaterialSegments[1].evidence = {
+      completionEvidence: {
+        rawMaterialUsed: "3210,10",
+        parserVersion: "k2-material-used-csv:v1",
+        sourceOrderingProfile: "print-start-binding-authority-order:v1",
+        sourceCount: 2,
+        partCount: 2,
+      },
+    };
+
+    const result = buildItemKeeperSourceUsageFixture({
+      exportPayload: payload,
+      certificationPayload: {
+        manifest: {
+          panel: "cfs-debug-certification",
+          generatedAt: "2026-09-02T01:29:00.000Z",
+          printer: {
+            model: "F012",
+            firmwareVersion: "1.1.6.7",
+          },
+        },
+      },
+      options: createOptions(),
+      inputHashes: {},
+    });
+
+    expect(result.status).toBe("fixture-rejected");
+    expect(result.captureBundle.rawMaterialUsed).toBe("");
+    expect(result.fixtureEvidence.raw.materialUsedSourceCsv).toBe("");
+    expect(result.warnings).toContain("raw-material-used-completion-evidence-conflict");
+    expect(result.warnings).toContain("raw-material-used-source-csv-missing");
   });
 
   it("certification sessionがあるfixtureは対象jobのsession provenanceをevidenceへ明示する", () => {
