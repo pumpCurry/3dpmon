@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - none
  *
- * @version 1.390.1636 (PR #440)
+ * @version 1.390.1638 (PR #440)
  * @since   1.390.1630 (PR #440)
- * @lastModified 2026-09-02 10:33:00
+ * @lastModified 2026-09-02 11:51:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -169,5 +169,32 @@ export async function loadIssuerForProduction() {
     expect(messagesForRule(messages, "no-restricted-syntax")).toHaveLength(1);
     expect(messagesForRule(messages, "no-restricted-syntax")[0])
       .toContain("Production dynamic imports must use a string literal");
+  });
+
+  it("production moduleはtemplate literal dynamic importでauthority module制限を迂回できない", async () => {
+    const messages = await lintSyntheticProductionModule(
+      "3dp_lib/dashboard_panel_init.js",
+      `export async function loadIssuerForProduction() {
+  return import(\`./printer_core/dashboard_itemkeeper_source_usage_projection_certification.js\`);
+}
+`
+    );
+
+    expect(messagesForRule(messages, "no-restricted-syntax")).toHaveLength(1);
+    expect(messagesForRule(messages, "no-restricted-syntax")[0])
+      .toContain("Production dynamic imports must use a string literal");
+  });
+
+  it("production moduleは通常のliteral lazy importを維持できる", async () => {
+    const messages = await lintSyntheticProductionModule(
+      "3dp_lib/dashboard_panel_init.js",
+      `export async function loadOptionalUiModule() {
+  return import("./dashboard_optional_lazy_module.js");
+}
+`
+    );
+
+    expect(messagesForRule(messages, "no-restricted-syntax")).toEqual([]);
+    expect(messagesForRule(messages, "no-restricted-imports")).toEqual([]);
   });
 });
