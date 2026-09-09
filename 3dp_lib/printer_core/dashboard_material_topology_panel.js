@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1569 (PR #439)
+ * @version 1.390.1672 (PR #442)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-09-01 07:56:16
+ * @lastModified 2026-09-09 12:05:20
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -39,8 +39,8 @@ import { getMaterialCssColor } from "./dashboard_material_color.js";
  */
 const MATERIAL_CONTROL_BUTTONS = Object.freeze([
   Object.freeze({ action: "select", commandKind: "cfs-slot-select", label: "選択", title: "このCFSスロットを選択します" }),
-  Object.freeze({ action: "load", commandKind: "cfs-load", label: "装填", title: "このCFSスロットのフィラメントを装填します" }),
-  Object.freeze({ action: "unload", commandKind: "cfs-unload", label: "取外", title: "このCFSスロットのフィラメントを取り外します" }),
+  Object.freeze({ action: "load", commandKind: "cfs-load", label: "押出し", title: "このCFSスロットのフィラメントを供給経路へ押し出します" }),
+  Object.freeze({ action: "unload", commandKind: "cfs-unload", label: "引戻し", title: "供給経路のフィラメントをCFSへ引き戻します" }),
   Object.freeze({ action: "feed", commandKind: "cfs-feed", label: "送出", title: "このCFSスロットのフィラメントを送ります" }),
   Object.freeze({ action: "retract", commandKind: "cfs-retract", label: "巻戻", title: "このCFSスロットのフィラメントを戻します" }),
 ]);

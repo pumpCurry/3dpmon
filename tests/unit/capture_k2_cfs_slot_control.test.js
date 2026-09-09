@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1669 (PR #442)
+ * @version 1.390.1672 (PR #442)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-09-09 10:54:00
+ * @lastModified 2026-09-09 12:05:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -115,6 +115,7 @@ function emitIdlePrinterStatus(ws) {
       printLeftTime: 0,
       targetNozzleTemp: 0,
       targetBedTemp0: 0,
+      feedState: 0,
       printFileName: "",
       printId: "",
     }));
@@ -136,6 +137,7 @@ const PRINTER_STATUS_GET_FRAME = {
     bedTemp0: 1,
     targetNozzleTemp: 1,
     targetBedTemp0: 1,
+    feedState: 1,
   },
 };
 
@@ -834,6 +836,10 @@ describe("capture_k2_cfs_slot_control", () => {
               },
             }));
           }, 1);
+        } else if (frame?.params?.feedInOrOut) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({ feedState: 1 }));
+          }, 1);
         }
         setTimeout(() => callback(), 1);
       }
@@ -900,6 +906,13 @@ describe("capture_k2_cfs_slot_control", () => {
           percent: 99,
         },
         changedFields: ["percent"],
+      },
+      commandTelemetry: {
+        events: [
+          {
+            feedState: 1,
+          },
+        ],
       },
     });
   });
@@ -1266,7 +1279,7 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(ws.closed).toBe(true);
   });
 
-  it("pre-command probeでtarget sourceがloadedでも未選択ならCFS操作frameを送らない", async () => {
+  it("pre-command probeで別sourceが選択中なら未選択targetへの押出しframeを送らない", async () => {
     class UnselectedBeforeProbeWs extends EventEmitter {
       constructor() {
         super();
@@ -1318,10 +1331,141 @@ describe("capture_k2_cfs_slot_control", () => {
       sent: false,
       dryRun: false,
       status: "rejected",
-      reason: "pre-command-target-source-not-selected",
+      reason: "pre-command-selected-source-conflict",
       blindRetryAllowed: false,
     });
     expect(result.probes.before.summary.selectedSourceIds).toEqual(["cfs:1:slot:1"]);
+    expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("pre-command probeで全sourceが未選択でもloaded targetへの押出しframeを送る", async () => {
+    class IdleAutoFeedBeforeProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [
+                      { id: 0, state: 1, selected: 0, name: "Target" },
+                      { id: 1, state: 1, selected: 0, name: "Other" },
+                    ],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new IdleAutoFeedBeforeProbeWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs([
+        "--probe-after-delay-ms",
+        "0",
+        "--probe-after-count",
+        "1",
+      ])),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: true,
+      sent: true,
+      dryRun: false,
+      status: "post-observed",
+    });
+    expect(result.probes.before.summary.selectedSourceIds).toEqual([]);
+    expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
+      { method: "get", params: { boxsInfo: 1 } },
+      { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("pre-command probeでtargetが未選択なら引戻しframeを送らない", async () => {
+    class UnselectedRetractBeforeProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [
+                      { id: 0, state: 1, selected: 0, name: "Target" },
+                      { id: 1, state: 1, selected: 0, name: "Other" },
+                    ],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new UnselectedRetractBeforeProbeWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs([], { command: "cfs-unload" })),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-target-source-not-selected",
+      blindRetryAllowed: false,
+    });
+    expect(result.probes.before.summary.selectedSourceIds).toEqual([]);
     expect(ws.sentFrames).toEqual([
       PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },

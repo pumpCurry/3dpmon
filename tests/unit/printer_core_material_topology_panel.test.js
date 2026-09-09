@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1569 (PR #439)
+ * @version 1.390.1672 (PR #442)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-09-01 07:56:16
+ * @lastModified 2026-09-09 12:05:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -380,6 +380,35 @@ describe("Printer Core v3 material topology panel", () => {
     selectButton?.click();
     expect(onCommand).not.toHaveBeenCalled();
     expect(container.textContent).toContain("監視のみ");
+  });
+
+  it("CFS経路操作は実機と同じ押出し・引戻し表記で描画する", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["load", "unload"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["load", "unload"],
+        onCommand: vi.fn(),
+      },
+    });
+
+    const feedInButton = getSlotActionButton(container, "1C", "load");
+    const retractButton = getSlotActionButton(container, "1C", "unload");
+    expect(feedInButton?.textContent).toBe("押出し");
+    expect(feedInButton?.title).toContain("供給経路へ押し出します");
+    expect(retractButton?.textContent).toBe("引戻し");
+    expect(retractButton?.title).toContain("CFSへ引き戻します");
   });
 
   it("ViewModelとrendererの両方で許可されたCFS操作だけ送信hookへ渡す", async () => {

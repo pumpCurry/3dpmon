@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1670 (PR #442)
+ * @version 1.390.1672 (PR #442)
  * @since   1.390.1545 (PR #439)
- * @lastModified 2026-09-09 11:16:25
+ * @lastModified 2026-09-09 12:05:20
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -48,6 +48,7 @@ const PRINTER_STATUS_GET_FRAME = {
     bedTemp0: 1,
     targetNozzleTemp: 1,
     targetBedTemp0: 1,
+    feedState: 1,
   },
 };
 
