@@ -94,8 +94,9 @@ HEAD 24b9395c131a9849724c5bf098cba140a207e877
 
 | UI operation | Candidate K2 WS9999 command | Production status |
 | --- | --- | --- |
-| CFS slot select / load | `feedInOrOut.isFeed = 1` | 未certified。実機captureでselected/feedState/materialStatusを確認するまでdisabled |
-| CFS unload / retract | `feedInOrOut.isFeed = 0` | 未certified。物理unloadと短いretractの意味差が未確定 |
+| CFS load / 押出し | `feedInOrOut.isFeed = 1` | F012 + CFSの1A/1Bでlive certified。ノズルへのセットとpurgeを物理確認済み。production registry登録はレビュー待ち |
+| CFS unload / 引戻し | `feedInOrOut.isFeed = 0` | F012 + CFSの1A/1Bでlive certified。ノズルからの引戻しを物理確認済み。production registry登録はレビュー待ち |
+| 独立したslot select / feed / retract | 未確定 | `cfs-slot-select` / `cfs-feed` / `cfs-retract` は別command kindとして未certifiedのためdisabled |
 | Material metadata edit | `modifyMaterial` | 未certified。RFID材料とGeneric材料で可否差があるためread-onlyから開始 |
 | RFID refresh | `refreshBox` | 未certified。副作用が小さいが物理状態変化を伴うためUI開放は別判断 |
 | CFS settings | `boxConfig` | 未certified。autoRefill/cAutoFeed/cSelfTest/ignoreColorAutoFeedの対象firmware差を確認する |
@@ -216,7 +217,9 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   certification ID、送信前観測digest/sequenceだけを保持し、command frameやRPC payloadは保存しない。
   再起動後も自動replayせず、fresh observationまたはoperator確認でのみ解決する。
 
-このcutはUI操作有効化ではない。CLIのlive送信は明示confirmation付きのcertification用途に限定し、UI button enableはレビュワー回答とF012実機captureを待ってから別commitで進める。
+このcutはUI操作有効化ではない。CLIのlive送信は明示confirmation付きのcertification用途に限定する。
+F012実機captureは2026-09-09に完了したが、module-owned production registryへの登録とUI button enableは、
+匿名化証跡に対するレビュワー判定を得てから別commitで進める。
 
 ## Gate 19.5 UI Command State Contract
 
@@ -380,20 +383,49 @@ live certificationは次の順で進める。
    上記summaryを抽出する。これにより、reviewerへ渡すJSONから、raw payload全体を掘らずに
    selected source、target source、loaded source count、external/CFS分離を確認できる。
 
-5. selected source変更、load/unload/feed/retractの意味確定は、レビュワーPASSと上記1回目の成功後に別stepとして扱う。
+6. 独立したselected source変更、feed、retractの意味確定は、`cfs-load` / `cfs-unload` の認証と混ぜず別stepとして扱う。
 
 このrunbookはcertification専用であり、UI操作有効化条件ではない。UIに開くには、少なくとも command kindごとの実機意味、
 expected-state条件、timeout時の表示、stale時disable、send-time capability revalidation が揃っている必要がある。
 
-K2 Pro Combo F012 + CFS-A1 (`192.168.54.153`) で最低限以下を取得する。
+K2 Pro Combo F012 + CFSで最低限以下を取得する。
 
-- `feedInOrOut.isFeed=1` をCFS 1A/1B/1Cのいずれかへ送った場合、該当slotの `selected`、CFS feed状態、物理ロードがどう変化するか。
-- `feedInOrOut.isFeed=0` が「アンロード」なのか「短い巻戻」なのか、UIのRetract相当なのか。
-- `feedInOrOut` 実行中に再送すると安全か、またはside-effect commandとしてblind retry禁止にすべきか。
+- `feedInOrOut.isFeed=1` は1A/1Bで取得済み。対象slotが最終的にselectedとなり、ノズルへのセットとpurgeが物理的に成立した。
+- `feedInOrOut.isFeed=0` は1A/1Bで取得済み。対象slotのフィラメントがノズルから引き戻され、最終的にselected sourceなしとなった。
+- `feedInOrOut` はside-effect commandとしてblind retry禁止を維持する。各live試験はcommand frameを1回だけ送信し、追加観測はread-only probeだけとした。
 - `modifyMaterial` がGeneric材料で反映されるか、RFID材料で拒否されるか。
 - `boxConfig` の各fieldが `boxConfig` / `cfsInfo` / `boxsInfo` のどこへ反映されるか。
 - CFS disconnected/stale中はすべての操作が送信前に拒否されること。
 - 印刷中、paused中、error中、runout中のdisable reasonが人間に分かること。
+
+### F012 Slot Control Live Certification Result (2026-09-09)
+
+匿名化済み証跡は
+`tests/fixtures/printers/k2-pro-cfs/scenarios/cfs-slot-control-live/certification-summary.json`
+へ固定する。raw `certification-result.json` は実IP、hostname、実時刻などを含むためrepositoryへ追加しない。
+
+実施したsequenceは次の2 cycleである。
+
+```text
+cycle 1: 1A 押出し -> 1A 引戻し -> 1B 押出し -> 1B 引戻し
+cycle 2: 1A 押出し -> 1A 引戻し -> 1B 押出し -> 1B 引戻し
+```
+
+確認結果:
+
+- 全8操作で `feedInOrOut` command frameは各1回だけ送信し、blind retryは行わなかった。
+- 押出しでは `feedState` 101/103/104/105/107、引戻しでは111/112/113/14/0を観測した。
+  数値codeは観測値として保持し、それ単独を成功判定には使わない。
+- 1A/1Bの両方でノズルへのセット・アンセット動作とpurge生成をoperatorが目視確認した。
+- 初期の6回bounded probeではselected解除まで収まらない操作があった。延長観測では1B押出しのselected成立と、
+  1B引戻し後のselected解除および `feedState:0` を同一windowで取得できた。
+- 最終目視ではprinter idle、errorなし、1A/1BはCFS内でloaded、ノズルへ供給中のsourceなし、
+  ノズルからフィラメントが引き戻し済み、異音・残留動作なしを確認した。
+- 1Dは物理不調かつ未装填のため除外し、外部スプールは物理holderがないため除外した。1Cは今回の操作対象外である。
+
+この結果がproductionへ認証するのは、scopeが一致するF012 + CFSの `cfs-load` と `cfs-unload` だけである。
+`cfs-slot-select` / `cfs-feed` / `cfs-retract`、`modifyMaterial`、`refreshBox`、`boxConfig`、
+K1C/CFS-Cおよび別model/firmwareへ証跡を流用しない。
 
 ## Reviewer Questions
 
