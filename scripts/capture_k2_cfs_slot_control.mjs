@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1612 (PR #440)
+ * @version 1.390.1669 (PR #442)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-09-01 23:09:20
+ * @lastModified 2026-09-09 10:24:00
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -38,6 +38,7 @@ import {
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
 } from "../3dp_lib/printer_core/dashboard_k2_cfs_command_transport.js";
+import { classifyK2PrinterActivity } from "../3dp_lib/printer_core/dashboard_k2_printer_activity.js";
 
 /**
  * CLI usage text。
@@ -1394,48 +1395,20 @@ function toFiniteNumberOrNull(value) {
  * @returns {object} idle判定summary
  */
 function summarizePrinterStatusPayload(statusPayload) {
-  const state = toFiniteNumberOrNull(statusPayload?.state);
-  const deviceState = toFiniteNumberOrNull(statusPayload?.deviceState);
-  const printProgress = toFiniteNumberOrNull(statusPayload?.printProgress);
-  const printJobTime = toFiniteNumberOrNull(statusPayload?.printJobTime);
-  const printLeftTime = toFiniteNumberOrNull(statusPayload?.printLeftTime);
+  const classification = classifyK2PrinterActivity(statusPayload);
   const nozzleTemp = toFiniteNumberOrNull(statusPayload?.nozzleTemp);
   const bedTemp0 = toFiniteNumberOrNull(statusPayload?.bedTemp0);
-  const targetNozzleTemp = toFiniteNumberOrNull(statusPayload?.targetNozzleTemp);
-  const targetBedTemp0 = toFiniteNumberOrNull(statusPayload?.targetBedTemp0);
   const printFileName = toNonEmptyString(statusPayload?.printFileName) ||
     toNonEmptyString(statusPayload?.fileName);
   const printId = toNonEmptyString(statusPayload?.printId);
-  const hasCoreState = state !== null && deviceState !== null;
-  const active = (state !== null && state !== 0) ||
-    (deviceState !== null && deviceState !== 0) ||
-    (printJobTime !== null && printJobTime > 0) ||
-    (printLeftTime !== null && printLeftTime > 0) ||
-    (targetNozzleTemp !== null && targetNozzleTemp > 0) ||
-    (targetBedTemp0 !== null && targetBedTemp0 > 0);
-  const activityState = hasCoreState
-    ? (active ? "active" : "idle")
-    : (active ? "active-without-core-state" : "unknown-core-state");
-  const observedScalarKeys = Object.keys(statusPayload || {}).sort();
   return {
+    ...classification,
     observed: true,
-    complete: hasCoreState,
-    idle: hasCoreState && !active,
-    active,
-    activityState,
-    coreStateComplete: hasCoreState,
-    state,
-    deviceState,
-    printProgress,
-    printJobTime,
-    printLeftTime,
+    complete: classification.coreStateComplete,
     nozzleTemp,
     bedTemp0,
-    targetNozzleTemp,
-    targetBedTemp0,
     printFileName,
     printId,
-    observedScalarKeys,
   };
 }
 

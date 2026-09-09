@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1669 (PR #442)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-09-02 01:07:00
+ * @lastModified 2026-09-09 10:31:00
  * -----------------------------------------------------------
  */
 
@@ -303,22 +303,24 @@ function createPrinterIdleObservationForCfsControl(shadowRecord, connectionGener
   const snapshotCompleteness = String(print.snapshotCompleteness || "").trim() || "unknown";
   const activityState = String(print.activityState || "").trim() || "unknown";
   const coreStateComplete = typeof print.coreStateComplete === "boolean" ? print.coreStateComplete : null;
-  const stateLabel = String(print.stateLabel || print.state || "").trim().toLowerCase();
+  const physicalIdleEvidenceComplete = print.physicalIdleEvidenceComplete === true;
   const observedConnectionGeneration = Number(
     shadowRecord.connectionGeneration ??
     shadowRecord.printerCoreV3ConnectionGeneration ??
     lastState.source?.connectionGeneration ??
     connectionGeneration
   );
-  const idle = ["idle", "ready", "standby"].includes(stateLabel) &&
+  const idle = print.physicalIdle === true &&
     activityState.toLowerCase() === "idle" &&
     snapshotCompleteness.toLowerCase() === "complete" &&
-    coreStateComplete === true;
+    coreStateComplete === true &&
+    physicalIdleEvidenceComplete;
   const expiresAtMs = receivedAtMs + CFS_PRINTER_IDLE_OBSERVATION_TTL_MS;
   return {
     status: snapshotCompleteness.toLowerCase() === "complete" && coreStateComplete === true ? "observed" : "partial",
     activityState,
     coreStateComplete,
+    physicalIdleEvidenceComplete,
     snapshotCompleteness,
     observedAt: receivedAt,
     receivedAt,
@@ -330,6 +332,10 @@ function createPrinterIdleObservationForCfsControl(shadowRecord, connectionGener
     appliedDeltaCount: 0,
     fresh: expiresAtMs > nowMs,
     idle,
+    idleReason: print.idleReason || null,
+    physicalIdleConflictReasons: Array.isArray(print.physicalIdleConflictReasons)
+      ? [...print.physicalIdleConflictReasons]
+      : [],
   };
 }
 

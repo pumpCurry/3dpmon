@@ -17,9 +17,9 @@
  * - {@link createAssembledPrinterStatusProjection}：printer status probe列を同一session projectionへ累積
  * - {@link runK2CfsReadOnlyCalibration}：read-only calibrationを実行
  *
- * @version 1.390.1618 (PR #440)
+ * @version 1.390.1669 (PR #442)
  * @since   1.390.1545 (PR #439)
- * @lastModified 2026-09-02 00:18:00
+ * @lastModified 2026-09-09 10:24:00
  * -----------------------------------------------------------
  * @todo
  * - Gate19実機calibration結果からK2 idle predicateのfixture化可否を判断する
@@ -29,6 +29,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
+import { classifyK2PrinterActivity } from "../3dp_lib/printer_core/dashboard_k2_printer_activity.js";
 import {
   sendBoxsInfoProbeAndWait,
   sendPrinterStatusProbeAndWait,
@@ -170,41 +171,16 @@ function mergePrinterStatusSummaryIntoSnapshot(snapshot, summary) {
  * @returns {object} assembled status summary
  */
 function summarizeAssembledPrinterStatusSnapshot(snapshot) {
-  const state = toFiniteNumberOrNull(snapshot?.state);
-  const deviceState = toFiniteNumberOrNull(snapshot?.deviceState);
-  const printProgress = toFiniteNumberOrNull(snapshot?.printProgress);
-  const printJobTime = toFiniteNumberOrNull(snapshot?.printJobTime);
-  const printLeftTime = toFiniteNumberOrNull(snapshot?.printLeftTime);
+  const classification = classifyK2PrinterActivity(snapshot);
   const nozzleTemp = toFiniteNumberOrNull(snapshot?.nozzleTemp);
   const bedTemp0 = toFiniteNumberOrNull(snapshot?.bedTemp0);
-  const targetNozzleTemp = toFiniteNumberOrNull(snapshot?.targetNozzleTemp);
-  const targetBedTemp0 = toFiniteNumberOrNull(snapshot?.targetBedTemp0);
   const printFileName = toNonEmptyString(snapshot?.printFileName);
   const printId = toNonEmptyString(snapshot?.printId);
-  const complete = state !== null && deviceState !== null;
-  const active = (state !== null && state !== 0) ||
-    (deviceState !== null && deviceState !== 0) ||
-    (printJobTime !== null && printJobTime > 0) ||
-    (printLeftTime !== null && printLeftTime > 0) ||
-    (targetNozzleTemp !== null && targetNozzleTemp > 0) ||
-    (targetBedTemp0 !== null && targetBedTemp0 > 0);
-  const activityState = complete
-    ? (active ? "active" : "idle")
-    : (active ? "active-without-core-state" : "unknown-core-state");
   return {
-    complete,
-    idle: complete && !active,
-    active,
-    activityState,
-    state,
-    deviceState,
-    printProgress,
-    printJobTime,
-    printLeftTime,
+    ...classification,
+    complete: classification.coreStateComplete,
     nozzleTemp,
     bedTemp0,
-    targetNozzleTemp,
-    targetBedTemp0,
     printFileName,
     printId,
   };

@@ -1,11 +1,25 @@
 /**
- * @fileoverview Printer Core v3 live shadow の単体テスト
- * @description
- * - K1 legacy differential と K2 read-only shadow の runtime record 境界を検証する。
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 Printer Core v3 live shadow 単体テスト
+ * @file printer_core_live_shadow.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module printer_core_live_shadow_test
  *
- * @version 1.390.1620 (PR #440)
- * @since 1.390.1299 (PR #432)
- * @lastModified 2026-09-02 01:07:00
+ * 【機能内容サマリ】
+ * - K1 legacy differentialとK2 read-only shadowのruntime record境界を検証
+ * - complete baseline、partial delta、TTL、sessionを含むphysical idle証拠を固定
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1669 (PR #442)
+ * @since   1.390.1299 (PR #432)
+ * @lastModified 2026-09-09 10:54:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  *
  * @vitest-environment jsdom
  */
@@ -517,6 +531,7 @@ describe("Printer Core v3 K1 live shadow", () => {
         model: "F012",
         state: 0,
         deviceState: 0,
+        printLeftTime: 0,
         targetNozzleTemp: 0,
         targetBedTemp0: 0,
         nozzleTemp: 27.2,
@@ -555,6 +570,103 @@ describe("Printer Core v3 K1 live shadow", () => {
       fresh: true,
       idle: true,
     });
+  });
+
+  it("K2 live shadowは実機同等の正常終了full frameをfresh physical idle証跡として保持する", () => {
+    const host = "K2Pro-Live-Completed-Idle";
+    const deviceId = "host:K2Pro-Live-Completed-Idle";
+    const sessionId = "k2-live:completed-idle";
+    setMachine(host);
+    beginK2LiveShadowSession({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 8,
+    });
+
+    const record = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 8,
+      frame: {
+        hostname: host,
+        model: "F012",
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printJobTime: 613,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        printFileName: "/mnt/UDISK/printer_data/gcodes/bracket.stl_PLA_8m15s.gcode",
+        printId: "6a936e4ab9e9df20004c5066",
+      },
+      receivedAt: "2026-09-09T10:02:04.276+09:00",
+    });
+
+    expect(record.lastState.print).toMatchObject({
+      stateLabel: "completed",
+      activityState: "idle",
+      coreStateComplete: true,
+      physicalIdleEvidenceComplete: true,
+    });
+    expect(record.printerIdleObservation).toMatchObject({
+      status: "observed",
+      activityState: "idle",
+      coreStateComplete: true,
+      physicalIdleEvidenceComplete: true,
+      sessionId,
+      connectionGeneration: 8,
+      fresh: true,
+      idle: true,
+    });
+  });
+
+  it("K2 live shadowはboxsInfoだけの後着で正常終了idle証跡の時刻やsequenceを延長しない", () => {
+    const host = "K2Pro-Live-Completed-Idle-Material-Only";
+    const deviceId = "host:K2Pro-Live-Completed-Idle-Material-Only";
+    const sessionId = "k2-live:completed-idle-material-only";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 9 });
+    const baseline = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 9,
+      frame: {
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printJobTime: 613,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+      },
+      receivedAt: "2026-09-09T10:02:04.276+09:00",
+    });
+    const originalIdleObservation = structuredClone(baseline.printerIdleObservation);
+
+    const afterMaterialOnly = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 9,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [{
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [{ id: 0, state: 1, selected: 1, type: "PLA" }],
+          }],
+        },
+      },
+      receivedAt: "2026-09-09T10:02:08.276+09:00",
+    });
+
+    expect(afterMaterialOnly.printerIdleObservation).toEqual(originalIdleObservation);
   });
 
   it("K2 CFS topologyの観測時刻はboxsInfo実受信時だけ更新し通常statusでは延命しない", () => {

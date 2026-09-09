@@ -1,11 +1,25 @@
 /**
- * @fileoverview Printer Core v3 command authority contract の単体テスト
- * @description
- * - Gate 14 で送信経路へ接続する前に、command request/result/retry の安全境界を検証する。
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 Printer Core v3 command authority 単体テスト
+ * @file printer_core_command_authority.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module printer_core_command_authority_test
  *
- * @version 1.390.1620 (PR #440)
- * @since 1.390.1342 (PR #432)
- * @lastModified 2026-09-02 01:07:00
+ * 【機能内容サマリ】
+ * - command request/result/retryの安全境界を検証
+ * - K2 physical idle証拠の完全性をsend-time authorityで固定
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1669 (PR #442)
+ * @since   1.390.1342 (PR #432)
+ * @lastModified 2026-09-09 10:54:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -808,6 +822,46 @@ describe("Printer Core v3 command authority contract", () => {
     expect(sendTransport).not.toHaveBeenCalled();
   });
 
+  it("CFS physical commandはcore idle表示でもphysical idle複合証拠が未完成なら送信しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("cfs-load"),
+      payload: {
+        sourceId: "cfs:1:slot:2",
+      },
+    });
+    const sendTransport = vi.fn();
+    const result = await dispatchPrinterCommand(request, {
+      nowMs: () => Date.parse("2026-09-09T10:02:05.000+09:00"),
+      getSendTimeContext: () => createBaseSendTimeSnapshot({
+        capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
+        createdAt: "2026-09-09T10:02:05.000+09:00",
+        connectionGeneration: 7,
+        printerIdleObservation: {
+          status: "observed",
+          activityState: "idle",
+          coreStateComplete: true,
+          physicalIdleEvidenceComplete: false,
+          snapshotCompleteness: "complete",
+          observedAt: "2026-09-09T10:02:04.276+09:00",
+          receivedAt: "2026-09-09T10:02:04.276+09:00",
+          expiresAt: "2026-09-09T10:02:09.276+09:00",
+          sessionId: "session:1",
+          connectionGeneration: 7,
+          baselineSequence: 10,
+          lastAppliedSequence: 10,
+          appliedDeltaCount: 0,
+          fresh: true,
+          idle: true,
+        },
+      }),
+      sendTransport,
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.error.errors).toContain("cfs-control-printer-idle-observation-incomplete");
+    expect(sendTransport).not.toHaveBeenCalled();
+  });
+
   it("CFS physical commandはpartial status deltaでもfresh assembled idle observationがあれば送信できる", async () => {
     const request = createPrinterCommandRequest({
       ...createBaseRequestOptions("cfs-load"),
@@ -834,6 +888,7 @@ describe("Printer Core v3 command authority contract", () => {
           status: "assembled",
           activityState: "idle",
           coreStateComplete: true,
+          physicalIdleEvidenceComplete: true,
           snapshotCompleteness: "complete",
           observedAt: "2026-09-02T01:07:09.000+09:00",
           receivedAt: "2026-09-02T01:07:09.000+09:00",

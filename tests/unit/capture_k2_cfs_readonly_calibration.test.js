@@ -1,12 +1,25 @@
 /**
- * @fileoverview K2 CFS read-only calibration CLI の単体テスト
- * @description
- * - K2/F012 live certification前に、/info、printer status、boxsInfoを副作用なしで観測することを検証する。
- * - read-only calibrationがCFS操作frameを送らず、複数probe結果をJSONへ保持することを検証する。
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 K2 CFS read-only calibration CLI 単体テスト
+ * @file capture_k2_cfs_readonly_calibration.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module capture_k2_cfs_readonly_calibration_test
  *
- * @version 1.390.1618 (PR #440)
- * @since 1.390.1545 (PR #439)
- * @lastModified 2026-09-02 00:18:00
+ * 【機能内容サマリ】
+ * - K2/F012 live certification前のread-only観測を検証
+ * - CFS操作frameを送らず、複数probeと合成statusをJSONへ保持する境界を固定
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1669 (PR #442)
+ * @since   1.390.1545 (PR #439)
+ * @lastModified 2026-09-09 10:54:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 
 import { EventEmitter } from "node:events";
@@ -169,8 +182,10 @@ describe("capture_k2_cfs_readonly_calibration", () => {
     expect(result.printerStatusSeries[0]).toMatchObject({
       status: "observed",
       summary: {
-        idle: false,
-        active: true,
+        idle: true,
+        active: false,
+        activityState: "idle",
+        physicalIdleEvidenceComplete: true,
         state: 2,
         printJobTime: 613,
       },

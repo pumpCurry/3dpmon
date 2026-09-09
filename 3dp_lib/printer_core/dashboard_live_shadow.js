@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1621 (PR #440)
+ * @version 1.390.1669 (PR #442)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-09-02 02:24:00
+ * @lastModified 2026-09-09 10:24:00
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -143,21 +143,6 @@ function parseIsoEpochMs(value) {
 }
 
 /**
- * K2 print state labelがCFS物理操作前のidle候補か判定する。
- *
- * 【詳細説明】
- * - `completed` はジョブ完了を示しても物理操作可能な待機状態を保証しないため含めない。
- *
- * @private
- * @function isK2CfsSafeIdleLabel
- * @param {*} value - print state label候補
- * @returns {boolean} idle/ready/standbyならtrue
- */
-function isK2CfsSafeIdleLabel(value) {
-  return ["idle", "ready", "standby"].includes(String(value || "").trim().toLowerCase());
-}
-
-/**
  * K2 raw frameがprinter status scalarを含むか判定する。
  *
  * 【詳細説明】
@@ -220,6 +205,7 @@ function createK2PrinterIdleObservationForShadow(options) {
   const snapshotCompleteness = String(print.snapshotCompleteness || "").trim().toLowerCase();
   const activityState = String(print.activityState || "").trim().toLowerCase();
   const coreStateComplete = print.coreStateComplete === true;
+  const physicalIdleEvidenceComplete = print.physicalIdleEvidenceComplete === true;
   const connectionGeneration = Number.isFinite(Number(options.connectionGeneration))
     ? Number(options.connectionGeneration)
     : null;
@@ -228,6 +214,7 @@ function createK2PrinterIdleObservationForShadow(options) {
   const base = {
     activityState: activityState || "unknown",
     coreStateComplete,
+    physicalIdleEvidenceComplete,
     snapshotCompleteness: snapshotCompleteness || "unknown",
     observedAt: options.observedAt,
     receivedAt: options.observedAt,
@@ -238,7 +225,11 @@ function createK2PrinterIdleObservationForShadow(options) {
     lastAppliedSequence: sequence,
     appliedDeltaCount: 0,
     fresh: true,
-    idle: isK2CfsSafeIdleLabel(print.stateLabel || print.state) && activityState === "idle" && coreStateComplete,
+    idle: print.physicalIdle === true && activityState === "idle" && coreStateComplete && physicalIdleEvidenceComplete,
+    idleReason: print.idleReason || null,
+    physicalIdleConflictReasons: Array.isArray(print.physicalIdleConflictReasons)
+      ? [...print.physicalIdleConflictReasons]
+      : [],
   };
   if (snapshotCompleteness === "complete" && coreStateComplete) {
     return {
@@ -275,10 +266,15 @@ function createK2PrinterIdleObservationForShadow(options) {
     status: "assembled",
     activityState: partialShowsActive ? "active" : (previous.activityState || "idle"),
     coreStateComplete: true,
+    physicalIdleEvidenceComplete: previous.physicalIdleEvidenceComplete === true,
     snapshotCompleteness: "complete",
     baselineSequence: previous.baselineSequence ?? previous.lastAppliedSequence ?? sequence,
     appliedDeltaCount: Number(previous.appliedDeltaCount || 0) + 1,
     idle: partialShowsActive ? false : previous.idle === true,
+    idleReason: partialShowsActive ? null : (previous.idleReason || null),
+    physicalIdleConflictReasons: partialShowsActive
+      ? (Array.isArray(print.physicalIdleConflictReasons) ? [...print.physicalIdleConflictReasons] : [])
+      : (Array.isArray(previous.physicalIdleConflictReasons) ? [...previous.physicalIdleConflictReasons] : []),
   };
 }
 

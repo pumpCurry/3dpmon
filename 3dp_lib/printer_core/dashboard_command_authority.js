@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1621 (PR #440)
+ * @version 1.390.1669 (PR #442)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-09-02 02:22:00
+ * @lastModified 2026-09-09 10:29:00
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -471,6 +471,11 @@ function createCommandDispatchContextSignature(context) {
       context.printerIdleObservation?.coreStateComplete === true ? "core-complete" : (
         context.printerIdleObservation?.coreStateComplete === false ? "core-incomplete" : "core-unknown"
       ),
+      context.printerIdleObservation?.physicalIdleEvidenceComplete === true ? "physical-idle-complete" : (
+        context.printerIdleObservation?.physicalIdleEvidenceComplete === false
+          ? "physical-idle-incomplete"
+          : "physical-idle-unknown"
+      ),
       context.printerIdleObservation?.snapshotCompleteness || "",
       context.printerIdleObservation?.sessionId || "",
       context.printerIdleObservation?.connectionGeneration ?? "",
@@ -755,6 +760,9 @@ function normalizePrinterIdleObservation(observation) {
     status: String(observation.status || "").trim() || "unknown",
     activityState: String(observation.activityState || "").trim() || "unknown",
     coreStateComplete: typeof observation.coreStateComplete === "boolean" ? observation.coreStateComplete : null,
+    physicalIdleEvidenceComplete: typeof observation.physicalIdleEvidenceComplete === "boolean"
+      ? observation.physicalIdleEvidenceComplete
+      : null,
     snapshotCompleteness: String(observation.snapshotCompleteness || observation.completeness || "").trim() || "unknown",
     observedAt: String(observation.observedAt || "").trim() || null,
     receivedAt: String(observation.receivedAt || "").trim() || null,
@@ -1175,7 +1183,11 @@ function collectPrinterIdleObservationErrors(request, context) {
   if (!["observed", "assembled"].includes(status)) {
     errors.push("cfs-control-printer-idle-observation-incomplete");
   }
-  if (completeness !== "complete" || observation.coreStateComplete !== true) {
+  if (
+    completeness !== "complete" ||
+    observation.coreStateComplete !== true ||
+    observation.physicalIdleEvidenceComplete !== true
+  ) {
     errors.push("cfs-control-printer-idle-observation-incomplete");
   }
   if (["unknown-core-state", "active-without-core-state"].includes(activityState)) {

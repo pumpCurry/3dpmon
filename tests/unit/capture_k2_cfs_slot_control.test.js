@@ -1,13 +1,25 @@
 /**
- * @fileoverview K2 CFS slot control certification CLI の単体テスト
- * @description
- * - CLIが既定dry-runで、明示 `--send` なしに実機送信へ進まないことを検証する。
- * - certification-only planがlive確認なしに送信されないことを検証する。
- * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 K2 CFS slot control certification CLI 単体テスト
+ * @file capture_k2_cfs_slot_control.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module capture_k2_cfs_slot_control_test
  *
- * @version 1.390.1612 (PR #440)
- * @since 1.390.1415 (PR #435)
- * @lastModified 2026-09-01 23:09:20
+ * 【機能内容サマリ】
+ * - CLIが既定dry-runで、明示確認なしに実機送信へ進まないことを検証
+ * - live certification用のread-only前後観測とK2 physical idle境界を固定
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1669 (PR #442)
+ * @since   1.390.1415 (PR #435)
+ * @lastModified 2026-09-09 10:54:00
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 
 import { EventEmitter } from "node:events";
@@ -84,10 +96,10 @@ function isPrinterStatusProbeFrame(frame) {
 }
 
 /**
- * live certification mockへidle状態のprinter statusを返す。
+ * live certification mockへ実機で観測した正常終了後のphysical idle statusを返す。
  *
  * 【詳細説明】
- * - 実機送信前guardの通過条件を満たすため、state/deviceStateおよび活動指標をすべて0で返す。
+ * - F012が前ジョブのstate/job timeを保持しても、残り時間とtarget温度が0ならidle候補になる境界を通す。
  *
  * @function emitIdlePrinterStatus
  * @param {EventEmitter} ws - テスト用WebSocket mock
@@ -96,10 +108,10 @@ function isPrinterStatusProbeFrame(frame) {
 function emitIdlePrinterStatus(ws) {
   setTimeout(() => {
     ws.emit("message", JSON.stringify({
-      state: 0,
+      state: 2,
       deviceState: 0,
-      printProgress: 0,
-      printJobTime: 0,
+      printProgress: 100,
+      printJobTime: 613,
       printLeftTime: 0,
       targetNozzleTemp: 0,
       targetBedTemp0: 0,
@@ -527,7 +539,7 @@ describe("capture_k2_cfs_slot_control", () => {
     });
   });
 
-  it("--require-printer-idle指定時は印刷活動中のK2へCFS操作frameを送らない", async () => {
+  it("--require-printer-idle指定時は正常終了stateでもノズル加熱中のK2へCFS操作frameを送らない", async () => {
     class ActivePrinterStatusWs extends EventEmitter {
       constructor() {
         super();
@@ -546,6 +558,8 @@ describe("capture_k2_cfs_slot_control", () => {
               printProgress: 100,
               printJobTime: 613,
               printLeftTime: 0,
+              targetNozzleTemp: 220,
+              targetBedTemp0: 0,
               printFileName: "/mnt/UDISK/printer_data/gcodes/bracket.stl_PLA_8m15s.gcode",
             }));
           }, 1);
@@ -1534,6 +1548,50 @@ describe("capture_k2_cfs_slot_control", () => {
         deviceState: null,
         bedTemp0: 28.1,
         nozzleTemp: 31.4,
+      },
+    });
+    expect(ws.listenerCount("message")).toBe(0);
+  });
+
+  it("printer status probeは実機同等の正常終了full frameをcompleted lifecycleかつphysical idleとして返す", async () => {
+    class CompletedIdlePrinterStatusWs extends EventEmitter {
+      send(payload, callback) {
+        this.sentPayload = payload;
+        setTimeout(() => {
+          this.emit("message", JSON.stringify({
+            state: 2,
+            deviceState: 0,
+            printProgress: 100,
+            printJobTime: 613,
+            printLeftTime: 0,
+            targetNozzleTemp: 0,
+            targetBedTemp0: 0,
+            printFileName: "/mnt/UDISK/printer_data/gcodes/bracket.stl_PLA_8m15s.gcode",
+            printId: "6a936e4ab9e9df20004c5066",
+          }));
+          callback();
+        }, 1);
+      }
+    }
+    const ws = new CompletedIdlePrinterStatusWs();
+
+    const result = await sendPrinterStatusProbeAndWait(ws, {
+      probeMode: "pre-command-printer-status",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toMatchObject({
+      status: "observed",
+      summary: {
+        complete: true,
+        idle: true,
+        active: false,
+        activityState: "idle",
+        coreStateComplete: true,
+        physicalIdleEvidenceComplete: true,
+        state: 2,
+        deviceState: 0,
+        printJobTime: 613,
       },
     });
     expect(ws.listenerCount("message")).toBe(0);

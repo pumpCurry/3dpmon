@@ -161,12 +161,19 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   `http://<host>/info` のmodel/version/transport hintをcertification resultへ保存する。
   `/info` のMACは有線/無線で一致しないことがあるためidentity authorityにはしないが、F012実機へ送っている証跡として扱う。
 - live送信では `--require-printer-idle` を必須とし、WS9999のread-only `get` で `state` / `deviceState` /
-  `printJobTime` / `printLeftTime` / target温度を確認する。プリンタ本体が印刷/加熱/前ジョブ残存を示す場合は、
+  `printJobTime` / `printLeftTime` / target温度を確認する。F012実機では印刷完了後も `state:2` と
+  `printJobTime` が残るため、`printJobTime` は診断値として保持するが、それ単独ではbusy根拠にしない。
+  `state:0`（待機）または `state:2`（完了）かつ `deviceState:0`、`printLeftTime:0`、
+  `targetNozzleTemp:0`、`targetBedTemp0:0` が同じ完全/合成観測で揃った場合だけphysical idle候補とする。
+  `state:2` で観測済み `printProgress` が100以外の場合や、残り時間・目標温度・device stateが活動を示す場合は、
   `pre-command-printer-not-idle` としてCFS操作frameを送らない。
   `null`、空文字、空白文字、未観測値はJavaScriptの暗黙変換で0にせず、idle根拠としては扱わない。
+  この判定は `dashboard_k2_printer_activity.js` に集約し、Normalizer、live shadow、Certification panel、
+  read-only calibration CLI、slot-control CLIで同じ分類結果を使う。
   UI/dispatcher側でも同じ境界を持ち、`stateLabel:"idle"` が残っていても、send-time観測が
   `snapshotCompleteness:"partial"`、`statusProbeStatus:"partial"`、`activityState:"unknown-core-state"`、
-  または `coreStateComplete:false` を明示する場合は `cfs-control-printer-idle-observation-incomplete` として拒否する。
+  `coreStateComplete:false`、または `physicalIdleEvidenceComplete:false` を明示する場合は
+  `cfs-control-printer-idle-observation-incomplete` として拒否する。
   これはdelta-only/timeout後に古いidle表示だけでphysical CFS commandを送らないためのGate19 idle predicateである。
   `createK2StatusPatch()` はraw frame単位でこのmetadataを生成し、Facadeの累積 `shadowRecord.lastState.print` へ残す。
   そのためCertification panelの合成入力だけでなく、実機WS9999から入ったproduction shadowでも同じpreflight境界を使える。
@@ -259,6 +266,10 @@ live certificationは次の順で進める。
    2026-08-31のF012実機観測では、`/info` と `boxsInfo` は取得できた一方で、printer statusは
    1回目だけ即応答し、同一WS session内の連続status probeはtimeoutすることがあった。
    この場合CLI結果は `ok:false` / `status:"partial"` とし、`failedStatusProbeCount` を証跡に残す。
+   初回のcomplete baseline後に温度などのpartial deltaだけが届いた場合も、個々のprobe品質を隠さないため
+   CLI最上位は `partial` を維持する。一方、`assembledPrinterStatus` は同一session内の順序付き合成結果として
+   `fresh:true` / `physicalIdleEvidenceComplete:true` / `idle:true` を示せる。この2つは別の証拠であり、
+   個別probeの完全成功を合成結果で上書きしない。
    `wsTimeline` にはraw payloadではなく送受信方向、probe番号、frame種別、key一覧だけを保存し、
    timeout後の遅延応答やsubscription風の部分frameがどのprobe windowで届いたかを確認する。
    これはside-effect command失敗ではなく、live送信前のidle predicate調整対象として扱う。
