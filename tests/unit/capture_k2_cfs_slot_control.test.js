@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1672 (PR #442)
+ * @version 1.390.1673 (PR #442)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-09-09 12:05:20
+ * @lastModified 2026-09-09 13:05:16
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -598,6 +598,131 @@ describe("capture_k2_cfs_slot_control", () => {
           active: true,
           state: 2,
           printJobTime: 613,
+        },
+      },
+      response: null,
+    });
+    expect(ws.sentFrames).toEqual([PRINTER_STATUS_GET_FRAME]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("印刷状態がidleでもfeedStateが操作中ならCFS操作frameを送らない", async () => {
+    class BusyFeedStateWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              state: 0,
+              deviceState: 0,
+              printProgress: 100,
+              printJobTime: 0,
+              printLeftTime: 0,
+              targetNozzleTemp: 0,
+              targetBedTemp0: 0,
+              feedState: 101,
+              printFileName: "",
+              printId: "",
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new BusyFeedStateWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs()),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-cfs-feed-state-not-idle",
+      blindRetryAllowed: false,
+      printerStatus: {
+        status: "observed",
+        summary: {
+          idle: true,
+          feedState: 101,
+        },
+      },
+      response: null,
+    });
+    expect(ws.sentFrames).toEqual([PRINTER_STATUS_GET_FRAME]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("印刷状態がidleでもfeedStateを観測できなければCFS操作frameを送らない", async () => {
+    class MissingFeedStateWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              state: 0,
+              deviceState: 0,
+              printProgress: 100,
+              printJobTime: 0,
+              printLeftTime: 0,
+              targetNozzleTemp: 0,
+              targetBedTemp0: 0,
+              printFileName: "",
+              printId: "",
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new MissingFeedStateWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs()),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-cfs-feed-state-observation-failed",
+      blindRetryAllowed: false,
+      printerStatus: {
+        status: "observed",
+        summary: {
+          idle: true,
+          feedState: null,
         },
       },
       response: null,

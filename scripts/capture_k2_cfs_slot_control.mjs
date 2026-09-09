@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1672 (PR #442)
+ * @version 1.390.1673 (PR #442)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-09-09 12:05:20
+ * @lastModified 2026-09-09 13:05:16
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -2057,6 +2057,38 @@ export async function runK2CfsSlotControlCertification(options) {
           dryRun: false,
           status: "rejected",
           reason: "pre-command-printer-not-idle",
+          blindRetryAllowed: false,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAtMs,
+          host: options.host,
+          wsPort: options.wsPort,
+          request,
+          plan,
+          probePlan: createProbePlanSummary(options),
+          response: null,
+          printerStatus,
+          probes: {
+            before: null,
+            after: null,
+            afterSeries: [],
+          },
+          printerInfo,
+          operatorMarker,
+          targetSourceDelta: null,
+        }, options);
+      }
+      const preCommandFeedState = printerStatus.summary?.feedState;
+      const feedStateRejectionReason = preCommandFeedState === null
+        ? "pre-command-cfs-feed-state-observation-failed"
+        : (preCommandFeedState !== 0 ? "pre-command-cfs-feed-state-not-idle" : null);
+      if (feedStateRejectionReason) {
+        return finalizeCertificationResult({
+          ok: false,
+          sent: false,
+          dryRun: false,
+          status: "rejected",
+          reason: feedStateRejectionReason,
           blindRetryAllowed: false,
           startedAt,
           completedAt: new Date().toISOString(),
