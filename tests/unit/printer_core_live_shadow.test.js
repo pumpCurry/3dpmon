@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1669 (PR #442)
+ * @version 1.390.1670 (PR #442)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-09-09 10:54:00
+ * @lastModified 2026-09-09 11:16:25
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -620,6 +620,90 @@ describe("Printer Core v3 K1 live shadow", () => {
       connectionGeneration: 8,
       fresh: true,
       idle: true,
+    });
+  });
+
+  it("K2 live shadowは正常終了idle後のprogress-only矛盾deltaでassembled idleを失効させる", () => {
+    const host = "K2Pro-Live-Completed-Progress-Conflict";
+    const deviceId = "host:K2Pro-Live-Completed-Progress-Conflict";
+    const sessionId = "k2-live:completed-progress-conflict";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 9 });
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 9,
+      frame: {
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+      },
+      receivedAt: "2026-09-09T11:16:25.000+09:00",
+    });
+
+    const record = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 9,
+      frame: { printProgress: 75 },
+      receivedAt: "2026-09-09T11:16:26.000+09:00",
+    });
+
+    expect(record.printerIdleObservation).toMatchObject({
+      status: "assembled",
+      idle: false,
+      physicalIdleConflictReasons: ["completed-progress-conflict"],
+    });
+  });
+
+  it.each([
+    ["残り時間null", { printLeftTime: null }],
+    ["残り時間negative", { printLeftTime: -1 }],
+    ["ノズル設定温度null", { targetNozzleTemp: null }],
+    ["ノズル設定温度negative", { targetNozzleTemp: -1 }],
+    ["ベッド設定温度blank", { targetBedTemp0: "   " }],
+    ["state active", { state: 1 }],
+    ["deviceState active", { deviceState: 1 }],
+    ["target heating", { targetNozzleTemp: 220 }],
+  ])("K2 live shadowは正常終了idle後の%s deltaでassembled idleを失効させる", (_label, delta) => {
+    const host = `K2Pro-Live-Idle-Revoked-${_label}`;
+    const deviceId = `host:${host}`;
+    const sessionId = `k2-live:idle-revoked:${_label}`;
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 10 });
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 10,
+      frame: {
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+      },
+      receivedAt: "2026-09-09T11:16:25.000+09:00",
+    });
+
+    const record = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 10,
+      frame: delta,
+      receivedAt: "2026-09-09T11:16:26.000+09:00",
+    });
+
+    expect(record.printerIdleObservation).toMatchObject({
+      status: "assembled",
+      idle: false,
     });
   });
 

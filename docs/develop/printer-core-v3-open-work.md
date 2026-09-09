@@ -41,7 +41,8 @@ connection generationで得たprinter statusのcomplete baseline、またはそ�
 delta-only frameを順序通り合成したassembled evidenceだけを根拠にする。観測TTLは5秒で、期限切れ、
 session不一致、connection generation不一致、partial / unknown-core-state、またはbusy状態では
 `cfs-control-printer-idle-*` reasonで送信前に拒否する。CFS `boxsInfo` だけのmaterial-only frameは
-printer idle観測を更新しない。
+printer idle観測を更新しない。後着status deltaの明示的なnull/空白/負値やcompleted stateと矛盾する
+progressは、以前のidle scalarを温存せずassembled evidenceを失効させる。
 
 Gate 18.9Iの実機export確認には `scripts/analyze_material_accounting_export.mjs` を使う。
 このanalyzerはread-onlyで、K2/CFSのMaterialSource観測、legacy `hostSpoolMap` 1本割当、

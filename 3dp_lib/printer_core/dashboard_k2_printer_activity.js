@@ -14,11 +14,12 @@
  *
  * 【公開関数一覧】
  * - {@link listObservedK2PrinterStatusScalarKeys}：観測済みstatus scalar keyを列挙
+ * - {@link mergeK2PrinterStatusScalarSnapshot}：観測済みscalarを累積snapshotへ反映
  * - {@link classifyK2PrinterActivity}：K2 statusのactivityとphysical idle証拠を分類
  *
- * @version 1.390.1669 (PR #442)
+ * @version 1.390.1670 (PR #442)
  * @since   1.390.1669 (PR #442)
- * @lastModified 2026-09-09 10:24:00
+ * @lastModified 2026-09-09 11:16:25
  * -----------------------------------------------------------
  * @todo
  * - Gate19実機certificationでfeedStateの意味が確定した場合は補助診断へ追加する
@@ -94,7 +95,13 @@ function hasOwn(value, key) {
  * @returns {number|null} 有限number、またはnull
  */
 function toFiniteNumberOrNull(value) {
-  if (value === null || value === undefined || value === "") {
+  if (value === null || value === undefined || typeof value === "boolean") {
+    return null;
+  }
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
+  if (typeof value !== "number" && typeof value !== "string") {
     return null;
   }
   const numberValue = Number(value);
@@ -121,13 +128,57 @@ export function listObservedK2PrinterStatusScalarKeys(payload) {
 }
 
 /**
+ * K2 printer statusの観測済みscalarを累積snapshotへ反映する。
+ *
+ * 【詳細説明】
+ * - deltaに存在しないkeyだけをpreviousから継承する。
+ * - 明示されたnull、空白、無効値も新しい観測証拠として保持し、以前のsafe値を失効させる。
+ * - progress/file nameのaliasは後着した表現を優先し、古いaliasがclassifierへ残らないよう除去する。
+ * - 入力objectは変更せず、printer status scalarだけを含む新しいsnapshotを返す。
+ *
+ * @function mergeK2PrinterStatusScalarSnapshot
+ * @param {object|null|undefined} previous - 直前までの累積scalar snapshot
+ * @param {object|null|undefined} delta - 今回観測したK2 status payload
+ * @returns {object} 観測済みscalarを反映した新しいsnapshot
+ * @example
+ * const snapshot = mergeK2PrinterStatusScalarSnapshot(
+ *   { state: 2, printProgress: 100 },
+ *   { printProgress: 75 }
+ * );
+ */
+export function mergeK2PrinterStatusScalarSnapshot(previous = {}, delta = {}) {
+  const snapshot = {};
+  for (const key of K2_PRINTER_STATUS_SCALAR_KEYS) {
+    if (hasOwn(previous, key)) {
+      snapshot[key] = previous[key];
+    }
+  }
+  for (const key of K2_PRINTER_STATUS_SCALAR_KEYS) {
+    if (hasOwn(delta, key)) {
+      snapshot[key] = delta[key];
+    }
+  }
+  if (hasOwn(delta, "printProgress")) {
+    delete snapshot.dProgress;
+  } else if (hasOwn(delta, "dProgress")) {
+    delete snapshot.printProgress;
+  }
+  if (hasOwn(delta, "printFileName")) {
+    delete snapshot.fileName;
+  } else if (hasOwn(delta, "fileName")) {
+    delete snapshot.printFileName;
+  }
+  return snapshot;
+}
+
+/**
  * K2 printer statusをjob lifecycleとphysical activityへ分離して分類する。
  *
  * 【詳細説明】
  * - `state=0`と`state=2`はdeviceState=0の場合だけterminal idle候補とする。
  * - printLeftTimeまたはtarget温度が正の場合は、core stateにかかわらずhard busyとする。
  * - printJobTime、printFileName、printIdは完了後も残るためdiagnosticとしてのみ返す。
- * - CFS物理操作用idleは必須五項目が同一snapshotに有限値として揃い、矛盾が無い場合だけtrueにする。
+ * - CFS物理操作用idleは必須五項目が同一snapshotに有限値として揃い、三つのphysical scalarがexact zeroの場合だけtrueにする。
  * - completedでprintProgressが観測され100以外ならterminal stateとの矛盾としてidleを拒否する。
  *
  * @function classifyK2PrinterActivity
@@ -163,24 +214,41 @@ export function classifyK2PrinterActivity(payload = {}) {
   const lifecycleBlocksIdle = state !== null && ![0, 2].includes(state);
   const deviceBusy = deviceState !== null && deviceState !== 0;
   const completedProgressConflict = state === 2 && printProgress !== null && printProgress !== 100;
+  const physicalIdleConflictReasons = [];
+  if (completedProgressConflict) {
+    physicalIdleConflictReasons.push("completed-progress-conflict");
+  }
+  if (printLeftTime !== null && printLeftTime < 0) {
+    physicalIdleConflictReasons.push("invalid-negative-print-left-time");
+  }
+  if (targetNozzleTemp !== null && targetNozzleTemp < 0) {
+    physicalIdleConflictReasons.push("invalid-negative-target-nozzle-temperature");
+  }
+  if (targetBedTemp0 !== null && targetBedTemp0 < 0) {
+    physicalIdleConflictReasons.push("invalid-negative-target-bed-temperature");
+  }
   const active = hardBusy || lifecycleBlocksIdle || deviceBusy || completedProgressConflict;
   const activityState = coreStateComplete
     ? (active ? "active" : "idle")
     : (active ? "active-without-core-state" : "unknown-core-state");
-  const idle = physicalIdleEvidenceComplete && safeTerminalState && !active;
+  const physicalIdleScalarsAreZero = printLeftTime === 0 &&
+    targetNozzleTemp === 0 &&
+    targetBedTemp0 === 0;
+  const idle = physicalIdleEvidenceComplete &&
+    physicalIdleScalarsAreZero &&
+    safeTerminalState &&
+    !active &&
+    physicalIdleConflictReasons.length === 0;
   const idleReason = idle
     ? (state === 2 ? "completed-terminal-state" : "idle-terminal-state")
     : null;
-  const physicalIdleConflictReasons = completedProgressConflict
-    ? ["completed-progress-conflict"]
-    : [];
-
   return {
     active,
     activityState,
     coreStateComplete,
     snapshotCompleteness: coreStateComplete ? "complete" : "partial",
     physicalIdleEvidenceComplete,
+    physicalIdleScalarsAreZero,
     idle,
     idleReason,
     physicalIdleConflictReasons,

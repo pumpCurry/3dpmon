@@ -187,6 +187,9 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   last applied sequenceを保持した `status:"assembled"` evidenceとして扱える。これによりF012で観測された
   「full statusは初回だけ、その後は差分だけ」という通信でも、古いidle表示だけを根拠にせず、freshな
   assembled idle観測がある場合だけsend-time guardを通せる。
+  合成時は観測済みscalarをraw key単位で累積して毎回shared classifierへ戻す。後着deltaが
+  `printProgress:75`、active state、加熱target、負のsentinel、または明示的なnull/空白を含む場合は、
+  以前のsafe scalarを保持せずphysical idleを失効させる。
 - `scripts/capture_k2_cfs_readonly_calibration.mjs` は、複数のprinter status probeから
   `assembledPrinterStatus` を生成する。これはread-only certification用のprojectionであり、
   最初に `state` と `deviceState` を含むcomplete baselineを観測できた場合だけ、同一WS session内の
@@ -194,7 +197,8 @@ Gate 19は、いきなりUIの操作ボタンを有効化しない。次の順�
   `status:"unknown" / reason:"complete-baseline-missing"` として保存し、idle authorityへ昇格しない。
   projectionには `baselineProbeMode`、`lastAppliedProbeMode`、`appliedDeltaProbeCount`、`ttlMs`、
   `fresh`、累積後の `snapshot` を含め、F012で観測されるfull baseline後のdelta-only通信を
-  physical send前にレビューできる形へ残す。TTL切れや観測時刻の逆行はfail-closedに扱う。
+  physical send前にレビューできる形へ残す。観測済みnull/invalid scalar、TTL切れ、観測時刻の逆行は
+  fail-closedに扱う。
 - `--probe-after` はcommand送信callback直後ではなく、既定 `--probe-after-delay-ms 1500` の反映待ち後に開始する。
   `--boxsinfo-timeout-ms` はprobe開始後の応答待ち時間、`--probe-after-delay-ms` は物理状態が反映されるまでのsettling timeとして分離する。
   実機でtimeoutより先に旧状態だけを拾う場合は、timeoutを延ばす前にこのsettling timeを長くして前後観測を取り直す。

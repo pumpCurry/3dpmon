@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1669 (PR #442)
+ * @version 1.390.1670 (PR #442)
  * @since   1.390.1545 (PR #439)
- * @lastModified 2026-09-09 10:54:00
+ * @lastModified 2026-09-09 11:16:25
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -28,6 +28,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  createAssembledPrinterStatusProjection,
   parseArgs,
   runK2CfsReadOnlyCalibration,
 } from "../../scripts/capture_k2_cfs_readonly_calibration.mjs";
@@ -493,6 +494,50 @@ describe("capture_k2_cfs_readonly_calibration", () => {
         nozzleTemp: 28.4,
         bedTemp0: 27.8,
       },
+    });
+  });
+
+  it("assembled projectionは観測済みcritical scalarのnullで以前のidle証拠を失効させる", () => {
+    const projection = createAssembledPrinterStatusProjection([{
+      status: "observed",
+      probeMode: "printer-status:1",
+      observedAt: "2026-09-09T11:16:25.000+09:00",
+      summary: {
+        complete: true,
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        observedScalarKeys: [
+          "state",
+          "deviceState",
+          "printProgress",
+          "printLeftTime",
+          "targetNozzleTemp",
+          "targetBedTemp0",
+        ],
+      },
+    }, {
+      status: "partial",
+      probeMode: "printer-status:2",
+      observedAt: "2026-09-09T11:16:26.000+09:00",
+      summary: {
+        complete: false,
+        printLeftTime: null,
+        observedScalarKeys: ["printLeftTime"],
+      },
+    }], {
+      ttlMs: 5000,
+      asOfMs: Date.parse("2026-09-09T11:16:27.000+09:00"),
+    });
+
+    expect(projection).toMatchObject({
+      status: "observed",
+      idle: false,
+      physicalIdleEvidenceComplete: false,
+      snapshot: { printLeftTime: null },
     });
   });
 

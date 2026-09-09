@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1669 (PR #442)
+ * @version 1.390.1670 (PR #442)
  * @since   1.390.1296 (PR #432)
- * @lastModified 2026-09-09 10:54:00
+ * @lastModified 2026-09-09 11:16:25
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -220,6 +220,54 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       activityState: "active",
       coreStateComplete: true,
       physicalIdleEvidenceComplete: true,
+    });
+  });
+
+  it.each([
+    ["残り時間", { printLeftTime: -1 }, "invalid-negative-print-left-time"],
+    ["ノズル設定温度", { targetNozzleTemp: -1 }, "invalid-negative-target-nozzle-temperature"],
+    ["ベッド設定温度", { targetBedTemp0: -1 }, "invalid-negative-target-bed-temperature"],
+  ])("K2のphysical idle必須%sが負のsentinelならidle authorityを拒否する", (_label, override, reason) => {
+    const patch = createK2StatusPatch({
+      state: 2,
+      deviceState: 0,
+      printProgress: 100,
+      printLeftTime: 0,
+      targetNozzleTemp: 0,
+      targetBedTemp0: 0,
+      ...override,
+    }, {
+      deviceId: "fixture:k2-negative-idle-sentinel",
+      sessionId: "fixture-session-k2-negative-idle-sentinel",
+      sequence: 14,
+      receivedAt: "2026-09-09T11:16:25.000+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      stateLabel: "completed",
+      physicalIdle: false,
+      physicalIdleConflictReasons: [reason],
+    });
+  });
+
+  it("K2の空白physical idle scalarをzeroへ変換せず未観測として拒否する", () => {
+    const patch = createK2StatusPatch({
+      state: 2,
+      deviceState: 0,
+      printProgress: 100,
+      printLeftTime: 0,
+      targetNozzleTemp: "   ",
+      targetBedTemp0: 0,
+    }, {
+      deviceId: "fixture:k2-blank-idle-scalar",
+      sessionId: "fixture-session-k2-blank-idle-scalar",
+      sequence: 15,
+      receivedAt: "2026-09-09T11:16:26.000+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      physicalIdleEvidenceComplete: false,
+      physicalIdle: false,
     });
   });
 

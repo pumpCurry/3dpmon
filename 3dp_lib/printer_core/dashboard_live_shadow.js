@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1669 (PR #442)
+ * @version 1.390.1670 (PR #442)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-09-09 10:24:00
+ * @lastModified 2026-09-09 11:16:25
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -47,6 +47,10 @@ import {
   recordMaterialTopologyObservation,
   rekeyMaterialSourceObservationDevice,
 } from "./dashboard_material_source_observation.js";
+import {
+  classifyK2PrinterActivity,
+  mergeK2PrinterStatusScalarSnapshot,
+} from "./dashboard_k2_printer_activity.js";
 
 /**
  * live shadow runtime record の schema version。
@@ -187,6 +191,7 @@ function hasK2PrinterStatusScalarFrame(frame) {
  * @param {object} options - 生成オプション
  * @param {object|null|undefined} options.previousRecord - 直前shadow record
  * @param {object|null|undefined} options.lastState - Facade累積後のNormalizedState
+ * @param {object|null|undefined} options.frame - 今回観測したK2 raw status frame
  * @param {string} options.sessionId - shadow session ID
  * @param {number|null} options.connectionGeneration - WebSocket接続世代
  * @param {string} options.observedAt - status frame受信時刻
@@ -202,20 +207,18 @@ function createK2PrinterIdleObservationForShadow(options) {
   if (observedAtMs === null) {
     return null;
   }
-  const snapshotCompleteness = String(print.snapshotCompleteness || "").trim().toLowerCase();
-  const activityState = String(print.activityState || "").trim().toLowerCase();
-  const coreStateComplete = print.coreStateComplete === true;
-  const physicalIdleEvidenceComplete = print.physicalIdleEvidenceComplete === true;
   const connectionGeneration = Number.isFinite(Number(options.connectionGeneration))
     ? Number(options.connectionGeneration)
     : null;
   const sequence = Number.isFinite(Number(options.sequence)) ? Number(options.sequence) : null;
   const expiresAtMs = observedAtMs + K2_PRINTER_IDLE_OBSERVATION_TTL_MS;
+  const scalarSnapshot = mergeK2PrinterStatusScalarSnapshot({}, options.frame);
+  const frameClassification = classifyK2PrinterActivity(scalarSnapshot);
   const base = {
-    activityState: activityState || "unknown",
-    coreStateComplete,
-    physicalIdleEvidenceComplete,
-    snapshotCompleteness: snapshotCompleteness || "unknown",
+    activityState: frameClassification.activityState,
+    coreStateComplete: frameClassification.coreStateComplete,
+    physicalIdleEvidenceComplete: frameClassification.physicalIdleEvidenceComplete,
+    snapshotCompleteness: frameClassification.snapshotCompleteness,
     observedAt: options.observedAt,
     receivedAt: options.observedAt,
     expiresAt: new Date(expiresAtMs).toISOString(),
@@ -225,13 +228,12 @@ function createK2PrinterIdleObservationForShadow(options) {
     lastAppliedSequence: sequence,
     appliedDeltaCount: 0,
     fresh: true,
-    idle: print.physicalIdle === true && activityState === "idle" && coreStateComplete && physicalIdleEvidenceComplete,
-    idleReason: print.idleReason || null,
-    physicalIdleConflictReasons: Array.isArray(print.physicalIdleConflictReasons)
-      ? [...print.physicalIdleConflictReasons]
-      : [],
+    idle: frameClassification.idle === true,
+    idleReason: frameClassification.idleReason || null,
+    physicalIdleConflictReasons: [...frameClassification.physicalIdleConflictReasons],
+    scalarSnapshot,
   };
-  if (snapshotCompleteness === "complete" && coreStateComplete) {
+  if (frameClassification.snapshotCompleteness === "complete" && frameClassification.coreStateComplete) {
     return {
       ...base,
       status: "observed",
@@ -242,6 +244,8 @@ function createK2PrinterIdleObservationForShadow(options) {
   const previousComplete = previous &&
     ["observed", "assembled"].includes(String(previous.status || "").toLowerCase()) &&
     previous.coreStateComplete === true &&
+    previous.scalarSnapshot &&
+    typeof previous.scalarSnapshot === "object" &&
     String(previous.sessionId || "") === String(options.sessionId || "") &&
     Number(previous.connectionGeneration) === connectionGeneration;
   const orderedDelta = sequence !== null &&
@@ -258,23 +262,24 @@ function createK2PrinterIdleObservationForShadow(options) {
     };
   }
 
-  const partialShowsActive = activityState === "active" ||
-    activityState === "active-without-core-state" ||
-    ["printing", "paused", "busy", "heating", "checking", "running"].includes(String(print.stateLabel || print.state || "").toLowerCase());
+  const assembledSnapshot = mergeK2PrinterStatusScalarSnapshot(
+    previous.scalarSnapshot,
+    options.frame
+  );
+  const assembledClassification = classifyK2PrinterActivity(assembledSnapshot);
   return {
     ...base,
     status: "assembled",
-    activityState: partialShowsActive ? "active" : (previous.activityState || "idle"),
-    coreStateComplete: true,
-    physicalIdleEvidenceComplete: previous.physicalIdleEvidenceComplete === true,
-    snapshotCompleteness: "complete",
+    activityState: assembledClassification.activityState,
+    coreStateComplete: assembledClassification.coreStateComplete,
+    physicalIdleEvidenceComplete: assembledClassification.physicalIdleEvidenceComplete,
+    snapshotCompleteness: assembledClassification.snapshotCompleteness,
     baselineSequence: previous.baselineSequence ?? previous.lastAppliedSequence ?? sequence,
     appliedDeltaCount: Number(previous.appliedDeltaCount || 0) + 1,
-    idle: partialShowsActive ? false : previous.idle === true,
-    idleReason: partialShowsActive ? null : (previous.idleReason || null),
-    physicalIdleConflictReasons: partialShowsActive
-      ? (Array.isArray(print.physicalIdleConflictReasons) ? [...print.physicalIdleConflictReasons] : [])
-      : (Array.isArray(previous.physicalIdleConflictReasons) ? [...previous.physicalIdleConflictReasons] : []),
+    idle: assembledClassification.idle,
+    idleReason: assembledClassification.idleReason,
+    physicalIdleConflictReasons: [...assembledClassification.physicalIdleConflictReasons],
+    scalarSnapshot: assembledSnapshot,
   };
 }
 
@@ -1962,6 +1967,7 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     ? createK2PrinterIdleObservationForShadow({
         previousRecord: previous,
         lastState: runtimeLastState,
+        frame: options.frame,
         sessionId,
         connectionGeneration: record.connectionGeneration,
         observedAt: lastObservedAt,

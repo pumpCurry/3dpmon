@@ -17,9 +17,9 @@
  * - {@link createAssembledPrinterStatusProjection}：printer status probe列を同一session projectionへ累積
  * - {@link runK2CfsReadOnlyCalibration}：read-only calibrationを実行
  *
- * @version 1.390.1669 (PR #442)
+ * @version 1.390.1670 (PR #442)
  * @since   1.390.1545 (PR #439)
- * @lastModified 2026-09-09 10:24:00
+ * @lastModified 2026-09-09 11:16:25
  * -----------------------------------------------------------
  * @todo
  * - Gate19実機calibration結果からK2 idle predicateのfixture化可否を判断する
@@ -29,7 +29,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
-import { classifyK2PrinterActivity } from "../3dp_lib/printer_core/dashboard_k2_printer_activity.js";
+import {
+  classifyK2PrinterActivity,
+  mergeK2PrinterStatusScalarSnapshot,
+} from "../3dp_lib/printer_core/dashboard_k2_printer_activity.js";
 import {
   sendBoxsInfoProbeAndWait,
   sendPrinterStatusProbeAndWait,
@@ -42,19 +45,6 @@ const DEFAULT_STATUS_PROBE_INTERVAL_MS = 1000;
 const DEFAULT_BOXSINFO_PROBE_COUNT = 2;
 const DEFAULT_BOXSINFO_PROBE_INTERVAL_MS = 1000;
 const DEFAULT_ASSEMBLED_STATUS_TTL_MS = 15000;
-const PRINTER_STATUS_SCALAR_KEYS = Object.freeze([
-  "state",
-  "deviceState",
-  "printProgress",
-  "printJobTime",
-  "printLeftTime",
-  "nozzleTemp",
-  "bedTemp0",
-  "targetNozzleTemp",
-  "targetBedTemp0",
-  "printFileName",
-  "printId",
-]);
 
 const USAGE = `Usage:
   node scripts/capture_k2_cfs_readonly_calibration.mjs --host 192.168.54.153 --require-info-model F012 --pretty
@@ -142,19 +132,14 @@ function parseIsoTimeMs(value) {
  * @returns {object} 変更後snapshot
  */
 function mergePrinterStatusSummaryIntoSnapshot(snapshot, summary) {
-  const observedKeys = Array.isArray(summary?.observedScalarKeys)
-    ? new Set(summary.observedScalarKeys)
-    : new Set();
-  for (const key of PRINTER_STATUS_SCALAR_KEYS) {
-    if (!observedKeys.has(key)) {
-      continue;
-    }
-    const value = summary?.[key];
-    if (value !== null && value !== undefined) {
-      snapshot[key] = value;
-    }
+  const delta = {};
+  for (const observedKey of Array.isArray(summary?.observedScalarKeys) ? summary.observedScalarKeys : []) {
+    const key = observedKey === "dProgress"
+      ? "printProgress"
+      : (observedKey === "fileName" ? "printFileName" : observedKey);
+    delta[key] = summary?.[key];
   }
-  return snapshot;
+  return mergeK2PrinterStatusScalarSnapshot(snapshot, delta);
 }
 
 /**
@@ -207,7 +192,7 @@ export function createAssembledPrinterStatusProjection(printerStatusSeries = [],
   const series = Array.isArray(printerStatusSeries) ? printerStatusSeries : [];
   const ttlMs = Number.isFinite(options.ttlMs) ? options.ttlMs : DEFAULT_ASSEMBLED_STATUS_TTL_MS;
   const asOfMs = Number.isFinite(options.asOfMs) ? options.asOfMs : Date.now();
-  const snapshot = {};
+  let snapshot = {};
   let baselineProbe = null;
   let baselineObservedAtMs = null;
   let lastAppliedProbe = null;
@@ -240,7 +225,7 @@ export function createAssembledPrinterStatusProjection(printerStatusSeries = [],
     }
     if (!baselineProbe) {
       if (probe?.status === "observed" && summary.complete === true) {
-        mergePrinterStatusSummaryIntoSnapshot(snapshot, summary);
+        snapshot = mergePrinterStatusSummaryIntoSnapshot(snapshot, summary);
         baselineProbe = probe;
         baselineObservedAtMs = observedAtMs;
         lastAppliedProbe = probe;
@@ -251,7 +236,7 @@ export function createAssembledPrinterStatusProjection(printerStatusSeries = [],
       continue;
     }
     if (probe?.status === "observed" || probe?.status === "partial") {
-      mergePrinterStatusSummaryIntoSnapshot(snapshot, summary);
+      snapshot = mergePrinterStatusSummaryIntoSnapshot(snapshot, summary);
       lastAppliedProbe = probe;
       lastAppliedObservedAtMs = observedAtMs ?? lastAppliedObservedAtMs;
       if (probe !== baselineProbe) {
