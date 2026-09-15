@@ -20,12 +20,12 @@
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1452 (PR #435)
+ * @version 1.390.1674 (PR #442)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-28 14:28:57
+ * @lastModified 2026-09-15 11:47:43
  * -----------------------------------------------------------
  * @todo
- * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
+ * - 1C・1D・外部sourceとslot select/feed/retractは個別の実機認証が完了するまでproductionへ追加しない
  */
 
 "use strict";
@@ -416,12 +416,125 @@ function matchesCertificationFirmwareScope(evidence, currentFirmwareVersion) {
 }
 
 /**
+ * command kindごとのGate 19認証policyを返す。
+ *
+ * 【詳細説明】
+ * - 実機で反復確認したpreconditionとterminal conditionを固定し、証跡側がより広い操作条件へ
+ *   書き換えられていないことをproduction昇格前に検査する。
+ * - loadは未選択状態からtargetを選択する操作だけ、unloadはtargetが唯一選択された状態から
+ *   選択を解除する操作だけを初期production scopeとする。
+ *
+ * @private
+ * @function getRequiredCfsSlotControlCommandPolicy
+ * @param {string} commandKind - 検証対象command kind
+ * @returns {object|null} 必須policy。対象外commandではnull
+ */
+function getRequiredCfsSlotControlCommandPolicy(commandKind) {
+  if (commandKind === "cfs-load") {
+    return {
+      requiredSelectedSources: [],
+      targetPresence: "loaded",
+      terminalSelectedSource: "target",
+    };
+  }
+  if (commandKind === "cfs-unload") {
+    return {
+      requiredSelectedSource: "target",
+      selectedMustBeUnique: true,
+      targetPresence: "loaded",
+      terminalSelectedSources: [],
+    };
+  }
+  return null;
+}
+
+/**
+ * certification evidenceのCFS attachment・台数・source scopeを検査する。
+ *
+ * 【詳細説明】
+ * - runtime側のsource IDだけでなくbox/slot数値も一致させ、未認証slotへ別source IDを流用する余地を閉じる。
+ * - 初期認証はCFS 1台だけであり、CFS-Cや複数CFS構成は同じF012/firmwareでも拒否する。
+ *
+ * @private
+ * @function collectCfsCertificationScopeErrors
+ * @param {object} evidence - certification evidence
+ * @param {object} scope - 現在target/runtimeから得たscope
+ * @returns {string[]} scope error code配列
+ */
+function collectCfsCertificationScopeErrors(evidence, scope) {
+  const errors = [];
+  if (toNonEmptyString(evidence?.attachment) !== "CFS" || toNonEmptyString(scope?.attachment) !== "CFS") {
+    errors.push("attachment-scope-missing-or-mismatch");
+  }
+
+  const evidenceUnitCount = toFiniteNumberOrNull(evidence?.scope?.cfsUnitCount);
+  const currentUnitCount = toFiniteNumberOrNull(scope?.cfsUnitCount);
+  if (!Number.isInteger(evidenceUnitCount) || evidenceUnitCount !== 1 || currentUnitCount !== evidenceUnitCount) {
+    errors.push("cfs-unit-count-scope-missing-or-mismatch");
+  }
+
+  const sourceId = toNonEmptyString(scope?.sourceId || scope?.materialSourceId);
+  const location = parseMaterialSourceLocation(sourceId);
+  const currentBoxId = toFiniteNumberOrNull(scope?.boxId);
+  const currentSlotId = toFiniteNumberOrNull(scope?.slotId ?? scope?.materialId);
+  const certifiedSources = Array.isArray(evidence?.scope?.certifiedSources)
+    ? evidence.scope.certifiedSources
+    : [];
+  const sourceMatched = location.kind === "cfs-slot" && certifiedSources.some((entry) => (
+    toNonEmptyString(entry?.sourceId) === sourceId &&
+    toFiniteNumberOrNull(entry?.boxId) === location.boxId &&
+    toFiniteNumberOrNull(entry?.slotId) === location.materialId &&
+    currentBoxId === location.boxId &&
+    currentSlotId === location.materialId
+  ));
+  if (!sourceMatched) {
+    errors.push("source-scope-missing-or-mismatch");
+  }
+  return errors;
+}
+
+/**
+ * certification evidenceのcommand policyと安全policyを検査する。
+ *
+ * 【詳細説明】
+ * - command policyは実機認証済みshapeと完全一致させ、未認証preconditionやterminal stateを許可しない。
+ * - safety policyはsend-time idle/feed/error確認、blind retry禁止、single-flightをすべて必須とする。
+ *
+ * @private
+ * @function collectCfsCertificationPolicyErrors
+ * @param {object} evidence - certification evidence
+ * @param {string} commandKind - 検証対象command kind
+ * @returns {string[]} policy error code配列
+ */
+function collectCfsCertificationPolicyErrors(evidence, commandKind) {
+  const errors = [];
+  const requiredCommandPolicy = getRequiredCfsSlotControlCommandPolicy(commandKind);
+  const actualCommandPolicy = evidence?.commandPolicies?.[commandKind];
+  if (!requiredCommandPolicy || stableJsonStringify(actualCommandPolicy) !== stableJsonStringify(requiredCommandPolicy)) {
+    errors.push("command-policy-missing-or-mismatch");
+  }
+
+  const safety = evidence?.safety;
+  if (
+    safety?.printerIdleRequired !== true ||
+    safety?.feedStateIdleRequired !== true ||
+    safety?.printerErrorClearRequired !== true ||
+    safety?.blindRetryAllowed !== false ||
+    safety?.singleFlightRequired !== true
+  ) {
+    errors.push("safety-policy-missing-or-mismatch");
+  }
+  return errors;
+}
+
+/**
  * K2/CFS slot操作のproduction certification evidenceを検証する。
  *
  * 【詳細説明】
  * - 空objectや配列を「証跡あり」と見なさず、command kind・transport profile・K2 printer scope・
- *   model/firmware/capture metadata が揃った場合だけproduction昇格へ使う。
- * - runtime/target側でprinterType/model/firmwareが未観測の場合は、証跡の流用を防ぐため拒否する。
+ *   model/firmware/CFS/source/policy/capture metadata が揃った場合だけproduction昇格へ使う。
+ * - runtime/target側でprinterType/model/firmware/attachment/CFS台数/sourceが未観測の場合は、
+ *   証跡の流用を防ぐため拒否する。
  *
  * @function validateK2CfsSlotControlCertificationEvidence
  * @param {*} evidence - 検証対象のcertification evidence
@@ -430,6 +543,11 @@ function matchesCertificationFirmwareScope(evidence, currentFirmwareVersion) {
  * @param {string=} scope.printerType - 現在のprinterType
  * @param {string=} scope.model - 現在のmodel code
  * @param {string=} scope.firmwareVersion - 現在のfirmware version
+ * @param {string=} scope.attachment - 現在のmaterial attachment種別
+ * @param {number=} scope.cfsUnitCount - 現在接続中のCFS台数
+ * @param {string=} scope.sourceId - 現在の操作対象source ID
+ * @param {number=} scope.boxId - 現在の操作対象CFS box ID
+ * @param {number=} scope.slotId - 現在の操作対象slot ID
  * @returns {{ok: boolean, errors: string[]}} 検証結果
  * @example
  * const result = validateK2CfsSlotControlCertificationEvidence(evidence, "cfs-load", { printerType: "creality-k2" });
@@ -465,6 +583,8 @@ export function validateK2CfsSlotControlCertificationEvidence(evidence, commandK
   if (!matchesCertificationFirmwareScope(evidence, scope?.firmwareVersion || scope?.version || scope?.reportedFirmwareVersion)) {
     errors.push("firmware-scope-missing-or-mismatch");
   }
+  errors.push(...collectCfsCertificationScopeErrors(evidence, scope));
+  errors.push(...collectCfsCertificationPolicyErrors(evidence, commandKind));
   if (!toNonEmptyString(evidence.gate)) {
     errors.push("gate-missing");
   }

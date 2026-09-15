@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1669 (PR #442)
+ * @version 1.390.1674 (PR #442)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-09-09 10:31:00
+ * @lastModified 2026-09-15 12:03:51
  * -----------------------------------------------------------
  */
 
@@ -182,17 +182,6 @@ const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/
 const CFS_PHYSICAL_COMMAND_IN_FLIGHT_BY_DEVICE = new Map();
 
 /**
- * CFS物理操作で許可するprinter idle観測の有効期限。
- *
- * 【詳細説明】
- * - dispatch contextのTTLとは別に、K2 status frame自体が十分新しいことを要求する。
- * - F012ではstatusがdelta-onlyやtimeoutになるため、古いcomplete idle snapshotを現在値として使わない。
- *
- * @constant {number}
- */
-const CFS_PRINTER_IDLE_OBSERVATION_TTL_MS = 5000;
-
-/**
  * 配列/Set/map形式のcommand kind allow-listをSetへ正規化する。
  *
  * @private
@@ -270,9 +259,8 @@ function parseIsoEpochMs(value) {
  * production dispatcherへ渡すprinter idle観測証跡を生成する。
  *
  * 【詳細説明】
- * - K2 Facadeの累積stateは古い`idle`ラベルを保持し得るため、CFS物理操作前には
- *   status frameの完全性、観測時刻、session、connectionGenerationを1つの証跡にまとめる。
- * - 完全性metadataや受信時刻が無い旧経路ではnullを返し、従来のfail-closed判定へ委ねる。
+ * - live shadowが同一status frameから生成した専用証跡だけを採用し、累積`lastState`から再構成しない。
+ * - 送信直前の時刻でTTLを再評価し、期限切れなら`fresh:false`としてauthorityへ渡す。
  *
  * @private
  * @function createPrinterIdleObservationForCfsControl
@@ -290,52 +278,32 @@ function createPrinterIdleObservationForCfsControl(shadowRecord, connectionGener
       fresh: observed.fresh === true && expiresAtMs !== null && expiresAtMs > nowMs,
     };
   }
-  const lastState = shadowRecord?.lastState;
-  const print = lastState?.print;
-  if (!lastState || !print || typeof print !== "object") {
+  return null;
+}
+
+/**
+ * production dispatcherへ渡すCFS物理操作用統合安全証跡を生成する。
+ *
+ * 【詳細説明】
+ * - live shadowがprinter idle、feedState、raw errorを同一status sequenceへ束縛した証跡だけを採用する。
+ * - 累積stateや別frameから欠損値を補わず、未生成時はnullを返してsend-time validationをfail-closedにする。
+ * - 証跡本体を書き換えず、現在時刻に対するfreshnessだけを再計算する。
+ *
+ * @private
+ * @function createCfsPhysicalSafetyObservationForCfsControl
+ * @param {object|null|undefined} shadowRecord - Printer Core v3 live shadow record
+ * @param {number=} nowMs - 現在epoch ms
+ * @returns {object|null} CFS物理操作用統合安全証跡
+ */
+function createCfsPhysicalSafetyObservationForCfsControl(shadowRecord, nowMs = Date.now()) {
+  const observed = shadowRecord?.cfsPhysicalSafetyObservation;
+  if (!observed || typeof observed !== "object") {
     return null;
   }
-  const receivedAt = lastState.source?.receivedAt || shadowRecord.lastObservedAt || null;
-  const receivedAtMs = parseIsoEpochMs(receivedAt);
-  if (receivedAtMs === null) {
-    return null;
-  }
-  const snapshotCompleteness = String(print.snapshotCompleteness || "").trim() || "unknown";
-  const activityState = String(print.activityState || "").trim() || "unknown";
-  const coreStateComplete = typeof print.coreStateComplete === "boolean" ? print.coreStateComplete : null;
-  const physicalIdleEvidenceComplete = print.physicalIdleEvidenceComplete === true;
-  const observedConnectionGeneration = Number(
-    shadowRecord.connectionGeneration ??
-    shadowRecord.printerCoreV3ConnectionGeneration ??
-    lastState.source?.connectionGeneration ??
-    connectionGeneration
-  );
-  const idle = print.physicalIdle === true &&
-    activityState.toLowerCase() === "idle" &&
-    snapshotCompleteness.toLowerCase() === "complete" &&
-    coreStateComplete === true &&
-    physicalIdleEvidenceComplete;
-  const expiresAtMs = receivedAtMs + CFS_PRINTER_IDLE_OBSERVATION_TTL_MS;
+  const expiresAtMs = parseIsoEpochMs(observed.expiresAt);
   return {
-    status: snapshotCompleteness.toLowerCase() === "complete" && coreStateComplete === true ? "observed" : "partial",
-    activityState,
-    coreStateComplete,
-    physicalIdleEvidenceComplete,
-    snapshotCompleteness,
-    observedAt: receivedAt,
-    receivedAt,
-    expiresAt: new Date(expiresAtMs).toISOString(),
-    sessionId: lastState.source?.sessionId || shadowRecord.sessionId || null,
-    connectionGeneration: Number.isFinite(observedConnectionGeneration) ? observedConnectionGeneration : null,
-    baselineSequence: lastState.source?.sequence ?? shadowRecord.lastSequence ?? null,
-    lastAppliedSequence: lastState.source?.sequence ?? shadowRecord.lastSequence ?? null,
-    appliedDeltaCount: 0,
-    fresh: expiresAtMs > nowMs,
-    idle,
-    idleReason: print.idleReason || null,
-    physicalIdleConflictReasons: Array.isArray(print.physicalIdleConflictReasons)
-      ? [...print.physicalIdleConflictReasons]
-      : [],
+    ...observed,
+    fresh: observed.fresh === true && expiresAtMs !== null && expiresAtMs > nowMs,
   };
 }
 
@@ -766,6 +734,7 @@ function createCfsControlSendTimeContext(hostname, request) {
     shadowRecord,
     connectionGeneration
   );
+  const cfsPhysicalSafetyObservation = createCfsPhysicalSafetyObservationForCfsControl(shadowRecord);
   const capabilities = [
     "material.cfs",
     "material.cfsTopology",
@@ -783,6 +752,7 @@ function createCfsControlSendTimeContext(hostname, request) {
     connectionGeneration,
     observedState: shadowRecord?.lastState || null,
     printerIdleObservation,
+    cfsPhysicalSafetyObservation,
     recoveryBlocker: createCfsControlRecoveryBlocker(request, {
       deviceId: shadowRecord?.deviceId || "",
     }),

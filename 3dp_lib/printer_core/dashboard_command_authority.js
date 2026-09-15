@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1669 (PR #442)
+ * @version 1.390.1674 (PR #442)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-09-09 10:29:00
+ * @lastModified 2026-09-15 11:47:43
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -329,6 +329,33 @@ function normalizeSequence(value) {
 }
 
 /**
+ * protocol観測値を有限numberへ正規化する。
+ *
+ * 【詳細説明】
+ * - feedStateとraw printer errorはsequenceとは異なり、数値文字列を含む有限値を受理する。
+ * - null、空文字、boolean、配列、object、NaN、Infinityは未観測としてnullへ倒す。
+ *
+ * @private
+ * @function normalizeFiniteProtocolNumber
+ * @param {*} value - protocol数値候補
+ * @returns {number|null} 正規化済み有限number、またはnull
+ */
+function normalizeFiniteProtocolNumber(value) {
+  if (
+    value === undefined ||
+    value === null ||
+    typeof value === "boolean" ||
+    Array.isArray(value) ||
+    (typeof value === "object" && value !== null) ||
+    (typeof value === "string" && value.trim() === "")
+  ) {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+/**
  * capability 候補を Set へ正規化する。
  *
  * 【詳細説明】
@@ -490,6 +517,20 @@ function createCommandDispatchContextSignature(context) {
       ),
       context.printerIdleObservation?.receivedAt || "",
       context.printerIdleObservation?.expiresAt || "",
+      context.cfsPhysicalSafetyObservation?.status || "",
+      context.cfsPhysicalSafetyObservation?.sessionId || "",
+      context.cfsPhysicalSafetyObservation?.connectionGeneration ?? "",
+      context.cfsPhysicalSafetyObservation?.baselineSequence ?? "",
+      context.cfsPhysicalSafetyObservation?.lastAppliedSequence ?? "",
+      context.cfsPhysicalSafetyObservation?.fresh === true ? "fresh" : "not-fresh",
+      context.cfsPhysicalSafetyObservation?.idle === true ? "idle" : "not-idle",
+      context.cfsPhysicalSafetyObservation?.feedStateObserved === true ? "feed-observed" : "feed-missing",
+      context.cfsPhysicalSafetyObservation?.feedState ?? "",
+      context.cfsPhysicalSafetyObservation?.printerErrorObserved === true ? "error-observed" : "error-missing",
+      context.cfsPhysicalSafetyObservation?.printerErrorCode ?? "",
+      context.cfsPhysicalSafetyObservation?.printerErrorKey ?? "",
+      context.cfsPhysicalSafetyObservation?.errorClear === true ? "error-clear" : "error-not-clear",
+      context.cfsPhysicalSafetyObservation?.expiresAt || "",
       context.createdAt || "",
       context.issuedAtMs ?? "",
       context.expiresAtMs ?? "",
@@ -666,6 +707,7 @@ export function createPrinterCommandRequest(options = {}) {
  * @param {number=} options.connectionGeneration - 現在接続中のgeneration
  * @param {object=} options.observedState - 送信前のNormalizedState
  * @param {object=} options.printerIdleObservation - CFS物理操作用printer idle観測証跡
+ * @param {object=} options.cfsPhysicalSafetyObservation - CFS物理操作用idle/feed/error統合証跡
  * @param {string=} options.createdAt - context生成時刻ISO文字列
  * @param {number=} options.issuedAtMs - context発行epoch ms
  * @param {number=} options.expiresAtMs - context失効epoch ms
@@ -726,6 +768,7 @@ function createPrinterCommandDispatchContext(options = {}) {
     connectionGeneration: normalizeSequence(options.connectionGeneration),
     observedState: cloneJsonValue(options.observedState || null),
     printerIdleObservation: normalizePrinterIdleObservation(options.printerIdleObservation),
+    cfsPhysicalSafetyObservation: normalizeCfsPhysicalSafetyObservation(options.cfsPhysicalSafetyObservation),
     createdAt: options.createdAt || null,
     issuedAtMs: Number.isFinite(Number(options.issuedAtMs)) ? Number(options.issuedAtMs) : null,
     expiresAtMs: Number.isFinite(Number(options.expiresAtMs)) ? Number(options.expiresAtMs) : null,
@@ -776,6 +819,47 @@ function normalizePrinterIdleObservation(observation) {
       : null,
     fresh: typeof observation.fresh === "boolean" ? observation.fresh : null,
     idle: typeof observation.idle === "boolean" ? observation.idle : null,
+  };
+}
+
+/**
+ * CFS物理操作用idle/feed/error統合証跡を正規化する。
+ *
+ * 【詳細説明】
+ * - live shadowが同一status frameへ束縛した値だけをdispatch contextへ取り込み、署名対象にする。
+ * - raw値欠損をfalseや0へ補完せず、観測済みflagと正規化値を分離してfail-closed判定へ渡す。
+ *
+ * @private
+ * @function normalizeCfsPhysicalSafetyObservation
+ * @param {object|null|undefined} observation - 統合安全証跡候補
+ * @returns {object|null} 正規化済み統合安全証跡
+ */
+function normalizeCfsPhysicalSafetyObservation(observation) {
+  if (!observation || typeof observation !== "object") {
+    return null;
+  }
+  return {
+    status: String(observation.status || "").trim() || "unknown",
+    activityState: String(observation.activityState || "").trim() || "unknown",
+    coreStateComplete: observation.coreStateComplete === true,
+    physicalIdleEvidenceComplete: observation.physicalIdleEvidenceComplete === true,
+    snapshotCompleteness: String(observation.snapshotCompleteness || "").trim() || "unknown",
+    observedAt: String(observation.observedAt || "").trim() || null,
+    receivedAt: String(observation.receivedAt || "").trim() || null,
+    expiresAt: String(observation.expiresAt || "").trim() || null,
+    sessionId: String(observation.sessionId || "").trim() || null,
+    connectionGeneration: normalizeSequence(observation.connectionGeneration),
+    baselineSequence: normalizeSequence(observation.baselineSequence),
+    lastAppliedSequence: normalizeSequence(observation.lastAppliedSequence),
+    appliedDeltaCount: normalizeSequence(observation.appliedDeltaCount),
+    fresh: observation.fresh === true,
+    idle: observation.idle === true,
+    feedStateObserved: observation.feedStateObserved === true,
+    feedState: normalizeFiniteProtocolNumber(observation.feedState),
+    printerErrorObserved: observation.printerErrorObserved === true,
+    printerErrorCode: normalizeFiniteProtocolNumber(observation.printerErrorCode),
+    printerErrorKey: normalizeFiniteProtocolNumber(observation.printerErrorKey),
+    errorClear: observation.errorClear === true,
   };
 }
 
@@ -1097,73 +1181,12 @@ function collectPrinterActivityLabels(observedState) {
 }
 
 /**
- * CFS物理操作前に安全なidle状態が明示観測されているかを判定する。
- *
- * 【詳細説明】
- * - `completed` や未知stateは「busyではない」だけであり、CFS slot操作可能なidle証跡としては扱わない。
- * - K2 firmware semanticsが実機certificationで固定されるまでは、明示的なidle/ready/standbyのみを許す。
- *
- * @private
- * @function hasExplicitSafeCfsIdleLabel
- * @param {Set<string>} activityLabels - 小文字化済み状態ラベル集合
- * @returns {boolean} 安全なidle証跡がある場合true
- */
-function hasExplicitSafeCfsIdleLabel(activityLabels) {
-  return ["idle", "ready", "standby"].some((label) => activityLabels.has(label));
-}
-
-/**
- * CFS物理操作前のprinter idle観測が完全かを判定する。
- *
- * 【詳細説明】
- * - `idle` ラベルが前回snapshotから残っていても、今回のsend-time観測がpartialやdelta-onlyであれば
- *   物理操作可能なidle証明には使わない。
- * - 明示的な不完全メタが無い既存contextは後方互換として許可し、Gate 19のprobeが渡す
- *   `snapshotCompleteness` / `activityState` / `coreStateComplete` を見つけた場合だけ厳格化する。
- *
- * @private
- * @function hasIncompleteCfsPrinterIdleObservation
- * @param {object|null|undefined} observedState - send-time observed state
- * @returns {boolean} idle観測が不完全と明示されている場合true
- */
-function hasIncompleteCfsPrinterIdleObservation(observedState) {
-  if (!observedState || typeof observedState !== "object") {
-    return false;
-  }
-  const completenessCandidates = [
-    getPathValue(observedState, "source.snapshotCompleteness"),
-    getPathValue(observedState, "source.completeness"),
-    getPathValue(observedState, "print.snapshotCompleteness"),
-    getPathValue(observedState, "print.completeness"),
-    getPathValue(observedState, "status.snapshotCompleteness"),
-    getPathValue(observedState, "status.completeness"),
-  ].map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean);
-  if (completenessCandidates.includes("partial")) {
-    return true;
-  }
-  const activityCandidates = [
-    getPathValue(observedState, "print.activityState"),
-    getPathValue(observedState, "device.activityState"),
-    getPathValue(observedState, "status.activityState"),
-  ].map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean);
-  if (activityCandidates.includes("unknown-core-state") || activityCandidates.includes("active-without-core-state")) {
-    return true;
-  }
-  return [
-    getPathValue(observedState, "print.coreStateComplete"),
-    getPathValue(observedState, "device.coreStateComplete"),
-    getPathValue(observedState, "status.coreStateComplete"),
-    getPathValue(observedState, "source.coreStateComplete"),
-  ].some((value) => value === false);
-}
-
-/**
  * CFS物理操作前のprinter idle専用証跡エラーを収集する。
  *
  * 【詳細説明】
  * - dispatch context自体のTTLは「contextがいつ作られたか」だけを保証するため、
  *   その中身であるprinter status観測には別のTTLとsession/generation照合を要求する。
- * - `printerIdleObservation` が無い既存経路は後方互換として従来のobservedState判定へ委ねる。
+ * - CFS物理操作では統合安全証跡を別途必須化し、この専用証跡は診断互換の追加検査として扱う。
  *
  * @private
  * @function collectPrinterIdleObservationErrors
@@ -1218,6 +1241,95 @@ function collectPrinterIdleObservationErrors(request, context) {
 }
 
 /**
+ * CFS物理操作用の統合安全証跡エラーを収集する。
+ *
+ * 【詳細説明】
+ * - printer idle、feedState、raw printer errorが同じK2 status受信sequenceへ束縛された証跡だけを受理する。
+ * - session、connection generation、state sequence、TTLのいずれかが欠ける場合は、古い安全値を推定せず拒否する。
+ * - protocol上の安全値は実機認証済みscopeに合わせ、`feedState===0`かつ`errcode===0 && key===0`へ限定する。
+ *
+ * @private
+ * @function collectCfsPhysicalSafetyObservationErrors
+ * @param {object} request - command request
+ * @param {object} context - dispatch context
+ * @returns {string[]} 検査エラー
+ */
+function collectCfsPhysicalSafetyObservationErrors(request, context) {
+  const observation = context?.cfsPhysicalSafetyObservation;
+  if (!observation || typeof observation !== "object") {
+    return ["cfs-control-physical-safety-observation-missing"];
+  }
+  const errors = [];
+  const status = String(observation.status || "").trim().toLowerCase();
+  const activityState = String(observation.activityState || "").trim().toLowerCase();
+  const completeness = String(observation.snapshotCompleteness || "").trim().toLowerCase();
+  if (
+    !["observed", "assembled"].includes(status) ||
+    completeness !== "complete" ||
+    observation.coreStateComplete !== true ||
+    observation.physicalIdleEvidenceComplete !== true ||
+    ["unknown-core-state", "active-without-core-state"].includes(activityState)
+  ) {
+    errors.push("cfs-control-physical-safety-observation-incomplete");
+  }
+  if (activityState === "active" || observation.idle !== true) {
+    errors.push("cfs-control-printer-busy");
+    errors.push("cfs-control-printer-idle-not-confirmed");
+  }
+
+  const referenceMs = Number.isFinite(Number(context.issuedAtMs)) ? Number(context.issuedAtMs) : Date.now();
+  const expiresAtMs = Date.parse(observation.expiresAt || "");
+  if (observation.fresh !== true || !Number.isFinite(expiresAtMs) || expiresAtMs <= referenceMs) {
+    errors.push("cfs-control-physical-safety-observation-stale");
+  }
+
+  if (!observation.sessionId) {
+    errors.push("cfs-control-physical-safety-session-missing");
+  } else if (observation.sessionId !== context.sessionId || observation.sessionId !== request.sessionId) {
+    errors.push("cfs-control-physical-safety-session-mismatch");
+  }
+  if (observation.connectionGeneration === null) {
+    errors.push("cfs-control-physical-safety-generation-missing");
+  } else if (
+    context.connectionGeneration === null ||
+    observation.connectionGeneration !== context.connectionGeneration
+  ) {
+    errors.push("cfs-control-physical-safety-generation-mismatch");
+  }
+
+  const contextSequence = normalizeSequence(context.stateSequence);
+  if (
+    observation.baselineSequence === null ||
+    observation.lastAppliedSequence === null ||
+    contextSequence === null ||
+    observation.lastAppliedSequence !== contextSequence ||
+    observation.baselineSequence > observation.lastAppliedSequence
+  ) {
+    errors.push("cfs-control-physical-safety-sequence-missing-or-stale");
+  }
+
+  if (observation.feedStateObserved !== true || observation.feedState === null) {
+    errors.push("cfs-control-feed-state-observation-incomplete");
+  } else if (observation.feedState !== 0) {
+    errors.push("cfs-control-feed-state-not-idle");
+  }
+  if (
+    observation.printerErrorObserved !== true ||
+    observation.printerErrorCode === null ||
+    observation.printerErrorKey === null
+  ) {
+    errors.push("cfs-control-printer-error-observation-incomplete");
+  } else if (
+    observation.printerErrorCode !== 0 ||
+    observation.printerErrorKey !== 0 ||
+    observation.errorClear !== true
+  ) {
+    errors.push("cfs-control-printer-error-active");
+  }
+  return [...new Set(errors)];
+}
+
+/**
  * CFS物理操作対象として選択証跡を要求するsourceか判定する。
  *
  * 【詳細説明】
@@ -1255,14 +1367,8 @@ function collectCfsSendTimeErrors(request, context) {
   }
   if (context.printerIdleObservation && typeof context.printerIdleObservation === "object") {
     errors.push(...collectPrinterIdleObservationErrors(request, context));
-  } else {
-    if (hasIncompleteCfsPrinterIdleObservation(context.observedState)) {
-      errors.push("cfs-control-printer-idle-observation-incomplete");
-    }
-    if (!hasExplicitSafeCfsIdleLabel(activityLabels)) {
-      errors.push("cfs-control-printer-idle-not-confirmed");
-    }
   }
+  errors.push(...collectCfsPhysicalSafetyObservationErrors(request, context));
   if (context.recoveryBlocker?.blocked === true) {
     const reason = String(context.recoveryBlocker.reason || "blocked").trim() || "blocked";
     errors.push(`cfs-recovery-blocked:${reason}`);
@@ -1305,13 +1411,24 @@ function collectCfsSendTimeErrors(request, context) {
       selectedSources.push(source);
     }
   }
-  if (currentSource.selected !== true) {
-    errors.push("cfs-target-source-not-selected");
-  }
-  if (selectedSources.length !== 1) {
-    errors.push("cfs-selected-source-not-unique");
-  } else if (selectedSources[0].sourceId !== targetSourceId) {
-    errors.push(`cfs-selected-source-mismatch:${selectedSources[0].sourceId}`);
+  const commandKind = String(request.commandKind || "").trim();
+  if (commandKind === "cfs-load") {
+    if (selectedSources.length !== 0) {
+      errors.push("cfs-load-selected-source-present");
+    }
+  } else if (commandKind === "cfs-unload") {
+    if (selectedSources.length !== 1 || selectedSources[0]?.sourceId !== targetSourceId) {
+      errors.push("cfs-unload-target-not-uniquely-selected");
+    }
+  } else {
+    if (currentSource.selected !== true) {
+      errors.push("cfs-target-source-not-selected");
+    }
+    if (selectedSources.length !== 1) {
+      errors.push("cfs-selected-source-not-unique");
+    } else if (selectedSources[0].sourceId !== targetSourceId) {
+      errors.push(`cfs-selected-source-mismatch:${selectedSources[0].sourceId}`);
+    }
   }
   const requestBoxId = normalizeSequence(request.payload?.boxId);
   if (requestBoxId !== null && currentSource.boxId !== null && requestBoxId !== currentSource.boxId) {

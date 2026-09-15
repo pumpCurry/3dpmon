@@ -5,9 +5,9 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1452 (PR #435)
+ * @version 1.390.1674 (PR #442)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-08-28 14:28:57
+ * @lastModified 2026-09-15 11:47:43
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ import {
   createImmutableK2CfsSlotControlCertificationRegistry,
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
+  validateK2CfsSlotControlCertificationEvidence,
 } from "../../3dp_lib/printer_core/dashboard_k2_cfs_command_transport.js";
 
 /**
@@ -41,9 +42,64 @@ function createCertifiedCfsEvidence(overrides = {}) {
     printerType: "creality-k2",
     model: "F012",
     firmwareVersion: "1.0.0",
+    attachment: "CFS",
+    scope: {
+      cfsUnitCount: 1,
+      certifiedSources: [
+        { sourceId: "cfs:1:slot:0", boxId: 1, slotId: 0, displayLabel: "1A" },
+        { sourceId: "cfs:1:slot:1", boxId: 1, slotId: 1, displayLabel: "1B" },
+      ],
+      untestedSources: ["cfs:1:slot:2"],
+      physicallyExcludedSources: ["cfs:1:slot:3", "external"],
+    },
+    commandPolicies: {
+      "cfs-load": {
+        requiredSelectedSources: [],
+        targetPresence: "loaded",
+        terminalSelectedSource: "target",
+      },
+      "cfs-unload": {
+        requiredSelectedSource: "target",
+        selectedMustBeUnique: true,
+        targetPresence: "loaded",
+        terminalSelectedSources: [],
+      },
+    },
+    safety: {
+      printerIdleRequired: true,
+      feedStateIdleRequired: true,
+      printerErrorClearRequired: true,
+      blindRetryAllowed: false,
+      singleFlightRequired: true,
+    },
     fixtureId: "k2-f012-feed-in-or-out-20260828",
     captureId: "capture:k2-f012-cfs-load-1c-20260828",
     certifiedAt: "2026-08-28T12:00:00.000+09:00",
+    ...overrides,
+  };
+}
+
+/**
+ * Gate 19 initial production scopeを生成する。
+ *
+ * 【詳細説明】
+ * - F012 firmware 1.0.0、CFS 1台、box 1の1Aを現在操作対象とする厳密scopeを返す。
+ * - 各counter-caseでは必要なfieldだけを上書きし、認証境界の原因を一つずつ検証する。
+ *
+ * @function createCertifiedCfsScope
+ * @param {object=} overrides - scope override
+ * @returns {object} certification validatorへ渡す現在scope
+ */
+function createCertifiedCfsScope(overrides = {}) {
+  return {
+    printerType: "creality-k2",
+    model: "F012",
+    firmwareVersion: "1.0.0",
+    attachment: "CFS",
+    cfsUnitCount: 1,
+    sourceId: "cfs:1:slot:0",
+    boxId: 1,
+    slotId: 0,
     ...overrides,
   };
 }
@@ -283,11 +339,10 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     }, {
       certifiedCfsSlotControlCommands: ["cfs-load"],
       certificationEvidence: createCertifiedCfsEvidence(),
-      certificationScope: {
-        printerType: "creality-k2",
-        model: "F012",
-        firmwareVersion: "1.0.0",
-      },
+      certificationScope: createCertifiedCfsScope({
+        sourceId: "cfs:1:slot:0",
+        slotId: 0,
+      }),
     });
 
     expect(plan).toMatchObject({
@@ -345,6 +400,86 @@ describe("Printer Core v3 K2 CFS command transport", () => {
       "model-scope-missing-or-mismatch",
       "firmware-scope-missing-or-mismatch",
     ]));
+  });
+
+  it("production認証scopeはCFS 1台の1Aと1Bだけを許可する", () => {
+    const evidence = createCertifiedCfsEvidence({
+      commandKinds: ["cfs-load", "cfs-unload"],
+    });
+
+    expect(validateK2CfsSlotControlCertificationEvidence(
+      evidence,
+      "cfs-load",
+      createCertifiedCfsScope()
+    )).toEqual({ ok: true, errors: [] });
+    expect(validateK2CfsSlotControlCertificationEvidence(
+      evidence,
+      "cfs-unload",
+      createCertifiedCfsScope({ sourceId: "cfs:1:slot:1", slotId: 1 })
+    )).toEqual({ ok: true, errors: [] });
+
+    const untestedSource = validateK2CfsSlotControlCertificationEvidence(
+      evidence,
+      "cfs-load",
+      createCertifiedCfsScope({ sourceId: "cfs:1:slot:2", slotId: 2 })
+    );
+    expect(untestedSource.errors).toContain("source-scope-missing-or-mismatch");
+
+    const excludedSource = validateK2CfsSlotControlCertificationEvidence(
+      evidence,
+      "cfs-load",
+      createCertifiedCfsScope({ sourceId: "cfs:1:slot:3", slotId: 3 })
+    );
+    expect(excludedSource.errors).toContain("source-scope-missing-or-mismatch");
+  });
+
+  it("production認証scopeはattachmentとCFS台数を厳密照合する", () => {
+    const evidence = createCertifiedCfsEvidence();
+
+    const wrongAttachment = validateK2CfsSlotControlCertificationEvidence(
+      evidence,
+      "cfs-load",
+      createCertifiedCfsScope({ attachment: "CFS-C" })
+    );
+    expect(wrongAttachment.errors).toContain("attachment-scope-missing-or-mismatch");
+
+    const twoUnits = validateK2CfsSlotControlCertificationEvidence(
+      evidence,
+      "cfs-load",
+      createCertifiedCfsScope({ cfsUnitCount: 2 })
+    );
+    expect(twoUnits.errors).toContain("cfs-unit-count-scope-missing-or-mismatch");
+  });
+
+  it("production認証はcommand別precondition・terminal・safety policyを必須にする", () => {
+    const unsafeLoadPolicy = createCertifiedCfsEvidence({
+      commandPolicies: {
+        ...createCertifiedCfsEvidence().commandPolicies,
+        "cfs-load": {
+          requiredSelectedSource: "target",
+          targetPresence: "loaded",
+          terminalSelectedSource: "target",
+        },
+      },
+    });
+    const unsafeSafety = createCertifiedCfsEvidence({
+      safety: {
+        ...createCertifiedCfsEvidence().safety,
+        blindRetryAllowed: true,
+        printerErrorClearRequired: false,
+      },
+    });
+
+    expect(validateK2CfsSlotControlCertificationEvidence(
+      unsafeLoadPolicy,
+      "cfs-load",
+      createCertifiedCfsScope()
+    ).errors).toContain("command-policy-missing-or-mismatch");
+    expect(validateK2CfsSlotControlCertificationEvidence(
+      unsafeSafety,
+      "cfs-load",
+      createCertifiedCfsScope()
+    ).errors).toContain("safety-policy-missing-or-mismatch");
   });
 
   it("certification registry factoryは将来追加するentryも再帰的にfreezeする", () => {

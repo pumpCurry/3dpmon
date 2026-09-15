@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1673 (PR #442)
+ * @version 1.390.1674 (PR #442)
  * @since   1.390.1673 (PR #442)
- * @lastModified 2026-09-09 17:12:52
+ * @lastModified 2026-09-15 11:47:43
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -82,6 +82,35 @@ describe("K2 CFS slot control live certification fixture", () => {
       firmwareVersion: "1.0.0",
       attachment: "CFS",
       transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+      scope: {
+        cfsUnitCount: 1,
+        certifiedSources: [
+          { sourceId: "cfs:1:slot:0", boxId: 1, slotId: 0, displayLabel: "1A" },
+          { sourceId: "cfs:1:slot:1", boxId: 1, slotId: 1, displayLabel: "1B" },
+        ],
+        untestedSources: ["cfs:1:slot:2"],
+        physicallyExcludedSources: ["cfs:1:slot:3", "external"],
+      },
+    });
+    expect(fixture.commandPolicies).toEqual({
+      "cfs-load": {
+        requiredSelectedSources: [],
+        targetPresence: "loaded",
+        terminalSelectedSource: "target",
+      },
+      "cfs-unload": {
+        requiredSelectedSource: "target",
+        selectedMustBeUnique: true,
+        targetPresence: "loaded",
+        terminalSelectedSources: [],
+      },
+    });
+    expect(fixture.safety).toMatchObject({
+      printerIdleRequired: true,
+      feedStateIdleRequired: true,
+      printerErrorClearRequired: true,
+      blindRetryAllowed: false,
+      singleFlightRequired: true,
     });
     expect(fixture.fixtureId).toBeTruthy();
     expect(fixture.captureId).toBeTruthy();
@@ -91,6 +120,11 @@ describe("K2 CFS slot control live certification fixture", () => {
         printerType: "creality-k2",
         model: "F012",
         firmwareVersion: "1.0.0",
+        attachment: "CFS",
+        cfsUnitCount: 1,
+        sourceId: "cfs:1:slot:0",
+        boxId: 1,
+        slotId: 0,
       })).toEqual({
         ok: true,
         errors: [],
@@ -144,7 +178,8 @@ describe("K2 CFS slot control live certification fixture", () => {
       purgeGenerated: true,
       repeatedCycleCompleted: true,
     });
-    expect(fixture.safety.excludedSources).toEqual(["cfs:1:slot:3", "external"]);
+    expect(fixture.scope.untestedSources).toEqual(["cfs:1:slot:2"]);
+    expect(fixture.scope.physicallyExcludedSources).toEqual(["cfs:1:slot:3", "external"]);
   });
 
   it("公開証跡へ実IP・MAC・hostnameを含めない", () => {

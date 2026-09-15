@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1670 (PR #442)
+ * @version 1.390.1674 (PR #442)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-09-09 11:16:25
+ * @lastModified 2026-09-15 11:47:43
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -601,6 +601,11 @@ describe("Printer Core v3 K1 live shadow", () => {
         targetBedTemp0: 0,
         printFileName: "/mnt/UDISK/printer_data/gcodes/bracket.stl_PLA_8m15s.gcode",
         printId: "6a936e4ab9e9df20004c5066",
+        feedState: 0,
+        err: {
+          errcode: 0,
+          key: 0,
+        },
       },
       receivedAt: "2026-09-09T10:02:04.276+09:00",
     });
@@ -620,6 +625,147 @@ describe("Printer Core v3 K1 live shadow", () => {
       connectionGeneration: 8,
       fresh: true,
       idle: true,
+    });
+    expect(record.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "observed",
+      activityState: "idle",
+      physicalIdleEvidenceComplete: true,
+      sessionId,
+      connectionGeneration: 8,
+      baselineSequence: 1,
+      lastAppliedSequence: 1,
+      fresh: true,
+      idle: true,
+      feedStateObserved: true,
+      feedState: 0,
+      printerErrorObserved: true,
+      printerErrorCode: 0,
+      printerErrorKey: 0,
+      errorClear: true,
+    });
+  });
+
+  it("K2 live shadowはfeedStateまたはraw errが欠損・非safeならCFS安全証跡を成立させない", () => {
+    const host = "K2Pro-Live-Cfs-Safety-Rejected";
+    const deviceId = "host:K2Pro-Live-Cfs-Safety-Rejected";
+    const sessionId = "k2-live:cfs-safety-rejected";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 18 });
+
+    const missingError = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 18,
+      frame: {
+        state: 0,
+        deviceState: 0,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        feedState: 0,
+      },
+      receivedAt: "2026-09-15T02:30:00.000Z",
+    });
+    expect(missingError.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "partial",
+      printerErrorObserved: false,
+      errorClear: false,
+    });
+
+    const busyFeed = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 18,
+      frame: {
+        state: 0,
+        deviceState: 0,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        feedState: 101,
+        err: { errcode: 0, key: 0 },
+      },
+      receivedAt: "2026-09-15T02:30:01.000Z",
+    });
+    expect(busyFeed.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "observed",
+      feedStateObserved: true,
+      feedState: 101,
+      errorClear: true,
+    });
+
+    const activeError = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 18,
+      frame: {
+        state: 0,
+        deviceState: 0,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        feedState: 0,
+        err: { errcode: 7, key: 2 },
+      },
+      receivedAt: "2026-09-15T02:30:02.000Z",
+    });
+    expect(activeError.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "observed",
+      printerErrorObserved: true,
+      printerErrorCode: 7,
+      printerErrorKey: 2,
+      errorClear: false,
+    });
+  });
+
+  it("K2 live shadowはraw errだけのdeltaでも直前の安全証跡を延命しない", () => {
+    const host = "K2Pro-Live-Cfs-Error-Only";
+    const deviceId = "host:K2Pro-Live-Cfs-Error-Only";
+    const sessionId = "k2-live:cfs-error-only";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 19 });
+
+    const baseline = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 19,
+      frame: {
+        state: 0,
+        deviceState: 0,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        feedState: 0,
+        err: { errcode: 0, key: 0 },
+      },
+      receivedAt: "2026-09-15T03:00:00.000Z",
+    });
+    expect(baseline.cfsPhysicalSafetyObservation.errorClear).toBe(true);
+
+    const errorOnly = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 19,
+      frame: {
+        err: { errcode: 9, key: 4 },
+      },
+      receivedAt: "2026-09-15T03:00:01.000Z",
+    });
+
+    expect(errorOnly.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "partial",
+      lastAppliedSequence: 2,
+      fresh: false,
+      feedStateObserved: false,
+      printerErrorObserved: true,
+      printerErrorCode: 9,
+      printerErrorKey: 4,
+      errorClear: false,
     });
   });
 
@@ -729,7 +875,8 @@ describe("Printer Core v3 K1 live shadow", () => {
       },
       receivedAt: "2026-09-09T10:02:04.276+09:00",
     });
-    const originalIdleObservation = structuredClone(baseline.printerIdleObservation);
+    const originalIdleObservation = globalThis.structuredClone(baseline.printerIdleObservation);
+    const originalCfsSafetyObservation = globalThis.structuredClone(baseline.cfsPhysicalSafetyObservation);
 
     const afterMaterialOnly = observeK2LiveShadowFrame({
       host,
@@ -751,6 +898,7 @@ describe("Printer Core v3 K1 live shadow", () => {
     });
 
     expect(afterMaterialOnly.printerIdleObservation).toEqual(originalIdleObservation);
+    expect(afterMaterialOnly.cfsPhysicalSafetyObservation).toEqual(originalCfsSafetyObservation);
   });
 
   it("K2 CFS topologyの観測時刻はboxsInfo実受信時だけ更新し通常statusでは延命しない", () => {

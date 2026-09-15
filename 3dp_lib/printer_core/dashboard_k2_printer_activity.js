@@ -17,12 +17,12 @@
  * - {@link mergeK2PrinterStatusScalarSnapshot}：観測済みscalarを累積snapshotへ反映
  * - {@link classifyK2PrinterActivity}：K2 statusのactivityとphysical idle証拠を分類
  *
- * @version 1.390.1670 (PR #442)
+ * @version 1.390.1674 (PR #442)
  * @since   1.390.1669 (PR #442)
- * @lastModified 2026-09-09 11:16:25
+ * @lastModified 2026-09-15 11:47:43
  * -----------------------------------------------------------
  * @todo
- * - Gate19実機certificationでfeedStateの意味が確定した場合は補助診断へ追加する
+ * - none
  */
 
 "use strict";
@@ -50,6 +50,7 @@ export const K2_PRINTER_STATUS_SCALAR_KEYS = Object.freeze([
   "printFileName",
   "fileName",
   "printId",
+  "feedState",
 ]);
 
 /**
@@ -203,6 +204,7 @@ export function classifyK2PrinterActivity(payload = {}) {
   const printLeftTime = toFiniteNumberOrNull(payload?.printLeftTime);
   const targetNozzleTemp = toFiniteNumberOrNull(payload?.targetNozzleTemp);
   const targetBedTemp0 = toFiniteNumberOrNull(payload?.targetBedTemp0);
+  const feedState = toFiniteNumberOrNull(payload?.feedState);
   const coreStateComplete = state !== null && deviceState !== null;
   const physicalIdleEvidenceComplete = K2_PHYSICAL_IDLE_REQUIRED_SCALAR_KEYS.every((key) => {
     return hasOwn(payload, key) && toFiniteNumberOrNull(payload[key]) !== null;
@@ -260,5 +262,6 @@ export function classifyK2PrinterActivity(payload = {}) {
     printLeftTime,
     targetNozzleTemp,
     targetBedTemp0,
+    feedState,
   };
 }

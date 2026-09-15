@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1674 (PR #442)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-09-02 01:07:00
+ * @lastModified 2026-09-15 12:03:51
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -237,6 +237,44 @@ function createFilamentPanelBody() {
     <button id="filament-list-btn" type="button"></button>
   `;
   return body;
+}
+
+/**
+ * production CFS commandを許可できる統合安全証跡fixtureを生成する。
+ *
+ * 【詳細説明】
+ * - printer idle、feedState、raw errorを同一session/generation/sequenceへ束縛したlive shadow出力を再現する。
+ * - overrideによりTTL切れや接続世代不一致のfail-closed testにも利用する。
+ *
+ * @function createCfsPhysicalSafetyObservation
+ * @param {object=} overrides - 証跡上書き値
+ * @returns {object} CFS物理操作用統合安全証跡fixture
+ */
+function createCfsPhysicalSafetyObservation(overrides = {}) {
+  return {
+    status: "observed",
+    activityState: "idle",
+    coreStateComplete: true,
+    physicalIdleEvidenceComplete: true,
+    snapshotCompleteness: "complete",
+    observedAt: "2026-09-15T03:00:00.000Z",
+    receivedAt: "2026-09-15T03:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    sessionId: "session:1",
+    connectionGeneration: 7,
+    baselineSequence: 10,
+    lastAppliedSequence: 10,
+    appliedDeltaCount: 0,
+    fresh: true,
+    idle: true,
+    feedStateObserved: true,
+    feedState: 0,
+    printerErrorObserved: true,
+    printerErrorCode: 0,
+    printerErrorKey: 0,
+    errorClear: true,
+    ...overrides,
+  };
 }
 
 const activePanelRecords = [];
@@ -1393,6 +1431,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       deviceId: "serial:demo",
       sessionId: "session:1",
       lastSequence: 10,
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation(),
       lastState: {
         source: {
           sequence: 10,
@@ -1412,11 +1451,11 @@ describe("dashboard_panel_init CFS control hook", () => {
               boxId: 1,
               protocolSlotId: 2,
               presence: "loaded",
-              selected: true,
+              selected: false,
               status: {
                 presence: "loaded",
                 stateCode: 1,
-                selectionState: "selected",
+                selectionState: "unselected",
                 selectionValid: true,
               },
               material: {
@@ -1573,6 +1612,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       deviceId: "serial:demo",
       sessionId: "session:1",
       lastSequence: 10,
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation(),
       lastState: {
         print: {
           stateLabel: "idle",
@@ -1588,11 +1628,11 @@ describe("dashboard_panel_init CFS control hook", () => {
             boxId: 1,
             protocolSlotId: 2,
             presence: "loaded",
-            selected: true,
+            selected: false,
             status: {
               presence: "loaded",
               stateCode: 1,
-              selectionState: "selected",
+              selectionState: "unselected",
               selectionValid: true,
             },
           }],
@@ -1794,7 +1834,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       coreStateComplete: false,
     });
     expect(result.status).toBe("rejected");
-    expect(result.error.errors).toContain("cfs-control-printer-idle-observation-incomplete");
+    expect(result.error.errors).toContain("cfs-control-physical-safety-observation-missing");
     expect(mockState.createK2CfsCommandTransportPlan).not.toHaveBeenCalled();
     expect(mockState.sendK2CfsCommandTransportPlan).not.toHaveBeenCalled();
   });
@@ -1844,6 +1884,12 @@ describe("dashboard_panel_init CFS control hook", () => {
       connectionGeneration: 7,
       lastSequence: 10,
       lastObservedAt: "2026-09-02T01:06:00.000+09:00",
+      printerIdleObservation: createCfsPhysicalSafetyObservation({
+        expiresAt: "2026-09-02T01:06:05.000+09:00",
+      }),
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation({
+        expiresAt: "2026-09-02T01:06:05.000+09:00",
+      }),
       lastState: {
         source: {
           sessionId: "session:1",
@@ -1969,6 +2015,14 @@ describe("dashboard_panel_init CFS control hook", () => {
       connectionGeneration: 6,
       lastSequence: 10,
       lastObservedAt: "2026-09-02T01:07:09.000+09:00",
+      printerIdleObservation: createCfsPhysicalSafetyObservation({
+        connectionGeneration: 6,
+        expiresAt: "2026-09-02T01:07:15.000+09:00",
+      }),
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation({
+        connectionGeneration: 6,
+        expiresAt: "2026-09-02T01:07:15.000+09:00",
+      }),
       lastState: {
         source: {
           sessionId: "session:1",
@@ -2090,6 +2144,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       deviceId: "serial:demo",
       sessionId: "session:1",
       lastSequence: 10,
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation(),
       lastState: {
         print: {
           stateLabel: "idle",
@@ -2105,11 +2160,11 @@ describe("dashboard_panel_init CFS control hook", () => {
             boxId: 1,
             protocolSlotId: 2,
             presence: "loaded",
-            selected: true,
+            selected: false,
             status: {
               presence: "loaded",
               stateCode: 1,
-              selectionState: "selected",
+              selectionState: "unselected",
               selectionValid: true,
             },
           }],
