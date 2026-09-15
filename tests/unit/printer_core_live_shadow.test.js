@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1674 (PR #442)
+ * @version 1.390.1676 (PR #442)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-09-15 11:47:43
+ * @lastModified 2026-09-15 13:07:22
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -935,6 +935,7 @@ describe("Printer Core v3 K1 live shadow", () => {
     });
 
     expect(materialRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
+    expect(materialRecord.materialProviderLastSequence).toBe(materialRecord.lastSequence);
     expect(materialRecord.lastState.materials.provider.lastObservedAt).toBe("2026-08-07T08:15:04.000Z");
 
     const statusRecord = observeK2LiveShadowFrame({
@@ -950,6 +951,8 @@ describe("Printer Core v3 K1 live shadow", () => {
 
     expect(statusRecord.lastObservedAt).toBe("2026-08-07T08:16:04.000Z");
     expect(statusRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
+    expect(statusRecord.materialProviderLastSequence).toBe(materialRecord.materialProviderLastSequence);
+    expect(statusRecord.lastSequence).toBeGreaterThan(statusRecord.materialProviderLastSequence);
     expect(statusRecord.lastState.materials.provider.lastObservedAt).toBe("2026-08-07T08:15:04.000Z");
     expect(statusRecord.lastState.materials.sources[0].material.name).toBe("Silver PLA");
   });

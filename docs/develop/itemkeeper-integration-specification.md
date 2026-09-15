@@ -1,5 +1,9 @@
 # 3dpmon ItemKeeper 連携仕様書（印刷履歴プッシュ）— Phase 1 実装仕様
 
+> 複数MaterialSource、SpoolMount、RFID、source別使用量のversioned同期については、
+> [ItemKeeper v2 Multi-Source Sync Contract](itemkeeper-v2-multi-source-sync-contract.md) を参照。
+> 本文のunversioned endpointはv1 compatibility aliasとしてdeprecated予定である。
+
 3dpmon が保持する**印刷履歴**を、**印刷開始・完了（失敗）時**に **ItemKeeper (ik2) の受け口へ認証付き HTTP POST** する、
 **ItemKeeper 専用連携**の実装仕様（3dpmon 側 = 送信側の実装対象）。
 

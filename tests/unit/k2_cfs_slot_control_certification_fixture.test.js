@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1674 (PR #442)
+ * @version 1.390.1676 (PR #442)
  * @since   1.390.1673 (PR #442)
- * @lastModified 2026-09-15 11:47:43
+ * @lastModified 2026-09-15 13:11:08
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -84,6 +84,10 @@ describe("K2 CFS slot control live certification fixture", () => {
       transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
       scope: {
         cfsUnitCount: 1,
+        certifiedBoxIds: [1],
+        expectedSlotIdsByBox: {
+          1: [0, 1, 2, 3],
+        },
         certifiedSources: [
           { sourceId: "cfs:1:slot:0", boxId: 1, slotId: 0, displayLabel: "1A" },
           { sourceId: "cfs:1:slot:1", boxId: 1, slotId: 1, displayLabel: "1B" },
@@ -122,6 +126,11 @@ describe("K2 CFS slot control live certification fixture", () => {
         firmwareVersion: "1.0.0",
         attachment: "CFS",
         cfsUnitCount: 1,
+        actualCfsUnitCount: 1,
+        actualCfsBoxIds: [1],
+        actualSlotIdsByBox: {
+          1: [0, 1, 2, 3],
+        },
         sourceId: "cfs:1:slot:0",
         boxId: 1,
         slotId: 0,

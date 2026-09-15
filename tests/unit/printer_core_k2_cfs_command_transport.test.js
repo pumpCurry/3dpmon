@@ -5,21 +5,26 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1674 (PR #442)
+ * @version 1.390.1676 (PR #442)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-09-15 11:47:43
+ * @lastModified 2026-09-15 13:07:22
  */
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   K2_CFS_PRINT_START_TRANSPORT_PROFILE,
   K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
   K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE,
+  K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY,
   createImmutableK2CfsSlotControlCertificationRegistry,
   createK2CfsCommandTransportPlan,
+  resolveRegisteredK2CfsSlotControlCertificationEvidence,
   sendK2CfsCommandTransportPlan,
   validateK2CfsSlotControlCertificationEvidence,
 } from "../../3dp_lib/printer_core/dashboard_k2_cfs_command_transport.js";
+import { stableStringifyPrinterCoreV3Value } from "../../3dp_lib/printer_core/dashboard_data_schema_v3.js";
 
 /**
  * Gate 19 production CFS slot control 用の実機certification evidenceを生成する。
@@ -45,6 +50,10 @@ function createCertifiedCfsEvidence(overrides = {}) {
     attachment: "CFS",
     scope: {
       cfsUnitCount: 1,
+      certifiedBoxIds: [1],
+      expectedSlotIdsByBox: {
+        1: [0, 1, 2, 3],
+      },
       certifiedSources: [
         { sourceId: "cfs:1:slot:0", boxId: 1, slotId: 0, displayLabel: "1A" },
         { sourceId: "cfs:1:slot:1", boxId: 1, slotId: 1, displayLabel: "1B" },
@@ -100,7 +109,40 @@ function createCertifiedCfsScope(overrides = {}) {
     sourceId: "cfs:1:slot:0",
     boxId: 1,
     slotId: 0,
+    actualCfsUnitCount: 1,
+    actualCfsBoxIds: [1],
+    actualSlotIdsByBox: {
+      1: [0, 1, 2, 3],
+    },
     ...overrides,
+  };
+}
+
+/**
+ * certification entryからruntime policy digest対象だけを抽出する。
+ *
+ * 【詳細説明】
+ * - fixtureそのもののdigestとは別に、productionで許可するcommand、機種、transport、CFS scope、
+ *   command precondition、safety条件を一つのcanonical payloadへ固定する。
+ * - review metadataや観測日時はruntime authorityを変更しないため対象外とし、権限を変えるfieldだけを含める。
+ *
+ * @function createCfsRuntimePolicyDigestPayload
+ * @param {object} evidence - module-owned certification entry
+ * @returns {object} canonical runtime policy digest対象
+ */
+function createCfsRuntimePolicyDigestPayload(evidence) {
+  return {
+    schemaVersion: evidence?.schemaVersion,
+    certificationId: evidence?.certificationId,
+    commandKinds: evidence?.commandKinds,
+    printerType: evidence?.printerType,
+    model: evidence?.model,
+    firmwareVersion: evidence?.firmwareVersion,
+    attachment: evidence?.attachment,
+    transportProfile: evidence?.transportProfile,
+    scope: evidence?.scope,
+    commandPolicies: evidence?.commandPolicies,
+    safety: evidence?.safety,
   };
 }
 
@@ -347,13 +389,127 @@ describe("Printer Core v3 K2 CFS command transport", () => {
 
     expect(plan).toMatchObject({
       ok: false,
-      reason: "invalid-cfs-slot-certification-evidence",
+      reason: "uncertified-cfs-slot-command",
       details: {
         commandKind: "cfs-load",
       },
     });
-    expect(plan.details.errors).toContain("certification-evidence-not-registered");
     expect(plan.frames).toEqual([]);
+  });
+
+  it("module-owned registryは実機認証済みF012 1A/1B load/unload証跡だけをID解決する", () => {
+    expect(K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY).toHaveLength(1);
+    const evidence = K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY[0];
+
+    expect(Object.isFrozen(evidence)).toBe(true);
+    expect(evidence).toMatchObject({
+      certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
+      fixtureId: "k2-pro-cfs-f012-slot-control-live-20260909",
+      captureId: "capture_f012_cfs_slot_control_live_20260909_a",
+      commandKinds: ["cfs-load", "cfs-unload"],
+      model: "F012",
+      firmwareVersion: "1.0.0",
+      attachment: "CFS",
+      scope: {
+        cfsUnitCount: 1,
+        certifiedSources: [
+          { sourceId: "cfs:1:slot:0", boxId: 1, slotId: 0, displayLabel: "1A" },
+          { sourceId: "cfs:1:slot:1", boxId: 1, slotId: 1, displayLabel: "1B" },
+        ],
+      },
+      review: {
+        fixtureSha256: "sha256:fee414a5b4e04bd0dfb7723f41a03de331d13f500c7a7ec06498bcfbf39732eb",
+      },
+    });
+    expect(resolveRegisteredK2CfsSlotControlCertificationEvidence(evidence.certificationId)).toBe(evidence);
+    expect(resolveRegisteredK2CfsSlotControlCertificationEvidence("unknown-certification")).toBeNull();
+    expect(resolveRegisteredK2CfsSlotControlCertificationEvidence("")).toBeNull();
+  });
+
+  it("registry登録済み証跡とexact scopeでは1A/1B load/unloadだけproduction planを生成する", () => {
+    const evidence = K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY[0];
+    const certificationId = evidence.certificationId;
+    const loadPlan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-load",
+      payload: { sourceId: "cfs:1:slot:0" },
+    }, {
+      certificationId,
+      certificationScope: createCertifiedCfsScope(),
+    });
+    const unloadPlan = createK2CfsCommandTransportPlan({
+      commandKind: "cfs-unload",
+      payload: { sourceId: "cfs:1:slot:1" },
+    }, {
+      certificationId,
+      certificationScope: createCertifiedCfsScope({ sourceId: "cfs:1:slot:1", slotId: 1 }),
+    });
+
+    expect(loadPlan).toMatchObject({
+      ok: true,
+      profile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+      certificationOnly: false,
+      details: {
+        commandKind: "cfs-load",
+        sourceId: "cfs:1:slot:0",
+        boxId: 1,
+        materialId: 0,
+        productionEnabled: true,
+      },
+    });
+    expect(loadPlan.frames).toEqual([{
+      method: "set",
+      params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } },
+    }]);
+    expect(unloadPlan).toMatchObject({
+      ok: true,
+      profile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+      certificationOnly: false,
+      details: {
+        commandKind: "cfs-unload",
+        sourceId: "cfs:1:slot:1",
+        boxId: 1,
+        materialId: 1,
+        productionEnabled: true,
+      },
+    });
+    expect(unloadPlan.frames).toEqual([{
+      method: "set",
+      params: { feedInOrOut: { boxId: 1, materialId: 1, isFeed: 0 } },
+    }]);
+  });
+
+  it("registry登録後も1C・別firmware・未認証actionはproductionへ昇格しない", () => {
+    const certificationId = K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY[0].certificationId;
+    const createPlan = (commandKind, sourceId, scope) => createK2CfsCommandTransportPlan({
+      commandKind,
+      payload: { sourceId },
+    }, {
+      certificationId,
+      certificationScope: scope,
+    });
+
+    const untestedSource = createPlan(
+      "cfs-load",
+      "cfs:1:slot:2",
+      createCertifiedCfsScope({ sourceId: "cfs:1:slot:2", slotId: 2 })
+    );
+    const wrongFirmware = createPlan(
+      "cfs-load",
+      "cfs:1:slot:0",
+      createCertifiedCfsScope({ firmwareVersion: "1.0.1" })
+    );
+    const unapprovedAction = createPlan(
+      "cfs-slot-select",
+      "cfs:1:slot:0",
+      createCertifiedCfsScope()
+    );
+
+    expect(untestedSource).toMatchObject({ ok: false, reason: "invalid-cfs-slot-certification-evidence" });
+    expect(untestedSource.details.errors).toContain("source-scope-missing-or-mismatch");
+    expect(wrongFirmware).toMatchObject({ ok: false, reason: "invalid-cfs-slot-certification-evidence" });
+    expect(wrongFirmware.details.errors).toContain("firmware-scope-missing-or-mismatch");
+    expect(unapprovedAction).toMatchObject({ ok: false, reason: "invalid-cfs-slot-certification-evidence" });
+    expect(unapprovedAction.details.errors).toContain("command-kind-not-certified");
   });
 
   it("factoryが返すtransport planは生成後にframeやdetailsを書き換えられない", () => {
@@ -385,8 +541,7 @@ describe("Printer Core v3 K2 CFS command transport", () => {
         sourceId: "cfs:1:slot:2",
       },
     }, {
-      certifiedCfsSlotControlCommands: ["cfs-load"],
-      certificationEvidence: createCertifiedCfsEvidence(),
+      certificationId: K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY[0].certificationId,
       certificationScope: {
         printerType: "creality-k2",
       },
@@ -485,6 +640,7 @@ describe("Printer Core v3 K2 CFS command transport", () => {
   it("certification registry factoryは将来追加するentryも再帰的にfreezeする", () => {
     const registry = createImmutableK2CfsSlotControlCertificationRegistry([
       createCertifiedCfsEvidence({
+        certificationId: "future-certified-entry",
         commandKinds: ["cfs-load", "cfs-unload"],
         review: {
           reviewer: "gate10-live",
@@ -503,6 +659,78 @@ describe("Printer Core v3 K2 CFS command transport", () => {
     }).toThrow(TypeError);
   });
 
+  it("certification registry factoryは重複certificationIdを初期化時に拒否する", () => {
+    const duplicateId = "duplicate-certification-id";
+
+    expect(() => createImmutableK2CfsSlotControlCertificationRegistry([
+      createCertifiedCfsEvidence({ certificationId: duplicateId }),
+      createCertifiedCfsEvidence({ certificationId: duplicateId }),
+    ])).toThrow(/duplicate-certification-id/);
+  });
+
+  it("production認証は実観測トポロジーがCFS 1台・box 1・slot 0から3のexact構成だけ許可する", () => {
+    const evidence = K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY[0];
+    const secondUnit = validateK2CfsSlotControlCertificationEvidence(
+      evidence,
+      "cfs-load",
+      createCertifiedCfsScope({
+        actualCfsUnitCount: 2,
+        actualCfsBoxIds: [1, 2],
+        actualSlotIdsByBox: {
+          1: [0, 1, 2, 3],
+          2: [0, 1, 2, 3],
+        },
+      })
+    );
+    const missingSlot = validateK2CfsSlotControlCertificationEvidence(
+      evidence,
+      "cfs-load",
+      createCertifiedCfsScope({
+        actualSlotIdsByBox: {
+          1: [0, 1, 2],
+        },
+      })
+    );
+    const wrongBox = validateK2CfsSlotControlCertificationEvidence(
+      evidence,
+      "cfs-load",
+      createCertifiedCfsScope({
+        actualCfsBoxIds: [3],
+        actualSlotIdsByBox: {
+          3: [0, 1, 2, 3],
+        },
+      })
+    );
+
+    expect(secondUnit.errors).toContain("actual-cfs-unit-count-missing-or-mismatch");
+    expect(secondUnit.errors).toContain("actual-cfs-box-ids-missing-or-mismatch");
+    expect(missingSlot.errors).toContain("actual-cfs-slot-ids-missing-or-mismatch");
+    expect(wrongBox.errors).toContain("actual-cfs-box-ids-missing-or-mismatch");
+  });
+
+  it("certification fixtureはcanonical JSON SHA-256でregistryへ固定される", () => {
+    const fixture = JSON.parse(readFileSync(new URL(
+      "../fixtures/printers/k2-pro-cfs/scenarios/cfs-slot-control-live/certification-summary.json",
+      import.meta.url
+    ), "utf8"));
+    const canonicalDigest = createHash("sha256")
+      .update(stableStringifyPrinterCoreV3Value(fixture), "utf8")
+      .digest("hex");
+
+    expect(K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY[0].review.fixtureCanonicalSha256)
+      .toBe(`sha256:${canonicalDigest}`);
+  });
+
+  it("production runtime policyはcanonical JSON SHA-256でregistryへ固定される", () => {
+    const evidence = K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY[0];
+    const canonicalDigest = createHash("sha256")
+      .update(stableStringifyPrinterCoreV3Value(createCfsRuntimePolicyDigestPayload(evidence)), "utf8")
+      .digest("hex");
+
+    expect(evidence.review.runtimePolicyCanonicalSha256)
+      .toBe(`sha256:${canonicalDigest}`);
+  });
+
   it("production昇格は空objectや配列のcertification evidenceを拒否する", () => {
     const createPlan = (certificationEvidence) => createK2CfsCommandTransportPlan({
       commandKind: "cfs-load",
@@ -514,14 +742,8 @@ describe("Printer Core v3 K2 CFS command transport", () => {
       certificationEvidence,
     });
 
-    expect(createPlan({})).toMatchObject({
-      ok: false,
-      reason: "invalid-cfs-slot-certification-evidence",
-    });
-    expect(createPlan([])).toMatchObject({
-      ok: false,
-      reason: "invalid-cfs-slot-certification-evidence",
-    });
+    expect(createPlan({})).toMatchObject({ ok: false, reason: "uncertified-cfs-slot-command" });
+    expect(createPlan([])).toMatchObject({ ok: false, reason: "uncertified-cfs-slot-command" });
   });
 
   it("production昇格はcommand kindとtransport profileが一致するcertification evidenceだけ許可する", () => {
@@ -548,14 +770,8 @@ describe("Printer Core v3 K2 CFS command transport", () => {
       }),
     });
 
-    expect(wrongCommandPlan).toMatchObject({
-      ok: false,
-      reason: "invalid-cfs-slot-certification-evidence",
-    });
-    expect(wrongProfilePlan).toMatchObject({
-      ok: false,
-      reason: "invalid-cfs-slot-certification-evidence",
-    });
+    expect(wrongCommandPlan).toMatchObject({ ok: false, reason: "uncertified-cfs-slot-command" });
+    expect(wrongProfilePlan).toMatchObject({ ok: false, reason: "uncertified-cfs-slot-command" });
   });
 
   it("certified registryに無いslot操作はproduction option付きでも拒否を維持する", () => {

@@ -1,6 +1,6 @@
 # Printer Core v3 Open Work
 
-Last updated: 2026-09-02
+Last updated: 2026-09-15
 
 このメモは、Gate 1-18 の contract / fail-closed 判定とは別に、現場でユーザーが設定、監視、判断、操作するときに未実装または未接続として残っている項目を整理する。
 
@@ -15,25 +15,31 @@ Gate 18.9 の Universal MaterialSource accounting 仕様は
 Gate 18.9H の Operator SpoolMount production authority 仕様は
 `docs/develop/printer-core-v3-gate18-9h-spool-mount-authority.md` を参照する。
 
+ItemKeeperの複数MaterialSource同期、SpoolMount交換履歴、3DPmon管理spool IDとRFIDの分離、
+versioned `/api/v2/` endpoint設計は
+`docs/develop/itemkeeper-v2-multi-source-sync-contract.md` を参照する。3DPmon側contract baselineは作成済みだが、
+ik2 receiver、durable Offer/Need/Push、cross-repository certificationは未実装である。
+
 ## Gate status matrix
 
 | Gate / Area | Code | Tests | Live | Production |
 | --- | --- | --- | --- | --- |
 | Gate 18.7 Material Observation | CLOSED | CLOSED | partial | read-only |
 | Gate 18.8 Material Observation UX / Evidence | CLOSED | CLOSED | partial | read-only |
-| Gate 19 Slot Control Spec | scaffold CLOSED / recovery latch schema+storage added / production idle observation TTL+session+generation guard connected | CLOSED | pending | disabled until live registry entry exists |
+| Gate 19 Slot Control Spec | F012/CFS 1台/1A・1B/load・unloadのregistry、transport、terminal confirmation、durable recoveryを実装。PR #442最終レビュー待ち | 131 files / 2357 tests PASS | 8 physical commands confirmed | backend eligible / normal UI disabled |
 | Gate 19.5 UI Control Lifecycle | scaffold CLOSED / selection evidence + recovery blocker UI added | CLOSED | pending | disabled |
 | Gate 20 Restart Recovery | code CLOSED | CLOSED | pending | fail-closed |
 | Gate 18.9 Universal MaterialSource Accounting | contract baseline accepted / pure repositories, dry-run planner, evidence-only journal, pure shadow preflight, staged+durable shadow transaction, print binding shadow attribution repository, and source-aware read-only UI projection added | contract CLOSED / repository+planner+journal+preflight+transaction+print-binding+UI projection tests passing | pending | disabled |
 | Gate 18.9H Operator SpoolMount Authority | design accepted / H-1a pure store-service implemented, H-1b durable persistence implemented, trusted resolver + CAS precondition hardening added, H-2 filament manager source mount UI added, destructive spool lifecycle guarded | H-1a/H-1b/H-2 tested | n/a | CAS-backed 3DPmon management only / physical command and debit disabled |
 | Gate 18.9I Print Binding Runtime | print-start/completion runtime added; K2/CFS UI print-start requests create a separate module-attested MaterialBindingPlan, hold it as prepared pending state, mark it submitted only after transport send success, and connect it to runtime only after a new machine-observed printStartTime/PrintJob ID and completed history are seen; trusted snapshots include issuance evidence and signed canonical `bindingAuthority`; command binding semantic cross-check, first local receipt freeze, and read-only export analyzer are in place | runtime + durable CAS + live bridge + MaterialBindingPlan composition + export analyzer tests added | pending | trusted print-start binding + shadow usage attribution / no managed remaining debit |
 | Gate 18.9J ItemKeeper Source Usage Fixture | J-1 pure fixture receipt evaluator added; K2 `materialUsed` CSV parser is shared by runtime and fixture validation; fixture receipt never mutates projection registry. J-2 reviewed fixture registry evaluator scaffold added with an empty production registry | parser + fixture receipt + reviewed registry evaluator tests added | pending fixture capture | receipt-only / ItemKeeper source-aware send remains disabled until a reviewed registry entry exists |
+| ItemKeeper v2 Multi-Source Sync | producer-side contract baseline documented | pending implementation | pending cross-repo fixture | disabled |
 | K2/CFS Print Start | implemented | tested | certification scope pending | guarded |
-| K2/CFS Standalone Slot Control | candidate only | dry-run tests | pending | disabled |
+| K2/CFS Standalone Slot Control | 1A・1B load/unload narrow production eligibility | registry/scope/terminal tests | repeated live certified | normal UI disabled until Gate 19.5 |
 
-現時点のv2.2.1045では、K2/CFSの `load` / `unload` / `feed` / `retract` / `slot select`
-のstandalone操作はすべて無効である。実機certificationをmodule-owned registryへ追加するまで、
-UI設定や保存済みtarget情報だけでproduction操作へ昇格しない。
+リリース済みv2.2.1045では、K2/CFSのstandalone操作はすべて無効である。現在のGate 19 branchでは、
+F012/CFS 1台/box 1の1A・1Bに対するload/unloadだけをmodule-owned registryへ登録した。
+通常UIの設定・保存・操作状態表示はGate 19.5まで無効であり、保存済みtarget情報だけではproduction操作へ昇格しない。
 
 Gate 19のproduction dispatcherは、standalone CFS物理操作を送信する直前に
 `printerIdleObservation` を再検査する。これは、現在接続中のWS session /
@@ -262,11 +268,12 @@ registry照合はpure evaluatorでテスト可能にし、実機fixture review�
   physical discontinuityとして扱い、debit候補へ昇格しない。
   この接続もshadow attributionまでで、managed spool残量debitやlegacy usage writeは行わない。
 - K2/CFS print-start のWS9999 transport mappingは Gate20 で `colorMatch` -> `multiColorPrint` の2frame planとして追加した。ただし実機certification前なので、UI command authorityやfilament ledgerへはまだ昇格しない。
-- CFS/CFS-C の feed / retract / slot select / load / unload は本番transportへ未接続。通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意し、send-timeのfresh printer idle observation、session/generation、source loaded、recovery latch、capabilityを再検査する。しかしLAN command keyとexpected-state confirmationは未certifiedのため`dashboard_k2_cfs_command_transport.js`でも `uncertified-cfs-slot-command` として拒否し、production有効化前は`enabled:false`でread-only監視のまま閉じ、操作はプリンタ本体から行う。
+- F012 + CFS 1台の1A/1Bに対する `cfs-load` / `cfs-unload` は、2026-09-09の反復実機証跡をmodule-owned immutable registryへ登録し、厳密なmodel/firmware/unit/source/action一致時だけproduction transport planを生成できる。送信後はphysical frameを再送せず、同一session/generationのread-only観測だけを既定120秒追跡し、terminal stateを確認できた場合だけ成功とする。1C、1D、external、複数CFS、別firmware、`slot select` / `feed` / `retract`、K1C/CFS-Cは未認証のまま拒否する。
+- 通常フィラメントパネルにはfail-closedな操作候補hookと、composition-bound integration -> intent -> command request -> bound dispatcher のscaffoldを用意し、send-timeのfresh printer idle observation、session/generation、source loaded、recovery latch、capabilityを再検査する。保存設定は完全な証跡objectではなくmodule-owned registryの `certificationId` を参照する。ただし通常設定normalizerは `cfsControl` をまだ永続化せず、rendererも `enabled:false` のread-only監視のままであるため、アプリUIからのproduction操作開放はGate 19.5で行う。
 - K2/CFS print semantics certification は未完。Gate9.5 で selected-source guard は確認しているが、command lifecycle完了と物理的なfilament供給/押出成功は別証跡として実機captureで確定する必要がある。
 - Data Schema v3 の本番 write / migration は未完。dry-run contract はあるが、Device / Endpoint / CfsUnit / MaterialSource / Spool / Mount / Ledger の永続authorityはまだ切り替えていない。
-- command authority は未完。command id、result、expected-state confirmation、timeout、side-effect retry guard、production dispatcher の send-time 再検証 foundation、bound dispatcher foundation はあるが、UI操作の本番送信経路はまだ移していない。
-- production command dispatcher は、caller supplied contextを受け取らず、送信直前snapshotから内部署名contextを生成し、active session、current upload generation、file identity、CFS topology source binding、unknown command kindを再検証する。UIへ渡す場合はbound dispatcherの`dispatch(request)`だけを渡し、UIからsend-time context providerやtransportを注入しない。ただし実transport接続と実機command certificationは未完。
+- command authority は一部完了。F012/1A/1B/load/unloadではcommand id、result、terminal expected-state confirmation、timeout、side-effect retry guard、production dispatcherのsend-time再検証、bound dispatcher、実transport planまで接続済み。通常UIの明示activationと、それ以外のsource/action/modelは未完である。
+- production command dispatcher は、caller supplied contextを受け取らず、送信直前snapshotから内部署名contextを生成し、active session、current upload generation、file identity、CFS topology source binding、unknown command kindを再検証する。UIへ渡す場合はbound dispatcherの`dispatch(request)`だけを渡し、UIからsend-time context providerやtransportを注入しない。CFS load/unloadでは現在sourceを再取得してregistry scopeを照合するため、描画時の古いrowから未認証sourceへ送信できない。
 - command correlation は、低レベルcallerがproof風objectを渡しても発行されず、bound dispatcherがtrusted observation providerから受け取ったcommandId/sessionId付きprotocol response ID / transition ID proofを内部検証した場合だけattested evidenceを作る。protocol response IDを根拠にする場合はtransport response側のIDとも一致させる。
 - single-color / multicolor print authority は未完。PrintPlan contract と selected material guard はあるが、UIからの印刷開始authorityはまだ完全にはCoreへ移していない。
 - Filament Ledger authority は未完。CFS観測残量は ledger authority ではなく observation-only として扱う。
@@ -285,7 +292,7 @@ registry照合はpure evaluatorでテスト可能にし、実機fixture review�
 
 ## UIに繋ぐべきだが、まだ繋いでいないもの
 
-- CFS/CFS-C の操作候補hookは通常フィラメントパネルへ接続済み。ただしproduction有効化前はrenderer側`canSendCommands:false`とcomposition-bound scaffold側`enabled:false`で二重に閉じ、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。production有効化には、現在接続世代へbindされた`/info`、fresh topology、module-owned immutable certification registry登録済み証跡が必要で、保存済みtarget設定やUI clickごとのdispatcher/context/enabled注入だけでは有効化しない。
+- CFS/CFS-C の操作候補hookは通常フィラメントパネルへ接続済み。ただしrenderer側`canSendCommands:false`とcomposition-bound scaffold側`enabled:false`で二重に閉じ、ViewModel候補権限、renderer側allowedActions、送信hookのすべてが揃わない限りdisabledになる。Gate 19でF012/1A/1B/load/unloadのregistry entryとproduction transport eligibilityまでは追加したが、通常設定から `certificationId` / enabled/action allow-listを保存・復元するUIはGate 19.5まで提供しない。保存済みtarget設定やUI clickごとのdispatcher/context/enabled注入だけで権限を偽装することはできない。
 - フィラメント管理のsource cardには、3DPmon管理スプールをsource別に設定/交換/割当解除するUIを接続済み。これはoperator-managed `SpoolMount` のみを更新し、CFSの物理操作や残量debitは行わない。ItemKeeper payloadは保存済みprint binding segmentがある場合でも、source-aware live certification issuerが接続されるまではsource別usageを送らない。
 - CFS Debug / Certification panel は、選択状態の完全性と未解決physical command recovery blockerをpreflightとして表示する。保存済み復旧ラッチで `unresolvedByCommandId` のkeyとrecord内commandIdが食い違う場合は、どちらのIDで問い合わせてもintegrity quarantineとしてblockする。
 - CFS/CFS-C のslot選択状態は表示するが、ユーザーが3dpmon側でslotを選ぶ本番UIはまだ提供しない。
@@ -333,7 +340,7 @@ registry照合はpure evaluatorでテスト可能にし、実機fixture review�
 
 - K2 CFS / K1C+CFS-C のattach、detach、runout、slot選択、remaining変化は、UIに表示できる入口を得たが実機captureで物理操作との対応を最終確認する必要がある。
 - CFS-CのMoonraker object名は `boxsInfo` / `boxs_info` を代表候補とし、実際に存在するobjectだけを購読する。実機firmwareで別名が出た場合はsecondary providerのsubscribe候補だけを追加する。
-- feed、retract、load、unload、slot selectのCRUD/command authorityは引き続き未開放。read-only表示とは別Gateでactual adapter transportを接続し、実機でcommand result、expected state、timeout、side-effect retry guardを満たしてから有効化する。
+- K2 F012の1A/1B load/unloadは実機反復証跡とproduction transport eligibilityまで到達したが、通常UIは未開放。1C/1D/external、別firmware、slot select/feed/retract、K1C/CFS-Cは引き続きread-onlyであり、各scopeの実機command result、expected state、timeout、side-effect retry guardを満たしてから別registry entryとして有効化する。
 
 ## K2 Pro Combo アプリ登録 実機確認
 
@@ -362,13 +369,13 @@ registry照合はpure evaluatorでテスト可能にし、実機fixture review�
 
 - K2実機で `colorMatch` -> `multiColorPrint` を明示確認し、post-start selected CFS source、物理feed、消費量変化、完了状態を同一fixtureで証明する。
 - certification CLIで実送信する場合は、dry-run出力を確認したうえでoperatorが明示的に `--send --confirm-live --confirm-host <host>` を付ける。Codex側からlive送信する場合も、その直前にユーザー確認を取る。
-- 実機certificationが終わるまで、通常フィラメントパネルのCFS操作ボタンは送信可能にしない。
-- slot select / load / unload / feed / retract は、K2本体UI操作または公式クライアント操作の通信captureでLAN command keyを確定してからadapterへ追加する。
+- 通常フィラメントパネルのCFS操作ボタンは、Gate 19.5で認証IDの保存・復元、実行中/成功/失敗/timeout、stale時disable、recovery導線が揃うまで送信可能にしない。
+- F012 1A/1Bのload/unload以外のslot select/feed/retractと追加source/modelは、K2本体UI操作または公式クライアント操作の通信captureでLAN command keyとterminal stateを確定してからadapter/registryへ追加する。
 - K1C+CFS-Cについては、Moonraker object経由のmaterial providerとは別に、操作commandのprovider/transport境界を実機で確認する。
 
-## Registry追加前に必ず閉じる項目
+## Registry追加時に維持する境界
 
-- standalone slot control registryへ最初の実機certificationを追加する前に、`certificationId`参照方式へ移すか、少なくともtarget側へ保存する証跡とmodule-owned registry entryの責務分離を再レビューする。
+- standalone slot controlの最初の実機certificationは `certificationId` 参照方式で追加済み。target側へ保存するのはID、enabled、action allow-listだけとし、完全な証跡とscopeはmodule-owned immutable registry entryが所有する。この責務分離を追加entryでも維持する。
 - `cfs-slot-select` をproduction registryへ追加する前に、renderer row由来のbaselineではなく、send-timeのcurrent material topology observationからsource/presence/selected baselineを再取得する。
 - Gate 18.9A/B/C migration planner は stable device identity、unique host/device resolution、open device identity conflictなし、migration専用operator確認済みsingle-spoolまたはfresh complete source observation、stable observed source identity、complete locator、既存Universal MaterialSource/SpoolMount conflictなしをREADY条件に含める。plan全体は`migrationBatchId`、host-to-spool単位はentry側`migrationSubjectId`で分離し、single-spool confirmationはentry subjectとentry confirmation前evidence checksumへbindする。READY entry validatorは1 FilamentUnit / 1 MaterialSource / 0 SpoolMount / 1 mountCandidateだけを許し、MaterialSourceのdevice/unit bindingと既知reason IDも検証する。journalはsource checksumに加えてplan body digestも検証し、`latestRevisionBySubject`をvalid entryから再構築する。Gate 18.9Cのpure shadow preflightはlatest journal revisionとcurrent planの同一entry mappingだけをshadow候補にし、古いrequested revision、stale/non-READY current plan、Device入替、registry/mount conflictをwrite前に拒否する。次はjournal/preflightを本番権威へ昇格せず、trusted print-start material binding snapshotとsource-specific usage evidenceを別Gateで実装する。
 - side-effect command送信後にアプリがcrash/restartした場合のため、未解決physical command latchを永続化するschema/store/storage経路を追加済み。Gate 19 production dispatcherのUI操作経路も、同一deviceのCFS physical commandをprocess内single-flightで1本化し、送信前にsubmitted reservationをstoreへappendし、`saveUnifiedStorageDurably()` のflush成功後だけphysical transportへ進む。submitted / post-observed / unknown相当の結果はstoreへappendし、再起動後に自動replayしないところまで接続済み。send-time recovery blockerは現在command IDだけでなく、同じdeviceに残る古い未解決CFS physical commandも全CFS操作のblockerとして扱う。operator confirmationはCFS Debug / Certificationパネルから `resolvePhysicalCommandRecoveryLatchRecord()` へ接続済み。`cfs-slot-select` は次のmaterial observationがfreshで、すべてのloaded/unknown実sourceのselectionValid=trueが揃い、selected sourceが一意かつ対象sourceと一致し、現在store上の同一recovery record digest/source/deviceへ束縛できる場合だけ `observed-confirmed` として自動解決する。load/unload/feed/retractは実機semantics確定までoperator confirmationが必要。

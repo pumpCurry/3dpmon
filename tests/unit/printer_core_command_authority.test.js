@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1675 (PR #442)
+ * @version 1.390.1676 (PR #442)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-09-15 12:17:15
+ * @lastModified 2026-09-15 13:07:22
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -2046,6 +2046,52 @@ describe("Printer Core v3 command authority contract", () => {
       },
     });
     expect(shouldRetryPrinterCommand(request, result)).toBe(false);
+  });
+
+  it("端末状態確認は試行回数が残っていてもrequestの絶対deadlineを超えて継続しない", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("set-led"),
+      timeoutMs: 20,
+      expectedState: {
+        path: "light.enabled",
+        expected: true,
+      },
+    });
+    let currentTimeMs = 1000;
+    const sendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const observeState = vi.fn().mockResolvedValue({
+      observedState: { light: { enabled: false } },
+      observedSequence: 10,
+      observedSessionId: "session:1",
+    });
+    const waitForObservation = vi.fn().mockImplementation(async (delayMs) => {
+      currentTimeMs += delayMs;
+    });
+    const dispatcher = createBoundPrinterCommandDispatcher({
+      getSendTimeContext: () => createBaseSendTimeSnapshot(),
+      sendTransport,
+      observeState,
+      nowMs: () => currentTimeMs,
+      confirmationInitialDelayMs: 10,
+      confirmationIntervalMs: 10,
+      confirmationMaxAttempts: 24,
+      waitForObservation,
+    });
+
+    const result = await dispatcher.dispatch(request);
+
+    expect(sendTransport).toHaveBeenCalledTimes(1);
+    expect(waitForObservation).toHaveBeenCalledTimes(2);
+    expect(observeState).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "timeout",
+      transportAccepted: true,
+      completed: false,
+      confirmationAttemptCount: 1,
+      error: {
+        code: "confirmation-timeout",
+      },
+    });
   });
 
   it("送信後にsession切替などのconfirmation errorを受けた場合は送信済みunknownとして停止する", async () => {

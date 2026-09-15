@@ -153,19 +153,19 @@
 **Interfaces:**
 - Produces: reviewed evidenceから生成したmodule-owned immutable registry entry。UIは明示enable無しではread-only。
 
-- [ ] **Step 1: Write failing registry activation tests**
+- [x] **Step 1: Write failing registry activation tests**
 
   exact scope/evidenceではproduction planを生成し、保存設定だけ、別source、別firmware、未許可actionでは生成しないことを固定する。
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
   Run: `npx vitest run tests/unit/printer_core_k2_cfs_command_transport.test.js tests/unit/dashboard_panel_init_cfs_control_hook.test.js`
 
-- [ ] **Step 3: Register reviewed evidence and update docs**
+- [x] **Step 3: Register reviewed evidence and update docs**
 
   fixture digest、reviewed head、review decisionを含むentryを登録し、stale comment/TODOとGate19のCLOSED scopeを更新する。
 
-- [ ] **Step 4: Run GREEN and full verification**
+- [x] **Step 4: Run GREEN and full verification**
 
   Run: `npx vitest run`
 
@@ -174,6 +174,8 @@
   Run: `npm run test:e2e`
 
   Run: `git diff --check`
+
+  Result: 131 files / 2357 tests PASS、lint PASS、Electron E2E 3/3 PASS、`git diff --check` PASS。
 
 ### Task 6: Review And Canary Handoff
 

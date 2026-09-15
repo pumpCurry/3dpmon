@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1674 (PR #442)
+ * @version 1.390.1676 (PR #442)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-09-15 11:47:43
+ * @lastModified 2026-09-15 13:07:22
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -2018,6 +2018,9 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
   const materialProviderLastObservedAt = hasBoxsInfoFrame
     ? lastObservedAt
     : previousMaterialObservedAt;
+  const materialProviderLastSequence = hasBoxsInfoFrame
+    ? (state.source?.sequence ?? null)
+    : (previous.materialProviderLastSequence ?? null);
   const materials = state.materials && materialProviderLastObservedAt
     ? {
         ...state.materials,
@@ -2048,6 +2051,7 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     lastSequence: state.source?.sequence ?? null,
     lastState,
     materialProviderLastObservedAt,
+    materialProviderLastSequence,
     cfsConnected: materials?.cfs?.connected ?? null,
     cfsTopologyState: materials?.cfs?.topologyState ?? null,
     cfsSourceCount: Array.isArray(materials?.sources) ? materials.sources.length : 0,

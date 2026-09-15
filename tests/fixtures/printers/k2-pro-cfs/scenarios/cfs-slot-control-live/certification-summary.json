@@ -16,6 +16,17 @@
   "transportProfile": "k2-ws9999-feed-in-or-out-certified-v1",
   "scope": {
     "cfsUnitCount": 1,
+    "certifiedBoxIds": [
+      1
+    ],
+    "expectedSlotIdsByBox": {
+      "1": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
     "certifiedSources": [
       {
         "sourceId": "cfs:1:slot:0",

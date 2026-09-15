@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1675 (PR #442)
+ * @version 1.390.1676 (PR #442)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-09-15 12:17:15
+ * @lastModified 2026-09-15 13:07:22
  * -----------------------------------------------------------
  */
 
@@ -98,8 +98,9 @@ import {
 import {
   K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
   createK2CfsCommandTransportPlan,
+  resolveRegisteredK2CfsSlotControlCertificationEvidence,
   sendK2CfsCommandTransportPlan,
-  validateRegisteredK2CfsSlotControlCertificationEvidence,
+  validateRegisteredK2CfsSlotControlCertificationTarget,
 } from "./printer_core/dashboard_k2_cfs_command_transport.js";
 import {
   MATERIAL_DISPLAY_MODE,
@@ -222,29 +223,6 @@ const CFS_CONTROL_REQUEST_TIMEOUT_MS = 120000;
  * @constant {number}
  */
 const CFS_CONTROL_UI_TIMEOUT_MS = 125000;
-
-/**
- * 配列/Set/map形式のcommand kind allow-listをSetへ正規化する。
- *
- * @private
- * @param {*} value - allow-list候補
- * @returns {Set<string>} 正規化済みcommand kind set
- */
-function normalizeCertifiedCfsCommandSet(value) {
-  if (value instanceof Set) {
-    return new Set(Array.from(value).map((entry) => String(entry || "").trim()).filter(Boolean));
-  }
-  if (Array.isArray(value)) {
-    return new Set(value.map((entry) => String(entry || "").trim()).filter(Boolean));
-  }
-  if (value && typeof value === "object") {
-    return new Set(Object.entries(value)
-      .filter(([, enabled]) => enabled === true)
-      .map(([commandKind]) => String(commandKind || "").trim())
-      .filter(Boolean));
-  }
-  return new Set();
-}
 
 /**
  * connection targetに保存された`/info`証跡が現在起動中のre-probe結果か判定する。
@@ -380,14 +358,57 @@ function selectCurrentPrinterCoreV3Info(target) {
  *
  * @private
  * @param {object|null|undefined} target - 接続target設定
+ * @param {object|null|undefined=} source - 現在観測した操作対象source
+ * @param {object|null|undefined=} topology - send-timeで観測したmaterial topology
  * @returns {object} certification scope
  */
-function createCfsControlCertificationScope(target) {
+function createCfsControlCertificationScope(target, source = null, topology = null) {
   const info = selectCurrentPrinterCoreV3Info(target);
+  const materialSystem = target?.materialSystem || {};
+  const mode = String(materialSystem.mode || "").trim();
+  const attachment = target?.printerType === "creality-k2" &&
+    (mode === "auto" || mode === "cfs-readonly")
+    ? "CFS"
+    : null;
+  const topologySources = Array.isArray(topology?.sources) ? topology.sources : [];
+  const topologyUnits = Array.isArray(topology?.units) ? topology.units : [];
+  const actualBoxIds = [...new Set([
+    ...topologyUnits.map((unit) => Number(unit?.boxId)),
+    ...topologySources
+      .filter((entry) => entry?.kind === "cfs-slot")
+      .map((entry) => Number(entry?.boxId)),
+  ].filter((boxId) => Number.isInteger(boxId)))].sort((left, right) => left - right);
+  const actualSlotIdsByBox = {};
+  topologySources
+    .filter((entry) => entry?.kind === "cfs-slot")
+    .forEach((entry) => {
+      const boxId = Number(entry?.boxId);
+      const slotId = Number(entry?.slotId ?? entry?.protocolSlotId ?? entry?.materialId);
+      if (!Number.isInteger(boxId) || !Number.isInteger(slotId)) {
+        return;
+      }
+      actualSlotIdsByBox[boxId] ||= [];
+      if (!actualSlotIdsByBox[boxId].includes(slotId)) {
+        actualSlotIdsByBox[boxId].push(slotId);
+        actualSlotIdsByBox[boxId].sort((left, right) => left - right);
+      }
+    });
+  const topologyCurrent = topology?.cfs?.connected === true &&
+    String(topology?.cfs?.topologyState || "") === "fresh";
   return {
     printerType: target?.printerType || null,
     model: info.model || info.reportedModel || null,
     firmwareVersion: info.version || info.firmwareVersion || null,
+    attachment,
+    cfsUnitCount: Number.isInteger(Number(materialSystem.unitLimit))
+      ? Number(materialSystem.unitLimit)
+      : null,
+    sourceId: source?.sourceId || source?.materialSourceId || null,
+    boxId: source?.boxId ?? null,
+    slotId: source?.slotId ?? source?.protocolSlotId ?? source?.materialId ?? null,
+    actualCfsUnitCount: topologyCurrent ? actualBoxIds.length : null,
+    actualCfsBoxIds: topologyCurrent ? actualBoxIds : [],
+    actualSlotIdsByBox: topologyCurrent ? actualSlotIdsByBox : {},
   };
 }
 
@@ -396,8 +417,9 @@ function createCfsControlCertificationScope(target) {
  *
  * 【詳細説明】
  * - 既定では必ずnullを返し、既存ユーザーのCFS監視UIをread-onlyのまま保つ。
- * - `materialSystem.cfsControl.enabled === true`、認証済みcommand kind、certificationEvidenceが
- *   揃った場合だけ、composition層でbound dispatcherを生成する。
+ * - `materialSystem.cfsControl.enabled === true`、認証済みcommand kind、certificationIdが
+ *   揃った場合だけ、module-owned registryから証跡を解決してbound dispatcherを生成する。
+ * - 保存設定から証跡objectを直接採用せず、未知IDやlegacy evidence-only設定はread-onlyへ倒す。
  *
  * @private
  * @param {object|null|undefined} target - 接続target設定
@@ -411,22 +433,21 @@ function resolveCfsControlProductionSettings(target) {
   if (target?.printerType !== "creality-k2") {
     return null;
   }
-  const certifiedCommandKinds = normalizeCertifiedCfsCommandSet(
-    control.certifiedCfsSlotControlCommands
-  );
   const requestedActions = Array.isArray(control.allowedActions)
     ? control.allowedActions.map((action) => String(action || "").trim()).filter(Boolean)
-    : CFS_CONTROL_UI_ACTIONS;
-  const allowedActions = requestedActions.filter((action) => {
-    const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
-    return commandKind && certifiedCommandKinds.has(commandKind);
-  });
-  const evidence = control.certificationEvidence;
+    : [];
+  const evidence = resolveRegisteredK2CfsSlotControlCertificationEvidence(control.certificationId);
+  if (!evidence) {
+    return null;
+  }
   const scope = createCfsControlCertificationScope(target);
-  const certifiedAllowedActions = allowedActions.filter((action) => {
+  const certifiedAllowedActions = requestedActions.filter((action) => {
     const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
-    const validation = validateRegisteredK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope);
-    return validation.ok;
+    return Boolean(commandKind) && validateRegisteredK2CfsSlotControlCertificationTarget(
+      evidence,
+      commandKind,
+      scope
+    ).ok;
   });
   if (certifiedAllowedActions.length === 0) {
     return null;
@@ -435,6 +456,7 @@ function resolveCfsControlProductionSettings(target) {
     allowedActions: certifiedAllowedActions,
     certifiedCommandKinds: certifiedAllowedActions.map((action) => CFS_CONTROL_ACTION_COMMAND_KIND[action]),
     certificationEvidence: evidence,
+    certificationId: evidence.certificationId,
     certificationScope: scope,
   };
 }
@@ -448,10 +470,16 @@ function resolveCfsControlProductionSettings(target) {
  */
 function createCfsControlSendTimeMaterialTopology(topology) {
   const sources = Array.isArray(topology?.sources) ? topology.sources : [];
+  const units = Array.isArray(topology?.units) ? topology.units : [];
   return {
     cfsConnected: topology?.cfs?.connected === true,
     topologyState: String(topology?.cfs?.topologyState || "unobserved"),
     sourceCount: sources.length,
+    units: units.map((unit) => ({
+      unitId: unit?.unitId || null,
+      boxId: unit?.boxId ?? null,
+      observedSlotCount: unit?.observedSlotCount ?? null,
+    })),
     sources: sources.map((source) => ({
       sourceId: source?.sourceId || null,
       kind: source?.kind || null,
@@ -800,7 +828,7 @@ function createCfsControlSendTimeContext(hostname, request) {
     }),
     createdAt: new Date().toISOString(),
     certificationEvidence: currentProductionSettings.certificationEvidence,
-    certificationScope: createCfsControlCertificationScope(currentTarget),
+    certificationScope: currentProductionSettings.certificationScope,
   };
 }
 
@@ -886,6 +914,15 @@ function observeCfsControlCommandState(hostname, request, context) {
     ? selectedSourceIds[0]
     : (selectedSourceIds.length === 0 ? null : "multiple-selected-sources");
   const physicalSafety = createCfsPhysicalSafetyObservationForCfsControl(shadowRecord);
+  const requestedSourceId = String(request?.payload?.sourceId || request?.payload?.materialSourceId || "").trim();
+  const requestedBoxId = Number(request?.payload?.boxId);
+  const requestedSlotId = Number(request?.payload?.slotIndex ?? request?.payload?.protocolSlotId);
+  const currentSources = Array.isArray(observedState?.materials?.sources)
+    ? observedState.materials.sources
+    : [];
+  const currentTargetSource = currentSources.find((source) => (
+    String(source?.sourceId || "").trim() === requestedSourceId
+  )) || null;
   const projectedState = observedState && typeof observedState === "object"
     ? {
       ...observedState,
@@ -949,6 +986,25 @@ function observeCfsControlCommandState(hostname, request, context) {
   const sequenceAdvanced = Number.isFinite(sentSequence) &&
     Number.isFinite(currentSequence) &&
     currentSequence > sentSequence;
+  const materialSequence = Number(shadowRecord?.materialProviderLastSequence);
+  const materialSequenceAdvanced = Number.isFinite(sentSequence) &&
+    Number.isFinite(materialSequence) &&
+    materialSequence > sentSequence;
+  const targetStatus = currentTargetSource?.status && typeof currentTargetSource.status === "object"
+    ? currentTargetSource.status
+    : {};
+  const targetPresence = String(currentTargetSource?.presence || targetStatus.presence || "").trim();
+  const targetStateCode = Number(targetStatus.stateCode ?? currentTargetSource?.stateCode);
+  const targetLoaded = targetPresence === "loaded" || (!targetPresence && targetStateCode === 1);
+  const targetLocationCurrent = Boolean(currentTargetSource) &&
+    currentTargetSource?.kind === "cfs-slot" &&
+    Number(currentTargetSource?.boxId) === requestedBoxId &&
+    Number(currentTargetSource?.slotId ?? currentTargetSource?.protocolSlotId ?? currentTargetSource?.materialId) === requestedSlotId;
+  const topologyCurrent = observedState?.materials?.cfs?.connected === true &&
+    String(observedState?.materials?.cfs?.topologyState || "") === "fresh" &&
+    materialSequenceAdvanced &&
+    targetLocationCurrent &&
+    targetLoaded;
   const safetyBoundToCurrentFrame = physicalSafety?.physicalIdleEvidenceComplete === true &&
     physicalSafety?.fresh === true &&
     physicalSafety?.idle === true &&
@@ -961,6 +1017,7 @@ function observeCfsControlCommandState(hostname, request, context) {
     Number(physicalSafety?.lastAppliedSequence) === currentSequence;
   if (
     sequenceAdvanced &&
+    topologyCurrent &&
     safetyBoundToCurrentFrame &&
     isCfsControlTerminalSelection(request, selectedSourceIds)
   ) {
@@ -1034,7 +1091,7 @@ function resolveCfsControlRecoveryLatchStatus(result) {
  */
 async function reserveCfsControlRecoveryLatchBeforeTransport(hostname, request, context) {
   const target = getConnectionTarget(hostname);
-  const evidence = target?.materialSystem?.cfsControl?.certificationEvidence || {};
+  const certificationId = String(target?.materialSystem?.cfsControl?.certificationId || "").trim() || null;
   const record = createPhysicalCommandRecoveryLatchRecord({
     commandId: request.commandId,
     commandKind: request.commandKind,
@@ -1044,7 +1101,7 @@ async function reserveCfsControlRecoveryLatchBeforeTransport(hostname, request, 
     status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED,
     sentAt: request.createdAt || context?.createdAt || new Date().toISOString(),
     materialSourceId: request.payload?.sourceId || null,
-    certificationId: evidence.certificationId || evidence.captureId || evidence.fixtureId || null,
+    certificationId,
     preObservation: {
       sequence: context?.stateSequence ?? null,
       digest: context?.contextId || null,
@@ -1189,7 +1246,7 @@ function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
       };
     }
     const target = getConnectionTarget(hostname);
-    const evidence = target?.materialSystem?.cfsControl?.certificationEvidence || {};
+    const certificationId = String(target?.materialSystem?.cfsControl?.certificationId || "").trim() || null;
     const postObservation = result.postCommandObservation || {};
     const record = createPhysicalCommandRecoveryLatchRecord({
       commandId: request.commandId,
@@ -1200,7 +1257,7 @@ function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
       status: latchStatus,
       sentAt: request.createdAt || new Date().toISOString(),
       materialSourceId: request.payload?.sourceId || null,
-      certificationId: evidence.certificationId || evidence.captureId || evidence.fixtureId || null,
+      certificationId,
       preObservation: {
         sequence: postObservation.sentSequence ?? null,
         digest: postObservation.correlationId || result.commandCorrelation?.correlationId || null,
@@ -1243,14 +1300,15 @@ function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
  * - transport前にdurable保存したsubmitted予約は、CommandResultがcompletedになっても自動では消えない。
  * - 同一command/session/sourceへ束縛されたpost-command correlationを根拠にobserved解決し、次の物理操作を許可する。
  * - timeout、confirmation error、未確認結果は解決せず、operator確認までfail-closedラッチを維持する。
+ * - 解決済みstoreのdurable保存が失敗または例外になった場合は、元の未解決storeへ戻す。
  *
  * @private
  * @function resolveCompletedCfsControlRecoveryLatch
  * @param {string} hostname - 対象ホスト名
  * @param {object} dispatchOutput - CFS command integrationの戻り値
- * @returns {object} recoveryLatch diagnosticsを付加したdispatchOutput
+ * @returns {Promise<object>} recoveryLatch diagnosticsを付加したdispatchOutput
  */
-function resolveCompletedCfsControlRecoveryLatch(hostname, dispatchOutput) {
+async function resolveCompletedCfsControlRecoveryLatch(hostname, dispatchOutput) {
   const result = dispatchOutput?.result || null;
   const request = dispatchOutput?.request || null;
   if (!request || result?.completed !== true) {
@@ -1280,8 +1338,31 @@ function resolveCompletedCfsControlRecoveryLatch(hostname, dispatchOutput) {
     },
   });
   if (resolutionResult?.ok === true && resolutionResult.store) {
+    const previousStore = monitorData.physicalCommandRecoveryLatch;
     monitorData.physicalCommandRecoveryLatch = resolutionResult.store;
-    saveUnifiedStorage(true);
+    let durableResult = null;
+    try {
+      durableResult = await saveUnifiedStorageDurably();
+    } catch (error) {
+      durableResult = {
+        ok: false,
+        reason: String(error?.message || error || "durable-save-threw"),
+      };
+    }
+    if (durableResult?.ok !== true) {
+      if (monitorData.physicalCommandRecoveryLatch === resolutionResult.store) {
+        monitorData.physicalCommandRecoveryLatch = previousStore;
+      }
+      return {
+        ...dispatchOutput,
+        recoveryLatch: {
+          ok: false,
+          status: "durable-save-failed",
+          commandId: request.commandId,
+          latchStatus: currentRecord.status,
+        },
+      };
+    }
   }
   return {
     ...dispatchOutput,
@@ -1310,10 +1391,16 @@ function createCfsControlDispatcher(hostname) {
       if (!currentSettings || !currentSettings.certifiedCommandKinds.includes(String(request?.commandKind || "").trim())) {
         throw new Error("cfs-control-certification-revoked");
       }
+      const machine = monitorData.machines[hostname] || {};
+      const sources = Array.isArray(machine.runtimeData?.printerCoreV3Shadow?.lastState?.materials?.sources)
+        ? machine.runtimeData.printerCoreV3Shadow.lastState.materials.sources
+        : [];
+      const requestedSourceId = String(request?.payload?.sourceId || request?.payload?.materialSourceId || "").trim();
+      const currentSource = sources.find((source) => String(source?.sourceId || "").trim() === requestedSourceId) || null;
+      const currentTopology = machine.runtimeData?.printerCoreV3Shadow?.lastState?.materials || null;
       const plan = createK2CfsCommandTransportPlan(request, {
-        certifiedCfsSlotControlCommands: currentSettings.certifiedCommandKinds,
-        certificationEvidence: currentSettings.certificationEvidence,
-        certificationScope: currentSettings.certificationScope,
+        certificationId: currentSettings.certificationId,
+        certificationScope: createCfsControlCertificationScope(currentTarget, currentSource, currentTopology),
       });
       if (!plan.ok) {
         throw new Error(`k2-cfs-control-plan-rejected:${plan.reason}`);
@@ -1400,7 +1487,7 @@ function createCfsControlRenderOptions(hostname) {
        */
       async onCommand(intent) {
         const dispatchOutput = await integration.onCommand(intent);
-        const resolvedOutput = resolveCompletedCfsControlRecoveryLatch(hostname, dispatchOutput);
+        const resolvedOutput = await resolveCompletedCfsControlRecoveryLatch(hostname, dispatchOutput);
         return persistCfsControlRecoveryLatchIfNeeded(hostname, resolvedOutput);
       },
       /**

@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1675 (PR #442)
+ * @version 1.390.1676 (PR #442)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-09-15 12:17:15
+ * @lastModified 2026-09-15 13:07:22
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -1890,7 +1890,12 @@ export async function dispatchPrinterCommand(request, options = {}) {
   if (typeof options.getSendTimeContext !== "function") {
     return createRejectedCommandResult(request, ["missing-send-time-context"]);
   }
-  const nowMs = typeof options.nowMs === "function" ? Number(options.nowMs()) : Date.now();
+  const readNowMs = () => (typeof options.nowMs === "function" ? Number(options.nowMs()) : Date.now());
+  const nowMs = readNowMs();
+  const requestTimeoutMs = Number.isFinite(Number(request?.timeoutMs)) && Number(request.timeoutMs) > 0
+    ? Number(request.timeoutMs)
+    : DEFAULT_PRINTER_COMMAND_TIMEOUT_MS;
+  const confirmationDeadlineMs = nowMs + requestTimeoutMs;
   let context = null;
   try {
     const rawContext = await options.getSendTimeContext(request);
@@ -1928,18 +1933,28 @@ export async function dispatchPrinterCommand(request, options = {}) {
   const sentSequence = normalizeSequence(context.stateSequence);
   let lastObservation = normalizeCommandObservation(null, context);
   let lastCommandCorrelation = null;
+  let confirmationAttemptCount = 0;
   for (let attempt = 1; attempt <= confirmationPolicy.maxAttempts; attempt += 1) {
-    const delayMs = attempt === 1
+    const requestedDelayMs = attempt === 1
       ? confirmationPolicy.initialDelayMs
       : confirmationPolicy.intervalMs;
+    const remainingBeforeWaitMs = confirmationDeadlineMs - readNowMs();
+    if (remainingBeforeWaitMs <= 0) {
+      break;
+    }
+    const delayMs = Math.min(requestedDelayMs, remainingBeforeWaitMs);
     try {
       if (confirmationPolicy.enabled) {
         await confirmationPolicy.waitForObservation(delayMs);
+      }
+      if (readNowMs() >= confirmationDeadlineMs) {
+        break;
       }
       const observation = typeof options.observeState === "function"
         ? await options.observeState(request, context, response)
         : null;
       lastObservation = normalizeCommandObservation(observation, context);
+      confirmationAttemptCount = attempt;
     } catch (error) {
       return createPrinterCommandResult(request, {
         status: "confirmation-error",
@@ -2004,7 +2019,7 @@ export async function dispatchPrinterCommand(request, options = {}) {
     observedSequence: lastObservation.observedSequence,
     observedSessionId: lastObservation.observedSessionId,
     commandCorrelation: lastCommandCorrelation,
-    confirmationAttemptCount: confirmationPolicy.maxAttempts,
+    confirmationAttemptCount,
     completedAt: options.completedAt || null,
   });
 }
