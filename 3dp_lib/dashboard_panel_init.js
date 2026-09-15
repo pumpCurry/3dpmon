@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1676 (PR #442)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-09-15 13:07:22
+ * @lastModified 2026-09-15 14:12:00
  * -----------------------------------------------------------
  */
 
@@ -169,7 +169,7 @@ const CFS_CONTROL_ACTION_COMMAND_KIND = Object.freeze({
  *
  * @constant {string}
  */
-const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です";
+const CFS_CONTROL_DISABLED_REASON = "接続設定で認証済みCFS操作が有効化されていないか、現在の実機条件が認証範囲外です";
 
 /**
  * CFS物理commandの同一device同時実行を止めるin-memory single-flight map。
@@ -1429,12 +1429,46 @@ function createCfsControlDispatcher(hostname) {
 }
 
 /**
+ * production CFS physical commandの送信前にoperator確認を要求する。
+ *
+ * 【詳細説明】
+ * - 対象slotと実機動作を明示し、通常パネルでの誤クリックをtransport送信前に止める。
+ * - load/unload以外の未知actionは確認ダイアログを出さずfail-closedで拒否する。
+ * - ダイアログのcancel/ESCはfalseとして扱い、command dispatcherへ到達させない。
+ *
+ * @private
+ * @function confirmCfsPhysicalCommand
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} intent - material topology panelが生成した操作intent
+ * @returns {Promise<boolean>} operatorが明示承認した場合のみtrue
+ */
+async function confirmCfsPhysicalCommand(hostname, intent) {
+  const action = String(intent?.action || "").trim();
+  const actionLabel = action === "load"
+    ? "押出し"
+    : (action === "unload" ? "引戻し" : "");
+  if (!actionLabel) {
+    return false;
+  }
+  const displaySlot = String(intent?.displaySlot || intent?.sourceId || "対象スロット").trim();
+  const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
+  const result = await showConfirmDialog({
+    level: "warnRed",
+    title: `CFS ${displaySlot}を${actionLabel === "押出し" ? "押し出します" : "引き戻します"}か？`,
+    message: `${hostname} のCFS・供給経路・ノズルが実際に動作します。プリンタが待機中で、周囲と材料経路が安全であることを確認してください。`,
+    confirmText: `${actionLabel}を実行`,
+    cancelText: "キャンセル",
+  });
+  return result === true;
+}
+
+/**
  * CFS/CFS-C操作候補用のrenderer control optionを生成する。
  *
  * 【詳細説明】
- * - 通常フィラメントパネルからintegration scaffoldへのhook位置だけを固定する。
- * - `canSendCommands:false` と `dispatchCfsControlIntent(..., { enabled:false })` の二重ロックにより、
- *   production activation前にUI操作がtransportへ流れないようにする。
+ * - Gate 19の狭い認証範囲と接続先ごとの明示opt-inが揃った場合だけproduction hookを構成する。
+ * - production時も送信前operator確認、send-time再検証、復旧ラッチを重ねる。
+ * - 条件不一致時は`canSendCommands:false`とdisabled integrationの二重ロックを維持する。
  *
  * @private
  * @param {string} hostname - 対象ホスト名
@@ -1470,10 +1504,21 @@ function createCfsControlRenderOptions(hostname) {
       showControls: true,
       canSendCommands: true,
       allowedActions: productionSettings.allowedActions,
+      requireOperatorConfirmation: true,
       disabledReason: null,
       commandTimeoutMs: CFS_CONTROL_UI_TIMEOUT_MS,
+      unknownRecoveryMessage: "CFS認証カードで実機状態を確認し、未解決の復旧ブロッカーを解決してください。",
       validateCommandIntent(intent) {
         return validateCfsControlIntentFreshness(hostname, intent);
+      },
+      /**
+       * production CFS commandを送る直前にoperator確認を表示する。
+       *
+       * @param {object} intent - material topology panelが生成した操作intent
+       * @returns {Promise<boolean>} operatorが明示承認した場合のみtrue
+       */
+      confirmCommand(intent) {
+        return confirmCfsPhysicalCommand(hostname, intent);
       },
       /**
        * production CFS/CFS-C操作intentをbound integrationへ渡す。

@@ -11,14 +11,14 @@
  * - Printer Core v3 material topology view model をフィラメントパネルへread-only描画
  * - 外部スプール1本とCFS/CFS-Cの設定台数分slotを同一UIで表示
  * - selected、残量、材料色、装填状態、assignment、fresh/staleを表示する
- * - 明示的なcommand authority候補と送信hookが揃った場合だけ、CFS操作ボタンを有効化する
+ * - 明示的なcommand authority候補、送信hook、operator確認が揃った場合だけCFS操作を実行する
  *
  * 【公開関数一覧】
  * - {@link renderMaterialTopologyPanel}：material topology view model をDOMへ描画
  *
- * @version 1.390.1672 (PR #442)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-09-09 12:05:20
+ * @lastModified 2026-09-15 14:12:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19.5後続で、操作結果と実観測stateの相関表示をより詳細化する
@@ -864,15 +864,21 @@ function createControlPolicy(viewModel, options) {
   const optionActions = new Set(Array.isArray(optionControl.allowedActions) ? optionControl.allowedActions : []);
   const allowedActions = new Set([...authorityActions].filter((action) => optionActions.has(action)));
   const hasSendHook = typeof optionControl.onCommand === "function";
+  const hasConfirmationHook = typeof optionControl.confirmCommand === "function";
+  const requiresOperatorConfirmation = optionControl.requireOperatorConfirmation === true;
   const canSendCommands = authority.canSendCommands === true &&
     optionControl.canSendCommands === true &&
     hasSendHook &&
+    (!requiresOperatorConfirmation || hasConfirmationHook) &&
     allowedActions.size > 0;
   return {
     canSendCommands,
     showControls: optionControl.showControls === true || authority.canSendCommands === true,
     allowedActions,
     onCommand: hasSendHook ? optionControl.onCommand : null,
+    confirmCommand: hasConfirmationHook
+      ? optionControl.confirmCommand
+      : null,
     validateCommandIntent: typeof optionControl.validateCommandIntent === "function"
       ? optionControl.validateCommandIntent
       : null,
@@ -880,10 +886,15 @@ function createControlPolicy(viewModel, options) {
       ? optionControl.onCommandReconciled
       : null,
     commandTimeoutMs: normalizeControlTimeoutMs(optionControl.commandTimeoutMs),
+    unknownRecoveryMessage: typeof optionControl.unknownRecoveryMessage === "string" && optionControl.unknownRecoveryMessage.trim()
+      ? optionControl.unknownRecoveryMessage.trim()
+      : "CFS認証カードで実機状態を確認し、復旧ブロッカーを解決してください。",
     observationKey: getViewModelObservationKey(viewModel),
     reason: canSendCommands
       ? null
-      : (optionControl.disabledReason || authority.reason || "command-authority-not-enabled"),
+      : (requiresOperatorConfirmation && !hasConfirmationHook
+        ? "CFS操作確認を構成できないため操作できません"
+        : (optionControl.disabledReason || authority.reason || "command-authority-not-enabled")),
   };
 }
 
@@ -1043,6 +1054,24 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
         return;
       }
       const actionLabel = formatControlActionLabel(buttonConfig.action);
+      if (typeof controlPolicy.confirmCommand === "function") {
+        let confirmed = false;
+        try {
+          confirmed = await controlPolicy.confirmCommand(commandPayload) === true;
+        } catch {
+          setCommandStatus(
+            statusElement,
+            "warning",
+            "操作確認を完了できなかったため、CFSコマンドは送信しませんでした。",
+            "rejected"
+          );
+          return;
+        }
+        if (!confirmed) {
+          setCommandStatus(statusElement, "warning", "操作をキャンセルしました。", "rejected");
+          return;
+        }
+      }
       executionState.state = "submitting";
       executionState.commandId = null;
       executionState.sourceId = row?.sourceId || null;
@@ -1066,9 +1095,10 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
           ""
         );
         if (isFailedCommandResult(result)) {
-          const failureMessage = `${actionLabel}に失敗しました: ${formatCommandFailureReason(result)}`;
           const status = String(result?.status || result?.result || "").trim().toLowerCase();
           const shouldKeepLocked = ["timeout", "transport-error", "confirmation-error"].includes(status);
+          const failureMessage = `${actionLabel}に失敗しました: ${formatCommandFailureReason(result)}` +
+            (shouldKeepLocked ? ` ${controlPolicy.unknownRecoveryMessage}` : "");
           executionState.state = shouldKeepLocked ? "unknown" : "rejected";
           executionState.statusClass = "error";
           executionState.message = failureMessage;
@@ -1101,7 +1131,7 @@ function renderSlotControls(documentRef, row, isStale, controlPolicy, executionS
         executionState.state = isTimeout ? "unknown" : "rejected";
         executionState.statusClass = isTimeout ? "timeout" : "error";
         executionState.message = isTimeout
-          ? `${actionLabel}がタイムアウトしました。現在状態を再確認してください。`
+          ? `${actionLabel}がタイムアウトしました。現在状態を再確認してください。 ${controlPolicy.unknownRecoveryMessage}`
           : `${actionLabel}に失敗しました: ${error?.message || String(error)}`;
         setCommandStatus(
           statusElement,

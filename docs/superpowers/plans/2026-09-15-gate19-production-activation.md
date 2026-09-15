@@ -185,18 +185,23 @@
 **Interfaces:**
 - Produces: Gate19 production activation review cutoff and a minimal read-only/canary checklist.
 
-- [ ] **Step 1: Commit and push the activation cut**
+- [x] **Step 1: Commit and push the activation cut**
 
   Use an English commit message and update PR #442.
 
-- [ ] **Step 2: Request formal review**
+- [x] **Step 2: Request formal review**
 
   Report P1-1 through P1-5 closure evidence, all verification results, and explicit UI default-disabled status.
 
-- [ ] **Step 3: Run minimal read-only confirmation**
+- [x] **Step 3: Run minimal read-only confirmation**
 
   Confirm current F012 reports `feedState=0`, `err.errcode=0`, `err.key=0`, fresh idle evidence, and scope 1A/1B before any canary.
 
-- [ ] **Step 4: Stop before physical canary unless separately authorized**
+- [x] **Step 4: Stop before physical canary unless separately authorized**
 
   Physical command execution requires the operator to reconfirm chamber/mechanical safety at that time.
+
+  Result: activation head `ea3e642d623803902e3c43d458e23d069177f949` was pushed and reviewed GO.
+  Gate 19 is CLOSED for `creality-k2 / F012 / firmware 1.0.0 / CFS 1台 / box 1 / 1A・1B /
+  cfs-load・cfs-unload`. The read-only confirmation observed idle, `feedState=0`, raw error clear,
+  fresh one-CFS topology, loaded 1A/1B, and no selected source without sending a physical command.

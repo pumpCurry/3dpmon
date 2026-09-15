@@ -6,9 +6,9 @@
  *  - T-ID-03: 同一 dest で別 hostname が返っても即上書きせず ip-reuse-conflict にする
  *  - T-ID-04: IPv6 の一時到達先キーも IP→hostname へ移行される
  *
- * @version 1.390.1669 (PR #440)
+ * @version 1.390.1677 (PR #442)
  * @since 1.390.1342 (PR #432)
- * @lastModified 2026-09-02 20:03:58
+ * @lastModified 2026-09-15 13:44:11
  *
  * @vitest-environment jsdom
  */
@@ -1347,6 +1347,57 @@ describe("Printer Core v3 material supply settings UI contract", () => {
       readOnly: true,
       canSendCommands: false,
       canDriveLedger: false,
+    });
+  });
+
+  it("K2 CFS 1台の明示opt-inは既知certificationとload/unloadだけへ固定する", () => {
+    const currentMaterialSystem = {
+      mode: "cfs-readonly",
+      displayMode: "auto",
+      provider: "auto",
+      unitLimit: 1,
+      slotsPerUnit: 4,
+      externalSourceLimit: 1,
+      cfsControl: {
+        enabled: false,
+        certificationId: "",
+        allowedActions: [],
+      },
+    };
+
+    const draft = mod._materialSystemFromSupplyValue(
+      "cfs-1",
+      true,
+      currentMaterialSystem,
+      true
+    );
+
+    expect(draft.cfsControl).toEqual({
+      enabled: true,
+      certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
+      allowedActions: ["load", "unload"],
+    });
+  });
+
+  it("CFS 2台以上またはopt-in未選択ではproduction CFS controlを保存しない", () => {
+    const currentMaterialSystem = {
+      mode: "cfs-readonly",
+      displayMode: "auto",
+      provider: "auto",
+      unitLimit: 1,
+      slotsPerUnit: 4,
+      externalSourceLimit: 1,
+    };
+
+    expect(mod._materialSystemFromSupplyValue("cfs-2", true, currentMaterialSystem, true).cfsControl).toEqual({
+      enabled: false,
+      certificationId: "",
+      allowedActions: [],
+    });
+    expect(mod._materialSystemFromSupplyValue("cfs-1", true, currentMaterialSystem, false).cfsControl).toEqual({
+      enabled: false,
+      certificationId: "",
+      allowedActions: [],
     });
   });
 });

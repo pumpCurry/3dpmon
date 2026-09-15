@@ -5,9 +5,9 @@
  * - 未certifiedのslot操作や外部スプールfallbackが送信計画へ進まないことを検証する。
  * - Gate 19 certification-only planが通常送信経路へ混入しないことを検証する。
  *
- * @version 1.390.1676 (PR #442)
+ * @version 1.390.1677 (PR #442)
  * @since 1.390.1384 (PR #432)
- * @lastModified 2026-09-15 13:07:22
+ * @lastModified 2026-09-15 14:12:00
  */
 
 import { createHash } from "node:crypto";
@@ -418,6 +418,10 @@ describe("Printer Core v3 K2 CFS command transport", () => {
         ],
       },
       review: {
+        status: "reviewed-go-code-eligibility",
+        reviewDecision: "GO",
+        gate19Decision: "closed-narrow-scope",
+        reviewedImplementationHead: "ea3e642d623803902e3c43d458e23d069177f949",
         fixtureSha256: "sha256:fee414a5b4e04bd0dfb7723f41a03de331d13f500c7a7ec06498bcfbf39732eb",
       },
     });

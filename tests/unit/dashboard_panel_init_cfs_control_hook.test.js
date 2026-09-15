@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1676 (PR #442)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-09-15 13:07:22
+ * @lastModified 2026-09-15 14:12:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -43,6 +43,7 @@ const mockState = vi.hoisted(() => ({
   isPhysicalCommandRecoveryBlocked: vi.fn(),
   saveUnifiedStorage: vi.fn(),
   saveUnifiedStorageDurably: vi.fn(),
+  showConfirmDialog: vi.fn(),
   boundOnCommand: vi.fn(),
   panelDestroy: vi.fn(),
   connectionTarget: {
@@ -130,6 +131,10 @@ vi.mock("../../3dp_lib/dashboard_spool.js", () => ({
 
 vi.mock("../../3dp_lib/dashboard_notification_manager.js", () => ({
   showAlert: vi.fn(),
+}));
+
+vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({
+  showConfirmDialog: mockState.showConfirmDialog,
 }));
 
 vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
@@ -427,6 +432,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     mockState.isPhysicalCommandRecoveryBlocked.mockReset();
     mockState.saveUnifiedStorage.mockReset();
     mockState.saveUnifiedStorageDurably.mockReset();
+    mockState.showConfirmDialog.mockReset();
     mockState.boundOnCommand.mockReset();
     mockState.panelDestroy.mockReset();
     mockState.sendCommand.mockReset();
@@ -551,6 +557,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       backend: "indexedDB",
       reason: "flushed",
     });
+    mockState.showConfirmDialog.mockResolvedValue(true);
     mockState.createPhysicalCommandRecoveryLatchRecord.mockImplementation((input) => ({
       commandId: input.commandId,
       commandKind: input.commandKind,
@@ -620,7 +627,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       showControls: true,
       canSendCommands: false,
       allowedActions: ["select", "load", "unload", "feed", "retract"],
-      disabledReason: "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です",
+      disabledReason: "接続設定で認証済みCFS操作が有効化されていないか、現在の実機条件が認証範囲外です",
     });
     expect(typeof options.control.onCommand).toBe("function");
     expect(typeof options.control.validateCommandIntent).toBe("function");
@@ -738,7 +745,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       showControls: true,
       canSendCommands: false,
       allowedActions: ["select", "load", "unload", "feed", "retract"],
-      disabledReason: "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です",
+      disabledReason: "接続設定で認証済みCFS操作が有効化されていないか、現在の実機条件が認証範囲外です",
     });
   });
 
@@ -793,6 +800,45 @@ describe("dashboard_panel_init CFS control hook", () => {
     const [, viewModel, options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
     expect(viewModel.authority.allowedActions).toEqual(["load"]);
     expect(options.control.allowedActions).toEqual(["load"]);
+  });
+
+  it("Gate19.5: production CFS controlはsourceと物理動作を明示するoperator確認を要求する", async () => {
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    mockState.createMaterialTopologyViewModel.mockImplementation((topology, options) => ({
+      summary: { topologyState: "fresh" },
+      authority: options.commandAuthority,
+      units: [],
+    }));
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    expect(typeof options.control.confirmCommand).toBe("function");
+    expect(options.control.requireOperatorConfirmation).toBe(true);
+    await expect(options.control.confirmCommand({
+      action: "load",
+      commandKind: "cfs-load",
+      displaySlot: "1A",
+      sourceId: "cfs:1:slot:0",
+    })).resolves.toBe(true);
+    expect(mockState.showConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warnRed",
+      title: "CFS 1Aを押し出しますか？",
+      confirmText: "押出しを実行",
+      cancelText: "キャンセル",
+    }));
+    expect(mockState.showConfirmDialog.mock.calls[0][0].message).toContain("実際に動作します");
+    expect(options.control.unknownRecoveryMessage).toContain("CFS認証カード");
   });
 
   it("certificationEvidenceだけで現在targetのmodel/firmwareが無い場合はproduction CFS controlを有効化しない", async () => {

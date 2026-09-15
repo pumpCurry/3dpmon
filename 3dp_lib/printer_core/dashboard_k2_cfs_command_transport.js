@@ -22,9 +22,9 @@
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1676 (PR #442)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-09-15 13:07:22
+ * @lastModified 2026-09-15 14:12:00
  * -----------------------------------------------------------
  * @todo
  * - 1C・1D・外部sourceとslot select/feed/retractは個別の実機認証が完了するまでproductionへ追加しない
@@ -306,7 +306,7 @@ export function createImmutableK2CfsSlotControlCertificationRegistry(entries) {
  *   実機certificationをコードレビュー済みのimmutable registryとして保持する。
  * - F012 firmware 1.0.0 / CFS 1台 / box 1の1A・1Bについて反復実機確認したload/unloadだけを登録する。
  * - 1C・1D・external・複数CFS・別firmware・select/feed/retractは証跡scope外として拒否する。
- * - review.statusはPR #442の最終判定前であることを明示し、module登録だけをレビュー完了表現に使わない。
+ * - review metadataはGate 19のコード適格性GOを監査記録として残すが、runtime authority判定には使用しない。
  *
  * @constant {ReadonlyArray<object>}
  */
@@ -371,7 +371,10 @@ export const K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY =
       singleFlightRequired: true,
     },
     review: {
-      status: "pending-pr-442-review",
+      status: "reviewed-go-code-eligibility",
+      reviewDecision: "GO",
+      gate19Decision: "closed-narrow-scope",
+      reviewedImplementationHead: "ea3e642d623803902e3c43d458e23d069177f949",
       fixtureSha256: "sha256:fee414a5b4e04bd0dfb7723f41a03de331d13f500c7a7ec06498bcfbf39732eb",
       fixtureCanonicalSha256: "sha256:600732eb0f165ab96116cecd3dccfb93f80b8cce954a3e60c03e8062fcd3cf4a",
       runtimePolicyCanonicalSha256: "sha256:dccd7b5859eb6e648b14afc5c40861104cd24395a6c5a05a39b1d9c5ee3189e7",

@@ -96,8 +96,8 @@ HEAD 24b9395c131a9849724c5bf098cba140a207e877
 
 | UI operation | Candidate K2 WS9999 command | Production status |
 | --- | --- | --- |
-| CFS load / 押出し | `feedInOrOut.isFeed = 1` | F012 + CFS 1台の1A/1Bでlive certified。module-owned registryへ登録済みで、厳密なscope一致時だけproduction planを生成できる。通常UIはGate 19.5まで無効 |
-| CFS unload / 引戻し | `feedInOrOut.isFeed = 0` | F012 + CFS 1台の1A/1Bでlive certified。module-owned registryへ登録済みで、厳密なscope一致時だけproduction planを生成できる。通常UIはGate 19.5まで無効 |
+| CFS load / 押出し | `feedInOrOut.isFeed = 1` | F012 + CFS 1台の1A/1Bでlive certified。module-owned registryへ登録済みで、厳密なscope一致と接続先別opt-in時だけ通常UIからproduction planを生成できる |
+| CFS unload / 引戻し | `feedInOrOut.isFeed = 0` | F012 + CFS 1台の1A/1Bでlive certified。module-owned registryへ登録済みで、厳密なscope一致と接続先別opt-in時だけ通常UIからproduction planを生成できる |
 | 独立したslot select / feed / retract | 未確定 | `cfs-slot-select` / `cfs-feed` / `cfs-retract` は別command kindとして未certifiedのためdisabled |
 | Material metadata edit | `modifyMaterial` | 未certified。RFID材料とGeneric材料で可否差があるためread-onlyから開始 |
 | RFID refresh | `refreshBox` | 未certified。副作用が小さいが物理状態変化を伴うためUI開放は別判断 |

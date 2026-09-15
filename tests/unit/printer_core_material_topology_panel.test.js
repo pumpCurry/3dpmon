@@ -16,9 +16,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1672 (PR #442)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-09-09 12:05:20
+ * @lastModified 2026-09-15 14:12:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -456,6 +456,110 @@ describe("Printer Core v3 material topology panel", () => {
       protocolSlotId: 2,
     });
     expect(container.textContent).toContain("送信直前に再検証");
+  });
+
+  it("Gate19.5: operatorが送信確認をキャンセルした場合はphysical command hookを呼ばない", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const confirmCommand = vi.fn().mockResolvedValue(false);
+    const onCommand = vi.fn().mockResolvedValue({ status: "acknowledged", completed: true });
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["load"],
+        confirmCommand,
+        onCommand,
+      },
+    });
+
+    getSlotActionButton(container, "1C", "load")?.click();
+    await flushRealUiTick();
+
+    expect(confirmCommand).toHaveBeenCalledWith(expect.objectContaining({
+      action: "load",
+      commandKind: "cfs-load",
+      sourceId: "cfs:1:slot:2",
+      displaySlot: "1C",
+    }));
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(container.querySelector('.mtv-slot[data-slot="1C"] .mtv-command-status')?.textContent)
+      .toContain("操作をキャンセルしました");
+  });
+
+  it("Gate19.5: operator確認必須なのに確認hookが無い場合はCFS操作をfail-closedにする", () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["load"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const onCommand = vi.fn();
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["load"],
+        requireOperatorConfirmation: true,
+        onCommand,
+      },
+    });
+
+    const button = getSlotActionButton(container, "1C", "load");
+    expect(button?.disabled).toBe(true);
+    expect(button?.title).toContain("操作確認を構成できない");
+    button?.click();
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it("Gate19.5: operatorが送信確認を承認した場合だけphysical command hookを呼ぶ", async () => {
+    const topology = normalizeK2BoxsInfo(createOneUnitBoxsInfo(), { connected: true });
+    const viewModel = createMaterialTopologyViewModel(topology, {
+      unitLimit: 1,
+      commandAuthority: {
+        canSendCommands: true,
+        allowedActions: ["unload"],
+        sourceAuthority: "printer-core-command-dispatcher",
+      },
+    });
+    const container = document.createElement("div");
+    const confirmCommand = vi.fn().mockResolvedValue(true);
+    const onCommand = vi.fn().mockResolvedValue({ status: "acknowledged", completed: true });
+
+    renderMaterialTopologyPanel(container, viewModel, {
+      hostname: "K2Pro",
+      control: {
+        canSendCommands: true,
+        allowedActions: ["unload"],
+        confirmCommand,
+        onCommand,
+      },
+    });
+
+    getSlotActionButton(container, "1C", "unload")?.click();
+    await flushRealUiTick();
+
+    expect(confirmCommand).toHaveBeenCalledTimes(1);
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(onCommand).toHaveBeenCalledWith(expect.objectContaining({
+      action: "unload",
+      commandKind: "cfs-unload",
+      displaySlot: "1C",
+    }));
   });
 
   it.each([
@@ -1518,6 +1622,7 @@ describe("Printer Core v3 material topology panel", () => {
       expect(selectButton?.disabled).toBe(true);
       expect(selectButton?.dataset.busy).toBe("true");
       expect(status?.textContent).toContain("選択がタイムアウトしました");
+      expect(status?.textContent).toContain("CFS認証カードで実機状態を確認");
       expect(status?.dataset.executionState).toBe("unknown");
       expect(status?.classList.contains("mtv-command-status-timeout")).toBe(true);
     } finally {
