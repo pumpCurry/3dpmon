@@ -11,6 +11,7 @@
  * - 接続先ごとの単一スプール/CFS/CFS-C表示設定を正規化
  * - Printer Core v3 material topology の観測状態と手動設定から表示モード/表示台数を決定
  * - material provider はread-only表示用途に限定し、command/ledger authorityと分離
+ * - Gate 19で狭く認証されたK2 CFS操作の明示opt-in参照値をfail-closedに正規化
  *
  * 【公開関数一覧】
  * - {@link createDefaultMaterialSystemSettings}：プリンタ種別に応じた既定設定を生成
@@ -19,12 +20,12 @@
  * - {@link resolveMaterialTopologyViewOptions}：表示対象のCFS/CFS-C台数とslot数を決定
  * - {@link resolveDisplayMaterialTopology}：runtime鮮度を反映した表示用topologyを生成
  *
- * @version 1.390.1432 (PR #435)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 09:40:48
+ * @lastModified 2026-09-15 13:44:11
  * -----------------------------------------------------------
  * @todo
- * - CFS/CFS-C command authority を有効化するGateで、feed/retract/selectの許可条件を別契約として追加する
+ * - 追加機種・firmware・source・commandを開く場合は別の実機certification IDとして追加する
  */
 
 "use strict";
@@ -107,6 +108,29 @@ export const MATERIAL_SLOTS_PER_UNIT = 4;
 export const MATERIAL_EXTERNAL_SOURCE_LIMIT = 1;
 
 /**
+ * Gate 19で実機認証されたK2 CFS狭域操作のcertification ID。
+ *
+ * 【詳細説明】
+ * - 設定画面は証跡objectを保存せず、この不変IDだけをmodule-owned registry参照として保存する。
+ * - 実際のproduction authorityはtransport registryとsend-time検証にあり、この定数単独では送信できない。
+ *
+ * @constant {string}
+ */
+export const K2_CFS_NARROW_CONTROL_CERTIFICATION_ID =
+  "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1";
+
+/**
+ * Gate 19.5の設定UIから要求できるCFS操作action。
+ *
+ * 【詳細説明】
+ * - F012/CFS 1台の1A・1Bで実機確認済みのload/unloadだけを保存対象にする。
+ * - select/feed/retract、未知action、caller supplied actionはnormalizerで除去する。
+ *
+ * @constant {ReadonlyArray<string>}
+ */
+export const K2_CFS_NARROW_CONTROL_ALLOWED_ACTIONS = Object.freeze(["load", "unload"]);
+
+/**
  * material topology を「現在値」と見なす最大経過時間。
  *
  * 【詳細説明】
@@ -149,6 +173,50 @@ function normalizeUnitLimit(value, fallback) {
   const numeric = Number(value);
   const source = Number.isFinite(numeric) ? Math.floor(numeric) : fallback;
   return Math.max(0, Math.min(MAX_MATERIAL_UNIT_COUNT, source));
+}
+
+/**
+ * 保存済みCFS physical control設定を既知の狭いcertification参照へ正規化する。
+ *
+ * 【詳細説明】
+ * - K2以外、未知certification ID、明示enableなし、許可actionなしはすべてdisabledへ倒す。
+ * - action順序はmodule-owned allow-listへ揃え、重複や未知値で権限が広がらないようにする。
+ * - ここではUI opt-inだけを扱い、model/firmware/topology/session等のauthorityはsend-timeで再検証する。
+ *
+ * @private
+ * @function normalizeMaterialSystemCfsControl
+ * @param {object|null|undefined} value - 保存済みCFS control設定候補
+ * @param {string} printerType - 接続先プリンタ種別
+ * @param {number} unitLimit - 正規化済みCFS表示台数
+ * @returns {{enabled:boolean, certificationId:string, allowedActions:string[]}} 正規化済みopt-in設定
+ */
+function normalizeMaterialSystemCfsControl(value, printerType, unitLimit) {
+  const source = value && typeof value === "object" ? value : {};
+  const certificationId = typeof source.certificationId === "string"
+    ? source.certificationId.trim()
+    : "";
+  const requestedActions = new Set(
+    Array.isArray(source.allowedActions)
+      ? source.allowedActions.map((action) => String(action || "").trim()).filter(Boolean)
+      : []
+  );
+  const allowedActions = K2_CFS_NARROW_CONTROL_ALLOWED_ACTIONS.filter((action) => requestedActions.has(action));
+  const eligible = printerType === "creality-k2" &&
+    unitLimit === 1 &&
+    certificationId === K2_CFS_NARROW_CONTROL_CERTIFICATION_ID &&
+    source.enabled === true &&
+    allowedActions.length > 0;
+  return eligible
+    ? {
+      enabled: true,
+      certificationId: K2_CFS_NARROW_CONTROL_CERTIFICATION_ID,
+      allowedActions,
+    }
+    : {
+      enabled: false,
+      certificationId: "",
+      allowedActions: [],
+    };
 }
 
 /**
@@ -222,6 +290,11 @@ export function createDefaultMaterialSystemSettings(printerType = "creality-k1")
     readOnly: true,
     canSendCommands: false,
     canDriveLedger: false,
+    cfsControl: {
+      enabled: false,
+      certificationId: "",
+      allowedActions: [],
+    },
   };
 }
 
@@ -242,6 +315,7 @@ export function createDefaultMaterialSystemSettings(printerType = "creality-k1")
 export function normalizeMaterialSystemSettings(settings, printerType = "creality-k1") {
   const defaults = createDefaultMaterialSystemSettings(printerType);
   const source = settings && typeof settings === "object" ? settings : {};
+  const unitLimit = normalizeUnitLimit(source.unitLimit, defaults.unitLimit);
   return {
     mode: normalizeEnumValue(
       source.mode,
@@ -261,12 +335,13 @@ export function normalizeMaterialSystemSettings(settings, printerType = "crealit
     providerEndpoint: typeof source.providerEndpoint === "string"
       ? source.providerEndpoint.trim()
       : defaults.providerEndpoint,
-    unitLimit: normalizeUnitLimit(source.unitLimit, defaults.unitLimit),
+    unitLimit,
     slotsPerUnit: Math.max(0, Math.min(MATERIAL_SLOTS_PER_UNIT, Number.isFinite(Number(source.slotsPerUnit)) ? Math.floor(Number(source.slotsPerUnit)) : defaults.slotsPerUnit)),
     externalSourceLimit: Math.max(0, Math.min(MATERIAL_EXTERNAL_SOURCE_LIMIT, Number.isFinite(Number(source.externalSourceLimit)) ? Math.floor(Number(source.externalSourceLimit)) : defaults.externalSourceLimit)),
     readOnly: true,
     canSendCommands: false,
     canDriveLedger: false,
+    cfsControl: normalizeMaterialSystemCfsControl(source.cfsControl, printerType, unitLimit),
   };
 }
 

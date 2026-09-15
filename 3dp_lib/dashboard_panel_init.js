@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-09-02 01:07:00
+ * @lastModified 2026-09-15 14:12:00
  * -----------------------------------------------------------
  */
 
@@ -98,8 +98,9 @@ import {
 import {
   K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
   createK2CfsCommandTransportPlan,
+  resolveRegisteredK2CfsSlotControlCertificationEvidence,
   sendK2CfsCommandTransportPlan,
-  validateRegisteredK2CfsSlotControlCertificationEvidence,
+  validateRegisteredK2CfsSlotControlCertificationTarget,
 } from "./printer_core/dashboard_k2_cfs_command_transport.js";
 import {
   MATERIAL_DISPLAY_MODE,
@@ -168,7 +169,7 @@ const CFS_CONTROL_ACTION_COMMAND_KIND = Object.freeze({
  *
  * @constant {string}
  */
-const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です";
+const CFS_CONTROL_DISABLED_REASON = "接続設定で認証済みCFS操作が有効化されていないか、現在の実機条件が認証範囲外です";
 
 /**
  * CFS物理commandの同一device同時実行を止めるin-memory single-flight map。
@@ -182,38 +183,46 @@ const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/
 const CFS_PHYSICAL_COMMAND_IN_FLIGHT_BY_DEVICE = new Map();
 
 /**
- * CFS物理操作で許可するprinter idle観測の有効期限。
- *
- * 【詳細説明】
- * - dispatch contextのTTLとは別に、K2 status frame自体が十分新しいことを要求する。
- * - F012ではstatusがdelta-onlyやtimeoutになるため、古いcomplete idle snapshotを現在値として使わない。
+ * K2 CFS物理command送信後、最初の端末状態観測まで待つ時間ms。
  *
  * @constant {number}
  */
-const CFS_PRINTER_IDLE_OBSERVATION_TTL_MS = 5000;
+const CFS_CONTROL_CONFIRMATION_INITIAL_DELAY_MS = 1500;
 
 /**
- * 配列/Set/map形式のcommand kind allow-listをSetへ正規化する。
+ * K2 CFS物理command送信後の端末状態観測間隔ms。
  *
- * @private
- * @param {*} value - allow-list候補
- * @returns {Set<string>} 正規化済みcommand kind set
+ * @constant {number}
  */
-function normalizeCertifiedCfsCommandSet(value) {
-  if (value instanceof Set) {
-    return new Set(Array.from(value).map((entry) => String(entry || "").trim()).filter(Boolean));
-  }
-  if (Array.isArray(value)) {
-    return new Set(value.map((entry) => String(entry || "").trim()).filter(Boolean));
-  }
-  if (value && typeof value === "object") {
-    return new Set(Object.entries(value)
-      .filter(([, enabled]) => enabled === true)
-      .map(([commandKind]) => String(commandKind || "").trim())
-      .filter(Boolean));
-  }
-  return new Set();
-}
+const CFS_CONTROL_CONFIRMATION_INTERVAL_MS = 5000;
+
+/**
+ * K2 CFS物理command送信後の最大端末状態観測回数。
+ *
+ * 【詳細説明】
+ * - 実機captureで初期の短い観測窓を超えた操作があったため、約116.5秒まで状態だけを追跡する。
+ * - transport command自体は再送せず、観測回数だけを制限する。
+ *
+ * @constant {number}
+ */
+const CFS_CONTROL_CONFIRMATION_MAX_ATTEMPTS = 24;
+
+/**
+ * CFS物理command requestのtimeout ms。
+ *
+ * @constant {number}
+ */
+const CFS_CONTROL_REQUEST_TIMEOUT_MS = 120000;
+
+/**
+ * rendererがCFS物理command全体を待つtimeout ms。
+ *
+ * 【詳細説明】
+ * - dispatcherの最大観測窓より先にrendererがtimeoutしないよう、request timeoutへ5秒の猶予を加える。
+ *
+ * @constant {number}
+ */
+const CFS_CONTROL_UI_TIMEOUT_MS = 125000;
 
 /**
  * connection targetに保存された`/info`証跡が現在起動中のre-probe結果か判定する。
@@ -270,9 +279,8 @@ function parseIsoEpochMs(value) {
  * production dispatcherへ渡すprinter idle観測証跡を生成する。
  *
  * 【詳細説明】
- * - K2 Facadeの累積stateは古い`idle`ラベルを保持し得るため、CFS物理操作前には
- *   status frameの完全性、観測時刻、session、connectionGenerationを1つの証跡にまとめる。
- * - 完全性metadataや受信時刻が無い旧経路ではnullを返し、従来のfail-closed判定へ委ねる。
+ * - live shadowが同一status frameから生成した専用証跡だけを採用し、累積`lastState`から再構成しない。
+ * - 送信直前の時刻でTTLを再評価し、期限切れなら`fresh:false`としてauthorityへ渡す。
  *
  * @private
  * @function createPrinterIdleObservationForCfsControl
@@ -290,46 +298,32 @@ function createPrinterIdleObservationForCfsControl(shadowRecord, connectionGener
       fresh: observed.fresh === true && expiresAtMs !== null && expiresAtMs > nowMs,
     };
   }
-  const lastState = shadowRecord?.lastState;
-  const print = lastState?.print;
-  if (!lastState || !print || typeof print !== "object") {
+  return null;
+}
+
+/**
+ * production dispatcherへ渡すCFS物理操作用統合安全証跡を生成する。
+ *
+ * 【詳細説明】
+ * - live shadowがprinter idle、feedState、raw errorを同一status sequenceへ束縛した証跡だけを採用する。
+ * - 累積stateや別frameから欠損値を補わず、未生成時はnullを返してsend-time validationをfail-closedにする。
+ * - 証跡本体を書き換えず、現在時刻に対するfreshnessだけを再計算する。
+ *
+ * @private
+ * @function createCfsPhysicalSafetyObservationForCfsControl
+ * @param {object|null|undefined} shadowRecord - Printer Core v3 live shadow record
+ * @param {number=} nowMs - 現在epoch ms
+ * @returns {object|null} CFS物理操作用統合安全証跡
+ */
+function createCfsPhysicalSafetyObservationForCfsControl(shadowRecord, nowMs = Date.now()) {
+  const observed = shadowRecord?.cfsPhysicalSafetyObservation;
+  if (!observed || typeof observed !== "object") {
     return null;
   }
-  const receivedAt = lastState.source?.receivedAt || shadowRecord.lastObservedAt || null;
-  const receivedAtMs = parseIsoEpochMs(receivedAt);
-  if (receivedAtMs === null) {
-    return null;
-  }
-  const snapshotCompleteness = String(print.snapshotCompleteness || "").trim() || "unknown";
-  const activityState = String(print.activityState || "").trim() || "unknown";
-  const coreStateComplete = typeof print.coreStateComplete === "boolean" ? print.coreStateComplete : null;
-  const stateLabel = String(print.stateLabel || print.state || "").trim().toLowerCase();
-  const observedConnectionGeneration = Number(
-    shadowRecord.connectionGeneration ??
-    shadowRecord.printerCoreV3ConnectionGeneration ??
-    lastState.source?.connectionGeneration ??
-    connectionGeneration
-  );
-  const idle = ["idle", "ready", "standby"].includes(stateLabel) &&
-    activityState.toLowerCase() === "idle" &&
-    snapshotCompleteness.toLowerCase() === "complete" &&
-    coreStateComplete === true;
-  const expiresAtMs = receivedAtMs + CFS_PRINTER_IDLE_OBSERVATION_TTL_MS;
+  const expiresAtMs = parseIsoEpochMs(observed.expiresAt);
   return {
-    status: snapshotCompleteness.toLowerCase() === "complete" && coreStateComplete === true ? "observed" : "partial",
-    activityState,
-    coreStateComplete,
-    snapshotCompleteness,
-    observedAt: receivedAt,
-    receivedAt,
-    expiresAt: new Date(expiresAtMs).toISOString(),
-    sessionId: lastState.source?.sessionId || shadowRecord.sessionId || null,
-    connectionGeneration: Number.isFinite(observedConnectionGeneration) ? observedConnectionGeneration : null,
-    baselineSequence: lastState.source?.sequence ?? shadowRecord.lastSequence ?? null,
-    lastAppliedSequence: lastState.source?.sequence ?? shadowRecord.lastSequence ?? null,
-    appliedDeltaCount: 0,
-    fresh: expiresAtMs > nowMs,
-    idle,
+    ...observed,
+    fresh: observed.fresh === true && expiresAtMs !== null && expiresAtMs > nowMs,
   };
 }
 
@@ -364,14 +358,57 @@ function selectCurrentPrinterCoreV3Info(target) {
  *
  * @private
  * @param {object|null|undefined} target - 接続target設定
+ * @param {object|null|undefined=} source - 現在観測した操作対象source
+ * @param {object|null|undefined=} topology - send-timeで観測したmaterial topology
  * @returns {object} certification scope
  */
-function createCfsControlCertificationScope(target) {
+function createCfsControlCertificationScope(target, source = null, topology = null) {
   const info = selectCurrentPrinterCoreV3Info(target);
+  const materialSystem = target?.materialSystem || {};
+  const mode = String(materialSystem.mode || "").trim();
+  const attachment = target?.printerType === "creality-k2" &&
+    (mode === "auto" || mode === "cfs-readonly")
+    ? "CFS"
+    : null;
+  const topologySources = Array.isArray(topology?.sources) ? topology.sources : [];
+  const topologyUnits = Array.isArray(topology?.units) ? topology.units : [];
+  const actualBoxIds = [...new Set([
+    ...topologyUnits.map((unit) => Number(unit?.boxId)),
+    ...topologySources
+      .filter((entry) => entry?.kind === "cfs-slot")
+      .map((entry) => Number(entry?.boxId)),
+  ].filter((boxId) => Number.isInteger(boxId)))].sort((left, right) => left - right);
+  const actualSlotIdsByBox = {};
+  topologySources
+    .filter((entry) => entry?.kind === "cfs-slot")
+    .forEach((entry) => {
+      const boxId = Number(entry?.boxId);
+      const slotId = Number(entry?.slotId ?? entry?.protocolSlotId ?? entry?.materialId);
+      if (!Number.isInteger(boxId) || !Number.isInteger(slotId)) {
+        return;
+      }
+      actualSlotIdsByBox[boxId] ||= [];
+      if (!actualSlotIdsByBox[boxId].includes(slotId)) {
+        actualSlotIdsByBox[boxId].push(slotId);
+        actualSlotIdsByBox[boxId].sort((left, right) => left - right);
+      }
+    });
+  const topologyCurrent = topology?.cfs?.connected === true &&
+    String(topology?.cfs?.topologyState || "") === "fresh";
   return {
     printerType: target?.printerType || null,
     model: info.model || info.reportedModel || null,
     firmwareVersion: info.version || info.firmwareVersion || null,
+    attachment,
+    cfsUnitCount: Number.isInteger(Number(materialSystem.unitLimit))
+      ? Number(materialSystem.unitLimit)
+      : null,
+    sourceId: source?.sourceId || source?.materialSourceId || null,
+    boxId: source?.boxId ?? null,
+    slotId: source?.slotId ?? source?.protocolSlotId ?? source?.materialId ?? null,
+    actualCfsUnitCount: topologyCurrent ? actualBoxIds.length : null,
+    actualCfsBoxIds: topologyCurrent ? actualBoxIds : [],
+    actualSlotIdsByBox: topologyCurrent ? actualSlotIdsByBox : {},
   };
 }
 
@@ -380,8 +417,9 @@ function createCfsControlCertificationScope(target) {
  *
  * 【詳細説明】
  * - 既定では必ずnullを返し、既存ユーザーのCFS監視UIをread-onlyのまま保つ。
- * - `materialSystem.cfsControl.enabled === true`、認証済みcommand kind、certificationEvidenceが
- *   揃った場合だけ、composition層でbound dispatcherを生成する。
+ * - `materialSystem.cfsControl.enabled === true`、認証済みcommand kind、certificationIdが
+ *   揃った場合だけ、module-owned registryから証跡を解決してbound dispatcherを生成する。
+ * - 保存設定から証跡objectを直接採用せず、未知IDやlegacy evidence-only設定はread-onlyへ倒す。
  *
  * @private
  * @param {object|null|undefined} target - 接続target設定
@@ -395,22 +433,21 @@ function resolveCfsControlProductionSettings(target) {
   if (target?.printerType !== "creality-k2") {
     return null;
   }
-  const certifiedCommandKinds = normalizeCertifiedCfsCommandSet(
-    control.certifiedCfsSlotControlCommands
-  );
   const requestedActions = Array.isArray(control.allowedActions)
     ? control.allowedActions.map((action) => String(action || "").trim()).filter(Boolean)
-    : CFS_CONTROL_UI_ACTIONS;
-  const allowedActions = requestedActions.filter((action) => {
-    const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
-    return commandKind && certifiedCommandKinds.has(commandKind);
-  });
-  const evidence = control.certificationEvidence;
+    : [];
+  const evidence = resolveRegisteredK2CfsSlotControlCertificationEvidence(control.certificationId);
+  if (!evidence) {
+    return null;
+  }
   const scope = createCfsControlCertificationScope(target);
-  const certifiedAllowedActions = allowedActions.filter((action) => {
+  const certifiedAllowedActions = requestedActions.filter((action) => {
     const commandKind = CFS_CONTROL_ACTION_COMMAND_KIND[action];
-    const validation = validateRegisteredK2CfsSlotControlCertificationEvidence(evidence, commandKind, scope);
-    return validation.ok;
+    return Boolean(commandKind) && validateRegisteredK2CfsSlotControlCertificationTarget(
+      evidence,
+      commandKind,
+      scope
+    ).ok;
   });
   if (certifiedAllowedActions.length === 0) {
     return null;
@@ -419,6 +456,7 @@ function resolveCfsControlProductionSettings(target) {
     allowedActions: certifiedAllowedActions,
     certifiedCommandKinds: certifiedAllowedActions.map((action) => CFS_CONTROL_ACTION_COMMAND_KIND[action]),
     certificationEvidence: evidence,
+    certificationId: evidence.certificationId,
     certificationScope: scope,
   };
 }
@@ -432,10 +470,16 @@ function resolveCfsControlProductionSettings(target) {
  */
 function createCfsControlSendTimeMaterialTopology(topology) {
   const sources = Array.isArray(topology?.sources) ? topology.sources : [];
+  const units = Array.isArray(topology?.units) ? topology.units : [];
   return {
     cfsConnected: topology?.cfs?.connected === true,
     topologyState: String(topology?.cfs?.topologyState || "unobserved"),
     sourceCount: sources.length,
+    units: units.map((unit) => ({
+      unitId: unit?.unitId || null,
+      boxId: unit?.boxId ?? null,
+      observedSlotCount: unit?.observedSlotCount ?? null,
+    })),
     sources: sources.map((source) => ({
       sourceId: source?.sourceId || null,
       kind: source?.kind || null,
@@ -760,6 +804,7 @@ function createCfsControlSendTimeContext(hostname, request) {
     shadowRecord,
     connectionGeneration
   );
+  const cfsPhysicalSafetyObservation = createCfsPhysicalSafetyObservationForCfsControl(shadowRecord);
   const capabilities = [
     "material.cfs",
     "material.cfsTopology",
@@ -777,29 +822,216 @@ function createCfsControlSendTimeContext(hostname, request) {
     connectionGeneration,
     observedState: shadowRecord?.lastState || null,
     printerIdleObservation,
+    cfsPhysicalSafetyObservation,
     recoveryBlocker: createCfsControlRecoveryBlocker(request, {
       deviceId: shadowRecord?.deviceId || "",
     }),
     createdAt: new Date().toISOString(),
     certificationEvidence: currentProductionSettings.certificationEvidence,
-    certificationScope: createCfsControlCertificationScope(currentTarget),
+    certificationScope: currentProductionSettings.certificationScope,
   };
+}
+
+/**
+ * CFS topologyから現在選択中と証明できる装填source IDを収集する。
+ *
+ * 【詳細説明】
+ * - `selectionValid:true`、`selected:true`、明示loadedの3条件をすべて満たすsourceだけを採用する。
+ * - 材料metadataの残留値や未観測selectionから選択状態を推定しない。
+ *
+ * @private
+ * @function collectSelectedLoadedCfsSourceIds
+ * @param {object|null|undefined} materials - live shadowのmaterials state
+ * @returns {string[]} 現在選択中と証明できるsource ID一覧
+ */
+function collectSelectedLoadedCfsSourceIds(materials) {
+  const sources = Array.isArray(materials?.sources) ? materials.sources : [];
+  return sources
+    .filter((source) => {
+      const status = source?.status && typeof source.status === "object" ? source.status : {};
+      const selectionValid = source?.selectionValid ?? status.selectionValid;
+      const selected = source?.selected ?? status.selected;
+      const explicitPresence = String(source?.presence || status.presence || "").trim();
+      const stateCode = Number(status.stateCode ?? source?.stateCode);
+      const loaded = explicitPresence === "loaded" || (!explicitPresence && stateCode === 1);
+      return selectionValid === true && selected === true && loaded;
+    })
+    .map((source) => String(source?.sourceId || "").trim())
+    .filter(Boolean);
+}
+
+/**
+ * CFS commandの端末選択状態へ到達したか判定する。
+ *
+ * 【詳細説明】
+ * - loadは対象sourceが唯一選択、unloadは選択sourceが0件になった場合だけ端末状態とする。
+ * - 複数選択や別source選択は成功として扱わず、後続観測を待つ。
+ *
+ * @private
+ * @function isCfsControlTerminalSelection
+ * @param {object|null|undefined} request - Printer Core command request
+ * @param {string[]} selectedSourceIds - 現在選択中source ID一覧
+ * @returns {boolean} command固有の端末選択状態ならtrue
+ */
+function isCfsControlTerminalSelection(request, selectedSourceIds) {
+  const commandKind = String(request?.commandKind || "").trim();
+  if (commandKind === "cfs-load") {
+    const targetSourceId = String(request?.payload?.sourceId || "").trim();
+    return Boolean(targetSourceId) &&
+      selectedSourceIds.length === 1 &&
+      selectedSourceIds[0] === targetSourceId;
+  }
+  if (commandKind === "cfs-unload") {
+    return selectedSourceIds.length === 0;
+  }
+  return false;
 }
 
 /**
  * CFS command送信後の観測snapshotを返す。
  *
+ * 【詳細説明】
+ * - live shadowの選択状態と同一frame由来のphysical safety証跡をcommand result用stateへ投影する。
+ * - 送信時session/generationから変化した場合、またはraw printer errorを観測した場合は、
+ *   物理結果不明としてconfirmation errorを返し、それ以上の観測や再送を止める。
+ * - command後sequence、端末選択状態、feed停止、error clear、freshが揃った場合だけtrusted transition proofを返す。
+ *
  * @private
+ * @function observeCfsControlCommandState
  * @param {string} hostname - 対象ホスト名
+ * @param {object|null|undefined} request - Printer Core command request
+ * @param {object|null|undefined} context - transport送信時context
  * @returns {object} command result用観測snapshot
  */
-function observeCfsControlCommandState(hostname) {
+function observeCfsControlCommandState(hostname, request, context) {
   const shadowRecord = monitorData.machines[hostname]?.runtimeData?.printerCoreV3Shadow || null;
-  return {
-    observedState: shadowRecord?.lastState || null,
-    observedSequence: shadowRecord?.lastSequence ?? shadowRecord?.lastState?.source?.sequence ?? null,
-    observedSessionId: shadowRecord?.sessionId || "",
+  const observedState = shadowRecord?.lastState || null;
+  const observedSequence = shadowRecord?.lastSequence ?? observedState?.source?.sequence ?? null;
+  const observedSessionId = String(shadowRecord?.sessionId || observedState?.source?.sessionId || "").trim();
+  const currentGeneration = getPrinterCoreV3ConnectionGeneration(hostname);
+  const selectedSourceIds = collectSelectedLoadedCfsSourceIds(observedState?.materials);
+  const selectedSourceId = selectedSourceIds.length === 1
+    ? selectedSourceIds[0]
+    : (selectedSourceIds.length === 0 ? null : "multiple-selected-sources");
+  const physicalSafety = createCfsPhysicalSafetyObservationForCfsControl(shadowRecord);
+  const requestedSourceId = String(request?.payload?.sourceId || request?.payload?.materialSourceId || "").trim();
+  const requestedBoxId = Number(request?.payload?.boxId);
+  const requestedSlotId = Number(request?.payload?.slotIndex ?? request?.payload?.protocolSlotId);
+  const currentSources = Array.isArray(observedState?.materials?.sources)
+    ? observedState.materials.sources
+    : [];
+  const currentTargetSource = currentSources.find((source) => (
+    String(source?.sourceId || "").trim() === requestedSourceId
+  )) || null;
+  const projectedState = observedState && typeof observedState === "object"
+    ? {
+      ...observedState,
+      materials: {
+        ...(observedState.materials || {}),
+        selectedSource: {
+          sourceId: selectedSourceId,
+          sourceIds: [...selectedSourceIds],
+        },
+        cfsPhysicalSafety: {
+          feedState: physicalSafety?.feedState ?? null,
+          errorClear: physicalSafety?.errorClear === true,
+          fresh: physicalSafety?.fresh === true,
+        },
+      },
+    }
+    : null;
+  const observation = {
+    observedState: projectedState,
+    observedSequence,
+    observedSessionId,
   };
+  if (getConnectionState(hostname) !== "connected") {
+    return {
+      ...observation,
+      confirmationError: {
+        code: "confirmation-connection-lost",
+        message: "The printer connection closed after CFS command submission.",
+      },
+    };
+  }
+  if (!observedSessionId || observedSessionId !== String(context?.sessionId || "").trim()) {
+    return {
+      ...observation,
+      confirmationError: {
+        code: "confirmation-session-changed",
+        message: "The active printer session changed after CFS command submission.",
+      },
+    };
+  }
+  if (!currentGeneration || currentGeneration !== Number(context?.connectionGeneration)) {
+    return {
+      ...observation,
+      confirmationError: {
+        code: "confirmation-generation-changed",
+        message: "The printer connection generation changed after CFS command submission.",
+      },
+    };
+  }
+  if (physicalSafety?.printerErrorObserved === true && physicalSafety.errorClear !== true) {
+    return {
+      ...observation,
+      confirmationError: {
+        code: "confirmation-printer-error",
+        message: `The printer reported an error after CFS command submission: ${physicalSafety.printerErrorCode ?? "?"}/${physicalSafety.printerErrorKey ?? "?"}.`,
+      },
+    };
+  }
+  const sentSequence = Number(context?.stateSequence);
+  const currentSequence = Number(observedSequence);
+  const sequenceAdvanced = Number.isFinite(sentSequence) &&
+    Number.isFinite(currentSequence) &&
+    currentSequence > sentSequence;
+  const materialSequence = Number(shadowRecord?.materialProviderLastSequence);
+  const materialSequenceAdvanced = Number.isFinite(sentSequence) &&
+    Number.isFinite(materialSequence) &&
+    materialSequence > sentSequence;
+  const targetStatus = currentTargetSource?.status && typeof currentTargetSource.status === "object"
+    ? currentTargetSource.status
+    : {};
+  const targetPresence = String(currentTargetSource?.presence || targetStatus.presence || "").trim();
+  const targetStateCode = Number(targetStatus.stateCode ?? currentTargetSource?.stateCode);
+  const targetLoaded = targetPresence === "loaded" || (!targetPresence && targetStateCode === 1);
+  const targetLocationCurrent = Boolean(currentTargetSource) &&
+    currentTargetSource?.kind === "cfs-slot" &&
+    Number(currentTargetSource?.boxId) === requestedBoxId &&
+    Number(currentTargetSource?.slotId ?? currentTargetSource?.protocolSlotId ?? currentTargetSource?.materialId) === requestedSlotId;
+  const topologyCurrent = observedState?.materials?.cfs?.connected === true &&
+    String(observedState?.materials?.cfs?.topologyState || "") === "fresh" &&
+    materialSequenceAdvanced &&
+    targetLocationCurrent &&
+    targetLoaded;
+  const safetyBoundToCurrentFrame = physicalSafety?.physicalIdleEvidenceComplete === true &&
+    physicalSafety?.fresh === true &&
+    physicalSafety?.idle === true &&
+    physicalSafety?.feedStateObserved === true &&
+    physicalSafety?.feedState === 0 &&
+    physicalSafety?.printerErrorObserved === true &&
+    physicalSafety?.errorClear === true &&
+    physicalSafety?.sessionId === observedSessionId &&
+    Number(physicalSafety?.connectionGeneration) === currentGeneration &&
+    Number(physicalSafety?.lastAppliedSequence) === currentSequence;
+  if (
+    sequenceAdvanced &&
+    topologyCurrent &&
+    safetyBoundToCurrentFrame &&
+    isCfsControlTerminalSelection(request, selectedSourceIds)
+  ) {
+    return {
+      ...observation,
+      trustedCorrelationProof: {
+        evidenceSource: "k2-live-shadow-terminal-transition",
+        transitionId: `${request.commandId}:${currentSequence}`,
+        commandId: request.commandId,
+        sessionId: observedSessionId,
+      },
+    };
+  }
+  return observation;
 }
 
 /**
@@ -859,7 +1091,7 @@ function resolveCfsControlRecoveryLatchStatus(result) {
  */
 async function reserveCfsControlRecoveryLatchBeforeTransport(hostname, request, context) {
   const target = getConnectionTarget(hostname);
-  const evidence = target?.materialSystem?.cfsControl?.certificationEvidence || {};
+  const certificationId = String(target?.materialSystem?.cfsControl?.certificationId || "").trim() || null;
   const record = createPhysicalCommandRecoveryLatchRecord({
     commandId: request.commandId,
     commandKind: request.commandKind,
@@ -869,7 +1101,7 @@ async function reserveCfsControlRecoveryLatchBeforeTransport(hostname, request, 
     status: PHYSICAL_COMMAND_RECOVERY_LATCH_STATUS.SUBMITTED,
     sentAt: request.createdAt || context?.createdAt || new Date().toISOString(),
     materialSourceId: request.payload?.sourceId || null,
-    certificationId: evidence.certificationId || evidence.captureId || evidence.fixtureId || null,
+    certificationId,
     preObservation: {
       sequence: context?.stateSequence ?? null,
       digest: context?.contextId || null,
@@ -1014,7 +1246,7 @@ function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
       };
     }
     const target = getConnectionTarget(hostname);
-    const evidence = target?.materialSystem?.cfsControl?.certificationEvidence || {};
+    const certificationId = String(target?.materialSystem?.cfsControl?.certificationId || "").trim() || null;
     const postObservation = result.postCommandObservation || {};
     const record = createPhysicalCommandRecoveryLatchRecord({
       commandId: request.commandId,
@@ -1025,7 +1257,7 @@ function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
       status: latchStatus,
       sentAt: request.createdAt || new Date().toISOString(),
       materialSourceId: request.payload?.sourceId || null,
-      certificationId: evidence.certificationId || evidence.captureId || evidence.fixtureId || null,
+      certificationId,
       preObservation: {
         sequence: postObservation.sentSequence ?? null,
         digest: postObservation.correlationId || result.commandCorrelation?.correlationId || null,
@@ -1062,6 +1294,88 @@ function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
 }
 
 /**
+ * terminal stateまで確認済みのCFS command予約ラッチを観測解決する。
+ *
+ * 【詳細説明】
+ * - transport前にdurable保存したsubmitted予約は、CommandResultがcompletedになっても自動では消えない。
+ * - 同一command/session/sourceへ束縛されたpost-command correlationを根拠にobserved解決し、次の物理操作を許可する。
+ * - timeout、confirmation error、未確認結果は解決せず、operator確認までfail-closedラッチを維持する。
+ * - 解決済みstoreのdurable保存が失敗または例外になった場合は、元の未解決storeへ戻す。
+ *
+ * @private
+ * @function resolveCompletedCfsControlRecoveryLatch
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} dispatchOutput - CFS command integrationの戻り値
+ * @returns {Promise<object>} recoveryLatch diagnosticsを付加したdispatchOutput
+ */
+async function resolveCompletedCfsControlRecoveryLatch(hostname, dispatchOutput) {
+  const result = dispatchOutput?.result || null;
+  const request = dispatchOutput?.request || null;
+  if (!request || result?.completed !== true) {
+    return dispatchOutput;
+  }
+  const currentStore = monitorData.physicalCommandRecoveryLatch || null;
+  const currentRecord = currentStore?.unresolvedByCommandId?.[request.commandId] || null;
+  if (!currentRecord) {
+    return dispatchOutput;
+  }
+  const postObservation = result.postCommandObservation || {};
+  const resolutionResult = resolvePhysicalCommandRecoveryLatchRecord(currentStore, {
+    commandId: request.commandId,
+    resolution: "observed-terminal-confirmed",
+    resolvedAt: new Date().toISOString(),
+    expectedDeviceId: request.deviceId,
+    expectedDigest: currentRecord.digest || null,
+    expectedCommandKind: request.commandKind,
+    expectedMaterialSourceId: request.payload?.sourceId || null,
+    resolutionSource: "printer-core-command-dispatcher",
+    operatorAcknowledged: false,
+    panelDeviceId: request.deviceId,
+    postObservation: {
+      sequence: postObservation.observedSequence ?? null,
+      digest: postObservation.correlationId || null,
+      observedAt: result.completedAt || new Date().toISOString(),
+    },
+  });
+  if (resolutionResult?.ok === true && resolutionResult.store) {
+    const previousStore = monitorData.physicalCommandRecoveryLatch;
+    monitorData.physicalCommandRecoveryLatch = resolutionResult.store;
+    let durableResult = null;
+    try {
+      durableResult = await saveUnifiedStorageDurably();
+    } catch (error) {
+      durableResult = {
+        ok: false,
+        reason: String(error?.message || error || "durable-save-threw"),
+      };
+    }
+    if (durableResult?.ok !== true) {
+      if (monitorData.physicalCommandRecoveryLatch === resolutionResult.store) {
+        monitorData.physicalCommandRecoveryLatch = previousStore;
+      }
+      return {
+        ...dispatchOutput,
+        recoveryLatch: {
+          ok: false,
+          status: "durable-save-failed",
+          commandId: request.commandId,
+          latchStatus: currentRecord.status,
+        },
+      };
+    }
+  }
+  return {
+    ...dispatchOutput,
+    recoveryLatch: {
+      ok: resolutionResult?.ok === true,
+      status: resolutionResult?.status || "unknown",
+      commandId: request.commandId,
+      latchStatus: resolutionResult?.ok === true ? "completed" : currentRecord.status,
+    },
+  };
+}
+
+/**
  * production CFS control用のbound dispatcherを生成する。
  *
  * @private
@@ -1077,10 +1391,16 @@ function createCfsControlDispatcher(hostname) {
       if (!currentSettings || !currentSettings.certifiedCommandKinds.includes(String(request?.commandKind || "").trim())) {
         throw new Error("cfs-control-certification-revoked");
       }
+      const machine = monitorData.machines[hostname] || {};
+      const sources = Array.isArray(machine.runtimeData?.printerCoreV3Shadow?.lastState?.materials?.sources)
+        ? machine.runtimeData.printerCoreV3Shadow.lastState.materials.sources
+        : [];
+      const requestedSourceId = String(request?.payload?.sourceId || request?.payload?.materialSourceId || "").trim();
+      const currentSource = sources.find((source) => String(source?.sourceId || "").trim() === requestedSourceId) || null;
+      const currentTopology = machine.runtimeData?.printerCoreV3Shadow?.lastState?.materials || null;
       const plan = createK2CfsCommandTransportPlan(request, {
-        certifiedCfsSlotControlCommands: currentSettings.certifiedCommandKinds,
-        certificationEvidence: currentSettings.certificationEvidence,
-        certificationScope: currentSettings.certificationScope,
+        certificationId: currentSettings.certificationId,
+        certificationScope: createCfsControlCertificationScope(currentTarget, currentSource, currentTopology),
       });
       if (!plan.ok) {
         throw new Error(`k2-cfs-control-plan-rejected:${plan.reason}`);
@@ -1101,17 +1421,54 @@ function createCfsControlDispatcher(hostname) {
         releaseCfsPhysicalCommandFlightLock(flightLock);
       }
     },
-    observeState: () => observeCfsControlCommandState(hostname),
+    observeState: (request, context) => observeCfsControlCommandState(hostname, request, context),
+    confirmationInitialDelayMs: CFS_CONTROL_CONFIRMATION_INITIAL_DELAY_MS,
+    confirmationIntervalMs: CFS_CONTROL_CONFIRMATION_INTERVAL_MS,
+    confirmationMaxAttempts: CFS_CONTROL_CONFIRMATION_MAX_ATTEMPTS,
   });
+}
+
+/**
+ * production CFS physical commandの送信前にoperator確認を要求する。
+ *
+ * 【詳細説明】
+ * - 対象slotと実機動作を明示し、通常パネルでの誤クリックをtransport送信前に止める。
+ * - load/unload以外の未知actionは確認ダイアログを出さずfail-closedで拒否する。
+ * - ダイアログのcancel/ESCはfalseとして扱い、command dispatcherへ到達させない。
+ *
+ * @private
+ * @function confirmCfsPhysicalCommand
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} intent - material topology panelが生成した操作intent
+ * @returns {Promise<boolean>} operatorが明示承認した場合のみtrue
+ */
+async function confirmCfsPhysicalCommand(hostname, intent) {
+  const action = String(intent?.action || "").trim();
+  const actionLabel = action === "load"
+    ? "押出し"
+    : (action === "unload" ? "引戻し" : "");
+  if (!actionLabel) {
+    return false;
+  }
+  const displaySlot = String(intent?.displaySlot || intent?.sourceId || "対象スロット").trim();
+  const { showConfirmDialog } = await import("./dashboard_ui_confirm.js");
+  const result = await showConfirmDialog({
+    level: "warnRed",
+    title: `CFS ${displaySlot}を${actionLabel === "押出し" ? "押し出します" : "引き戻します"}か？`,
+    message: `${hostname} のCFS・供給経路・ノズルが実際に動作します。プリンタが待機中で、周囲と材料経路が安全であることを確認してください。`,
+    confirmText: `${actionLabel}を実行`,
+    cancelText: "キャンセル",
+  });
+  return result === true;
 }
 
 /**
  * CFS/CFS-C操作候補用のrenderer control optionを生成する。
  *
  * 【詳細説明】
- * - 通常フィラメントパネルからintegration scaffoldへのhook位置だけを固定する。
- * - `canSendCommands:false` と `dispatchCfsControlIntent(..., { enabled:false })` の二重ロックにより、
- *   production activation前にUI操作がtransportへ流れないようにする。
+ * - Gate 19の狭い認証範囲と接続先ごとの明示opt-inが揃った場合だけproduction hookを構成する。
+ * - production時も送信前operator確認、send-time再検証、復旧ラッチを重ねる。
+ * - 条件不一致時は`canSendCommands:false`とdisabled integrationの二重ロックを維持する。
  *
  * @private
  * @param {string} hostname - 対象ホスト名
@@ -1139,6 +1496,7 @@ function createCfsControlRenderOptions(hostname) {
           transportKind: "ws9999",
           idempotencyKey: `cfs-control:${hostname}:${Date.now()}`,
           createdAt: new Date().toISOString(),
+          timeoutMs: CFS_CONTROL_REQUEST_TIMEOUT_MS,
         };
       },
     });
@@ -1146,9 +1504,21 @@ function createCfsControlRenderOptions(hostname) {
       showControls: true,
       canSendCommands: true,
       allowedActions: productionSettings.allowedActions,
+      requireOperatorConfirmation: true,
       disabledReason: null,
+      commandTimeoutMs: CFS_CONTROL_UI_TIMEOUT_MS,
+      unknownRecoveryMessage: "CFS認証カードで実機状態を確認し、未解決の復旧ブロッカーを解決してください。",
       validateCommandIntent(intent) {
         return validateCfsControlIntentFreshness(hostname, intent);
+      },
+      /**
+       * production CFS commandを送る直前にoperator確認を表示する。
+       *
+       * @param {object} intent - material topology panelが生成した操作intent
+       * @returns {Promise<boolean>} operatorが明示承認した場合のみtrue
+       */
+      confirmCommand(intent) {
+        return confirmCfsPhysicalCommand(hostname, intent);
       },
       /**
        * production CFS/CFS-C操作intentをbound integrationへ渡す。
@@ -1162,14 +1532,15 @@ function createCfsControlRenderOptions(hostname) {
        */
       async onCommand(intent) {
         const dispatchOutput = await integration.onCommand(intent);
-        return persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput);
+        const resolvedOutput = await resolveCompletedCfsControlRecoveryLatch(hostname, dispatchOutput);
+        return persistCfsControlRecoveryLatchIfNeeded(hostname, resolvedOutput);
       },
       /**
        * 観測で確認できたCFS操作を永続復旧ラッチへ反映する。
        *
        * 【詳細説明】
-       * - `cfs-slot-select` のように次のmaterial観測でexpected stateを確認できる場合だけrendererから呼ばれる。
-       * - load/unload/feed/retractは現時点で観測だけでは物理成功を確定しないため、このhookへは到達しない。
+       * - dispatcher内の有界観測で解決できなかったcommandを、後続material観測で確認できた場合にrendererから呼ばれる。
+       * - transportのblind retryは行わず、同一command IDの予約ラッチだけを解決する。
        *
        * @param {object} request - 観測解決要求
        * @returns {object} 復旧ラッチ解決結果

@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1621 (PR #440)
+ * @version 1.390.1676 (PR #442)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-09-02 02:22:00
+ * @lastModified 2026-09-15 13:07:22
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -223,6 +223,17 @@ const COMMAND_TRANSPORT_ACCEPTED_STATUSES = Object.freeze(new Set([
 ]));
 
 /**
+ * 1commandで許可する端末状態観測回数の防御的上限。
+ *
+ * 【詳細説明】
+ * - composition layerの誤設定で無限観測にならないよう、明示回数をこの値以下へ制限する。
+ * - 通常のK2 CFS運用は24回を使うため、十分な余裕を残しつつ暴走だけを防ぐ。
+ *
+ * @constant {number}
+ */
+const MAX_COMMAND_CONFIRMATION_ATTEMPTS = 1000;
+
+/**
  * JSON 互換値を deep clone する。
  *
  * 【詳細説明】
@@ -326,6 +337,33 @@ function normalizeSequence(value) {
   }
   const sequence = typeof value === "string" ? Number(value.trim()) : value;
   return Number.isFinite(sequence) ? sequence : null;
+}
+
+/**
+ * protocol観測値を有限numberへ正規化する。
+ *
+ * 【詳細説明】
+ * - feedStateとraw printer errorはsequenceとは異なり、数値文字列を含む有限値を受理する。
+ * - null、空文字、boolean、配列、object、NaN、Infinityは未観測としてnullへ倒す。
+ *
+ * @private
+ * @function normalizeFiniteProtocolNumber
+ * @param {*} value - protocol数値候補
+ * @returns {number|null} 正規化済み有限number、またはnull
+ */
+function normalizeFiniteProtocolNumber(value) {
+  if (
+    value === undefined ||
+    value === null ||
+    typeof value === "boolean" ||
+    Array.isArray(value) ||
+    (typeof value === "object" && value !== null) ||
+    (typeof value === "string" && value.trim() === "")
+  ) {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
 }
 
 /**
@@ -471,6 +509,11 @@ function createCommandDispatchContextSignature(context) {
       context.printerIdleObservation?.coreStateComplete === true ? "core-complete" : (
         context.printerIdleObservation?.coreStateComplete === false ? "core-incomplete" : "core-unknown"
       ),
+      context.printerIdleObservation?.physicalIdleEvidenceComplete === true ? "physical-idle-complete" : (
+        context.printerIdleObservation?.physicalIdleEvidenceComplete === false
+          ? "physical-idle-incomplete"
+          : "physical-idle-unknown"
+      ),
       context.printerIdleObservation?.snapshotCompleteness || "",
       context.printerIdleObservation?.sessionId || "",
       context.printerIdleObservation?.connectionGeneration ?? "",
@@ -485,6 +528,20 @@ function createCommandDispatchContextSignature(context) {
       ),
       context.printerIdleObservation?.receivedAt || "",
       context.printerIdleObservation?.expiresAt || "",
+      context.cfsPhysicalSafetyObservation?.status || "",
+      context.cfsPhysicalSafetyObservation?.sessionId || "",
+      context.cfsPhysicalSafetyObservation?.connectionGeneration ?? "",
+      context.cfsPhysicalSafetyObservation?.baselineSequence ?? "",
+      context.cfsPhysicalSafetyObservation?.lastAppliedSequence ?? "",
+      context.cfsPhysicalSafetyObservation?.fresh === true ? "fresh" : "not-fresh",
+      context.cfsPhysicalSafetyObservation?.idle === true ? "idle" : "not-idle",
+      context.cfsPhysicalSafetyObservation?.feedStateObserved === true ? "feed-observed" : "feed-missing",
+      context.cfsPhysicalSafetyObservation?.feedState ?? "",
+      context.cfsPhysicalSafetyObservation?.printerErrorObserved === true ? "error-observed" : "error-missing",
+      context.cfsPhysicalSafetyObservation?.printerErrorCode ?? "",
+      context.cfsPhysicalSafetyObservation?.printerErrorKey ?? "",
+      context.cfsPhysicalSafetyObservation?.errorClear === true ? "error-clear" : "error-not-clear",
+      context.cfsPhysicalSafetyObservation?.expiresAt || "",
       context.createdAt || "",
       context.issuedAtMs ?? "",
       context.expiresAtMs ?? "",
@@ -661,6 +718,7 @@ export function createPrinterCommandRequest(options = {}) {
  * @param {number=} options.connectionGeneration - 現在接続中のgeneration
  * @param {object=} options.observedState - 送信前のNormalizedState
  * @param {object=} options.printerIdleObservation - CFS物理操作用printer idle観測証跡
+ * @param {object=} options.cfsPhysicalSafetyObservation - CFS物理操作用idle/feed/error統合証跡
  * @param {string=} options.createdAt - context生成時刻ISO文字列
  * @param {number=} options.issuedAtMs - context発行epoch ms
  * @param {number=} options.expiresAtMs - context失効epoch ms
@@ -721,6 +779,7 @@ function createPrinterCommandDispatchContext(options = {}) {
     connectionGeneration: normalizeSequence(options.connectionGeneration),
     observedState: cloneJsonValue(options.observedState || null),
     printerIdleObservation: normalizePrinterIdleObservation(options.printerIdleObservation),
+    cfsPhysicalSafetyObservation: normalizeCfsPhysicalSafetyObservation(options.cfsPhysicalSafetyObservation),
     createdAt: options.createdAt || null,
     issuedAtMs: Number.isFinite(Number(options.issuedAtMs)) ? Number(options.issuedAtMs) : null,
     expiresAtMs: Number.isFinite(Number(options.expiresAtMs)) ? Number(options.expiresAtMs) : null,
@@ -755,6 +814,9 @@ function normalizePrinterIdleObservation(observation) {
     status: String(observation.status || "").trim() || "unknown",
     activityState: String(observation.activityState || "").trim() || "unknown",
     coreStateComplete: typeof observation.coreStateComplete === "boolean" ? observation.coreStateComplete : null,
+    physicalIdleEvidenceComplete: typeof observation.physicalIdleEvidenceComplete === "boolean"
+      ? observation.physicalIdleEvidenceComplete
+      : null,
     snapshotCompleteness: String(observation.snapshotCompleteness || observation.completeness || "").trim() || "unknown",
     observedAt: String(observation.observedAt || "").trim() || null,
     receivedAt: String(observation.receivedAt || "").trim() || null,
@@ -768,6 +830,47 @@ function normalizePrinterIdleObservation(observation) {
       : null,
     fresh: typeof observation.fresh === "boolean" ? observation.fresh : null,
     idle: typeof observation.idle === "boolean" ? observation.idle : null,
+  };
+}
+
+/**
+ * CFS物理操作用idle/feed/error統合証跡を正規化する。
+ *
+ * 【詳細説明】
+ * - live shadowが同一status frameへ束縛した値だけをdispatch contextへ取り込み、署名対象にする。
+ * - raw値欠損をfalseや0へ補完せず、観測済みflagと正規化値を分離してfail-closed判定へ渡す。
+ *
+ * @private
+ * @function normalizeCfsPhysicalSafetyObservation
+ * @param {object|null|undefined} observation - 統合安全証跡候補
+ * @returns {object|null} 正規化済み統合安全証跡
+ */
+function normalizeCfsPhysicalSafetyObservation(observation) {
+  if (!observation || typeof observation !== "object") {
+    return null;
+  }
+  return {
+    status: String(observation.status || "").trim() || "unknown",
+    activityState: String(observation.activityState || "").trim() || "unknown",
+    coreStateComplete: observation.coreStateComplete === true,
+    physicalIdleEvidenceComplete: observation.physicalIdleEvidenceComplete === true,
+    snapshotCompleteness: String(observation.snapshotCompleteness || "").trim() || "unknown",
+    observedAt: String(observation.observedAt || "").trim() || null,
+    receivedAt: String(observation.receivedAt || "").trim() || null,
+    expiresAt: String(observation.expiresAt || "").trim() || null,
+    sessionId: String(observation.sessionId || "").trim() || null,
+    connectionGeneration: normalizeSequence(observation.connectionGeneration),
+    baselineSequence: normalizeSequence(observation.baselineSequence),
+    lastAppliedSequence: normalizeSequence(observation.lastAppliedSequence),
+    appliedDeltaCount: normalizeSequence(observation.appliedDeltaCount),
+    fresh: observation.fresh === true,
+    idle: observation.idle === true,
+    feedStateObserved: observation.feedStateObserved === true,
+    feedState: normalizeFiniteProtocolNumber(observation.feedState),
+    printerErrorObserved: observation.printerErrorObserved === true,
+    printerErrorCode: normalizeFiniteProtocolNumber(observation.printerErrorCode),
+    printerErrorKey: normalizeFiniteProtocolNumber(observation.printerErrorKey),
+    errorClear: observation.errorClear === true,
   };
 }
 
@@ -1089,73 +1192,12 @@ function collectPrinterActivityLabels(observedState) {
 }
 
 /**
- * CFS物理操作前に安全なidle状態が明示観測されているかを判定する。
- *
- * 【詳細説明】
- * - `completed` や未知stateは「busyではない」だけであり、CFS slot操作可能なidle証跡としては扱わない。
- * - K2 firmware semanticsが実機certificationで固定されるまでは、明示的なidle/ready/standbyのみを許す。
- *
- * @private
- * @function hasExplicitSafeCfsIdleLabel
- * @param {Set<string>} activityLabels - 小文字化済み状態ラベル集合
- * @returns {boolean} 安全なidle証跡がある場合true
- */
-function hasExplicitSafeCfsIdleLabel(activityLabels) {
-  return ["idle", "ready", "standby"].some((label) => activityLabels.has(label));
-}
-
-/**
- * CFS物理操作前のprinter idle観測が完全かを判定する。
- *
- * 【詳細説明】
- * - `idle` ラベルが前回snapshotから残っていても、今回のsend-time観測がpartialやdelta-onlyであれば
- *   物理操作可能なidle証明には使わない。
- * - 明示的な不完全メタが無い既存contextは後方互換として許可し、Gate 19のprobeが渡す
- *   `snapshotCompleteness` / `activityState` / `coreStateComplete` を見つけた場合だけ厳格化する。
- *
- * @private
- * @function hasIncompleteCfsPrinterIdleObservation
- * @param {object|null|undefined} observedState - send-time observed state
- * @returns {boolean} idle観測が不完全と明示されている場合true
- */
-function hasIncompleteCfsPrinterIdleObservation(observedState) {
-  if (!observedState || typeof observedState !== "object") {
-    return false;
-  }
-  const completenessCandidates = [
-    getPathValue(observedState, "source.snapshotCompleteness"),
-    getPathValue(observedState, "source.completeness"),
-    getPathValue(observedState, "print.snapshotCompleteness"),
-    getPathValue(observedState, "print.completeness"),
-    getPathValue(observedState, "status.snapshotCompleteness"),
-    getPathValue(observedState, "status.completeness"),
-  ].map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean);
-  if (completenessCandidates.includes("partial")) {
-    return true;
-  }
-  const activityCandidates = [
-    getPathValue(observedState, "print.activityState"),
-    getPathValue(observedState, "device.activityState"),
-    getPathValue(observedState, "status.activityState"),
-  ].map((value) => String(value ?? "").trim().toLowerCase()).filter(Boolean);
-  if (activityCandidates.includes("unknown-core-state") || activityCandidates.includes("active-without-core-state")) {
-    return true;
-  }
-  return [
-    getPathValue(observedState, "print.coreStateComplete"),
-    getPathValue(observedState, "device.coreStateComplete"),
-    getPathValue(observedState, "status.coreStateComplete"),
-    getPathValue(observedState, "source.coreStateComplete"),
-  ].some((value) => value === false);
-}
-
-/**
  * CFS物理操作前のprinter idle専用証跡エラーを収集する。
  *
  * 【詳細説明】
  * - dispatch context自体のTTLは「contextがいつ作られたか」だけを保証するため、
  *   その中身であるprinter status観測には別のTTLとsession/generation照合を要求する。
- * - `printerIdleObservation` が無い既存経路は後方互換として従来のobservedState判定へ委ねる。
+ * - CFS物理操作では統合安全証跡を別途必須化し、この専用証跡は診断互換の追加検査として扱う。
  *
  * @private
  * @function collectPrinterIdleObservationErrors
@@ -1175,7 +1217,11 @@ function collectPrinterIdleObservationErrors(request, context) {
   if (!["observed", "assembled"].includes(status)) {
     errors.push("cfs-control-printer-idle-observation-incomplete");
   }
-  if (completeness !== "complete" || observation.coreStateComplete !== true) {
+  if (
+    completeness !== "complete" ||
+    observation.coreStateComplete !== true ||
+    observation.physicalIdleEvidenceComplete !== true
+  ) {
     errors.push("cfs-control-printer-idle-observation-incomplete");
   }
   if (["unknown-core-state", "active-without-core-state"].includes(activityState)) {
@@ -1201,6 +1247,95 @@ function collectPrinterIdleObservationErrors(request, context) {
   }
   if (observation.idle !== true) {
     errors.push("cfs-control-printer-idle-not-confirmed");
+  }
+  return [...new Set(errors)];
+}
+
+/**
+ * CFS物理操作用の統合安全証跡エラーを収集する。
+ *
+ * 【詳細説明】
+ * - printer idle、feedState、raw printer errorが同じK2 status受信sequenceへ束縛された証跡だけを受理する。
+ * - session、connection generation、state sequence、TTLのいずれかが欠ける場合は、古い安全値を推定せず拒否する。
+ * - protocol上の安全値は実機認証済みscopeに合わせ、`feedState===0`かつ`errcode===0 && key===0`へ限定する。
+ *
+ * @private
+ * @function collectCfsPhysicalSafetyObservationErrors
+ * @param {object} request - command request
+ * @param {object} context - dispatch context
+ * @returns {string[]} 検査エラー
+ */
+function collectCfsPhysicalSafetyObservationErrors(request, context) {
+  const observation = context?.cfsPhysicalSafetyObservation;
+  if (!observation || typeof observation !== "object") {
+    return ["cfs-control-physical-safety-observation-missing"];
+  }
+  const errors = [];
+  const status = String(observation.status || "").trim().toLowerCase();
+  const activityState = String(observation.activityState || "").trim().toLowerCase();
+  const completeness = String(observation.snapshotCompleteness || "").trim().toLowerCase();
+  if (
+    !["observed", "assembled"].includes(status) ||
+    completeness !== "complete" ||
+    observation.coreStateComplete !== true ||
+    observation.physicalIdleEvidenceComplete !== true ||
+    ["unknown-core-state", "active-without-core-state"].includes(activityState)
+  ) {
+    errors.push("cfs-control-physical-safety-observation-incomplete");
+  }
+  if (activityState === "active" || observation.idle !== true) {
+    errors.push("cfs-control-printer-busy");
+    errors.push("cfs-control-printer-idle-not-confirmed");
+  }
+
+  const referenceMs = Number.isFinite(Number(context.issuedAtMs)) ? Number(context.issuedAtMs) : Date.now();
+  const expiresAtMs = Date.parse(observation.expiresAt || "");
+  if (observation.fresh !== true || !Number.isFinite(expiresAtMs) || expiresAtMs <= referenceMs) {
+    errors.push("cfs-control-physical-safety-observation-stale");
+  }
+
+  if (!observation.sessionId) {
+    errors.push("cfs-control-physical-safety-session-missing");
+  } else if (observation.sessionId !== context.sessionId || observation.sessionId !== request.sessionId) {
+    errors.push("cfs-control-physical-safety-session-mismatch");
+  }
+  if (observation.connectionGeneration === null) {
+    errors.push("cfs-control-physical-safety-generation-missing");
+  } else if (
+    context.connectionGeneration === null ||
+    observation.connectionGeneration !== context.connectionGeneration
+  ) {
+    errors.push("cfs-control-physical-safety-generation-mismatch");
+  }
+
+  const contextSequence = normalizeSequence(context.stateSequence);
+  if (
+    observation.baselineSequence === null ||
+    observation.lastAppliedSequence === null ||
+    contextSequence === null ||
+    observation.lastAppliedSequence !== contextSequence ||
+    observation.baselineSequence > observation.lastAppliedSequence
+  ) {
+    errors.push("cfs-control-physical-safety-sequence-missing-or-stale");
+  }
+
+  if (observation.feedStateObserved !== true || observation.feedState === null) {
+    errors.push("cfs-control-feed-state-observation-incomplete");
+  } else if (observation.feedState !== 0) {
+    errors.push("cfs-control-feed-state-not-idle");
+  }
+  if (
+    observation.printerErrorObserved !== true ||
+    observation.printerErrorCode === null ||
+    observation.printerErrorKey === null
+  ) {
+    errors.push("cfs-control-printer-error-observation-incomplete");
+  } else if (
+    observation.printerErrorCode !== 0 ||
+    observation.printerErrorKey !== 0 ||
+    observation.errorClear !== true
+  ) {
+    errors.push("cfs-control-printer-error-active");
   }
   return [...new Set(errors)];
 }
@@ -1243,14 +1378,8 @@ function collectCfsSendTimeErrors(request, context) {
   }
   if (context.printerIdleObservation && typeof context.printerIdleObservation === "object") {
     errors.push(...collectPrinterIdleObservationErrors(request, context));
-  } else {
-    if (hasIncompleteCfsPrinterIdleObservation(context.observedState)) {
-      errors.push("cfs-control-printer-idle-observation-incomplete");
-    }
-    if (!hasExplicitSafeCfsIdleLabel(activityLabels)) {
-      errors.push("cfs-control-printer-idle-not-confirmed");
-    }
   }
+  errors.push(...collectCfsPhysicalSafetyObservationErrors(request, context));
   if (context.recoveryBlocker?.blocked === true) {
     const reason = String(context.recoveryBlocker.reason || "blocked").trim() || "blocked";
     errors.push(`cfs-recovery-blocked:${reason}`);
@@ -1293,13 +1422,24 @@ function collectCfsSendTimeErrors(request, context) {
       selectedSources.push(source);
     }
   }
-  if (currentSource.selected !== true) {
-    errors.push("cfs-target-source-not-selected");
-  }
-  if (selectedSources.length !== 1) {
-    errors.push("cfs-selected-source-not-unique");
-  } else if (selectedSources[0].sourceId !== targetSourceId) {
-    errors.push(`cfs-selected-source-mismatch:${selectedSources[0].sourceId}`);
+  const commandKind = String(request.commandKind || "").trim();
+  if (commandKind === "cfs-load") {
+    if (selectedSources.length !== 0) {
+      errors.push("cfs-load-selected-source-present");
+    }
+  } else if (commandKind === "cfs-unload") {
+    if (selectedSources.length !== 1 || selectedSources[0]?.sourceId !== targetSourceId) {
+      errors.push("cfs-unload-target-not-uniquely-selected");
+    }
+  } else {
+    if (currentSource.selected !== true) {
+      errors.push("cfs-target-source-not-selected");
+    }
+    if (selectedSources.length !== 1) {
+      errors.push("cfs-selected-source-not-unique");
+    } else if (selectedSources[0].sourceId !== targetSourceId) {
+      errors.push(`cfs-selected-source-mismatch:${selectedSources[0].sourceId}`);
+    }
   }
   const requestBoxId = normalizeSequence(request.payload?.boxId);
   if (requestBoxId !== null && currentSource.boxId !== null && requestBoxId !== currentSource.boxId) {
@@ -1468,7 +1608,73 @@ function normalizeCommandObservation(observation, context) {
     fileIdentity: observation?.fileIdentity || context.fileIdentity || null,
     commandCorrelation: observation?.commandCorrelation || null,
     trustedCorrelationProof: observation?.trustedCorrelationProof || observation?.protocolCorrelation || null,
+    confirmationError: observation?.confirmationError && typeof observation.confirmationError === "object"
+      ? cloneJsonValue(observation.confirmationError)
+      : null,
   };
+}
+
+/**
+ * command後の端末状態観測ポリシーを正規化する。
+ *
+ * 【詳細説明】
+ * - 明示的な最大試行回数が無い既存dispatcherは従来どおり1回だけ観測する。
+ * - expected-stateが無いrequestやobserve hookが無い場合は反復を有効化しない。
+ * - delayはrequest timeout以下、試行回数はmodule上限以下へ制限する。
+ *
+ * @private
+ * @param {object} request - command request
+ * @param {object} options - dispatcher options
+ * @returns {{enabled:boolean,maxAttempts:number,initialDelayMs:number,intervalMs:number,waitForObservation:Function}} 正規化済み観測ポリシー
+ */
+function normalizeCommandConfirmationPolicy(request, options = {}) {
+  const requestedAttempts = Number(options.confirmationMaxAttempts);
+  const hasExplicitAttempts = Number.isFinite(requestedAttempts) && requestedAttempts > 0;
+  const canObserve = typeof options.observeState === "function";
+  const hasExpectedState = Boolean(request?.expectedStateRequired) &&
+    Array.isArray(request?.expectedState) &&
+    request.expectedState.length > 0;
+  const maxAttempts = hasExplicitAttempts
+    ? Math.min(MAX_COMMAND_CONFIRMATION_ATTEMPTS, Math.max(1, Math.floor(requestedAttempts)))
+    : 1;
+  const timeoutMs = Number.isFinite(Number(request?.timeoutMs)) && Number(request.timeoutMs) > 0
+    ? Number(request.timeoutMs)
+    : DEFAULT_PRINTER_COMMAND_TIMEOUT_MS;
+  const normalizeDelay = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0
+      ? Math.min(timeoutMs, Math.floor(numeric))
+      : 0;
+  };
+  return {
+    enabled: hasExplicitAttempts && canObserve && hasExpectedState,
+    maxAttempts,
+    initialDelayMs: normalizeDelay(options.confirmationInitialDelayMs),
+    intervalMs: normalizeDelay(options.confirmationIntervalMs),
+    waitForObservation: typeof options.waitForObservation === "function"
+      ? options.waitForObservation
+      : waitForCommandObservation,
+  };
+}
+
+/**
+ * 次のcommand状態観測まで指定時間待機する。
+ *
+ * 【詳細説明】
+ * - productionではtimer待機し、単体テストではbound providerから決定的なwait実装を注入できる。
+ * - 0以下は即時解決し、不要なtimerを生成しない。
+ *
+ * @private
+ * @param {number} delayMs - 待機時間ms
+ * @returns {Promise<void>} 待機完了Promise
+ */
+function waitForCommandObservation(delayMs) {
+  if (!Number.isFinite(Number(delayMs)) || Number(delayMs) <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    setTimeout(resolve, Number(delayMs));
+  });
 }
 
 /**
@@ -1595,6 +1801,10 @@ function createTrustedCommandCorrelationFromObservation(request, context, observ
  * @param {Function=} providers.observeState - trusted observation provider
  * @param {Function=} providers.nowMs - epoch ms provider
  * @param {number=} providers.contextTtlMs - context TTL ms
+ * @param {number=} providers.confirmationMaxAttempts - transport送信後の最大観測回数
+ * @param {number=} providers.confirmationInitialDelayMs - 初回観測前の待機時間ms
+ * @param {number=} providers.confirmationIntervalMs - 2回目以降の観測間隔ms
+ * @param {Function=} providers.waitForObservation - 観測待機provider `(delayMs) => Promise<void>`
  * @param {string=} providers.completedAt - 完了時刻ISO文字列
  * @returns {object} bound dispatcher
  * @example
@@ -1616,6 +1826,10 @@ export function createBoundPrinterCommandDispatcher(providers = {}) {
         observeState: providers.observeState,
         nowMs: providers.nowMs,
         contextTtlMs: providers.contextTtlMs,
+        confirmationMaxAttempts: providers.confirmationMaxAttempts,
+        confirmationInitialDelayMs: providers.confirmationInitialDelayMs,
+        confirmationIntervalMs: providers.confirmationIntervalMs,
+        waitForObservation: providers.waitForObservation,
         completedAt: providers.completedAt,
         trustedCorrelationIssuer: TRUSTED_COMMAND_CORRELATION_ISSUER,
       });
@@ -1663,6 +1877,10 @@ export function isBoundPrinterCommandDispatcher(dispatcher) {
  * @param {Function} options.getSendTimeContext - 送信直前snapshot取得hook
  * @param {Function} options.sendTransport - transport送信hook `(request, context) => Promise<*>`
  * @param {Function=} options.observeState - expected-state確認用観測hook `(request, context, response) => Promise<object>`
+ * @param {number=} options.confirmationMaxAttempts - transport送信後の最大観測回数
+ * @param {number=} options.confirmationInitialDelayMs - 初回観測前の待機時間ms
+ * @param {number=} options.confirmationIntervalMs - 2回目以降の観測間隔ms
+ * @param {Function=} options.waitForObservation - 観測待機provider `(delayMs) => Promise<void>`
  * @param {string=} options.completedAt - result完了時刻ISO文字列
  * @returns {Promise<object>} command result
  * @example
@@ -1672,7 +1890,12 @@ export async function dispatchPrinterCommand(request, options = {}) {
   if (typeof options.getSendTimeContext !== "function") {
     return createRejectedCommandResult(request, ["missing-send-time-context"]);
   }
-  const nowMs = typeof options.nowMs === "function" ? Number(options.nowMs()) : Date.now();
+  const readNowMs = () => (typeof options.nowMs === "function" ? Number(options.nowMs()) : Date.now());
+  const nowMs = readNowMs();
+  const requestTimeoutMs = Number.isFinite(Number(request?.timeoutMs)) && Number(request.timeoutMs) > 0
+    ? Number(request.timeoutMs)
+    : DEFAULT_PRINTER_COMMAND_TIMEOUT_MS;
+  const confirmationDeadlineMs = nowMs + requestTimeoutMs;
   let context = null;
   try {
     const rawContext = await options.getSendTimeContext(request);
@@ -1704,41 +1927,99 @@ export async function dispatchPrinterCommand(request, options = {}) {
       completedAt: options.completedAt || null,
     });
   }
-  let observation;
-  try {
-    observation = typeof options.observeState === "function"
-      ? await options.observeState(request, context, response)
-      : null;
-  } catch (error) {
-    return createPrinterCommandResult(request, {
-      status: "confirmation-error",
+  const transportStatus = normalizeTransportStatus(response);
+  const transportAccepted = COMMAND_TRANSPORT_ACCEPTED_STATUSES.has(transportStatus);
+  const confirmationPolicy = normalizeCommandConfirmationPolicy(request, options);
+  const sentSequence = normalizeSequence(context.stateSequence);
+  let lastObservation = normalizeCommandObservation(null, context);
+  let lastCommandCorrelation = null;
+  let confirmationAttemptCount = 0;
+  for (let attempt = 1; attempt <= confirmationPolicy.maxAttempts; attempt += 1) {
+    const requestedDelayMs = attempt === 1
+      ? confirmationPolicy.initialDelayMs
+      : confirmationPolicy.intervalMs;
+    const remainingBeforeWaitMs = confirmationDeadlineMs - readNowMs();
+    if (remainingBeforeWaitMs <= 0) {
+      break;
+    }
+    const delayMs = Math.min(requestedDelayMs, remainingBeforeWaitMs);
+    try {
+      if (confirmationPolicy.enabled) {
+        await confirmationPolicy.waitForObservation(delayMs);
+      }
+      if (readNowMs() >= confirmationDeadlineMs) {
+        break;
+      }
+      const observation = typeof options.observeState === "function"
+        ? await options.observeState(request, context, response)
+        : null;
+      lastObservation = normalizeCommandObservation(observation, context);
+      confirmationAttemptCount = attempt;
+    } catch (error) {
+      return createPrinterCommandResult(request, {
+        status: "confirmation-error",
+        transportAccepted,
+        response,
+        error: {
+          code: "confirmation-error",
+          message: error?.message || String(error),
+        },
+        confirmationAttemptCount: attempt,
+        completedAt: options.completedAt || null,
+      });
+    }
+    if (lastObservation.confirmationError) {
+      return createPrinterCommandResult(request, {
+        status: "confirmation-error",
+        transportAccepted,
+        response,
+        error: lastObservation.confirmationError,
+        observedState: lastObservation.observedState,
+        sentSequence,
+        observedSequence: lastObservation.observedSequence,
+        observedSessionId: lastObservation.observedSessionId,
+        confirmationAttemptCount: attempt,
+        completedAt: options.completedAt || null,
+      });
+    }
+    lastCommandCorrelation = lastObservation.commandCorrelation ||
+      createTrustedCommandCorrelationFromObservation(
+        request,
+        context,
+        lastObservation,
+        sentSequence,
+        response,
+        options.trustedCorrelationIssuer
+      );
+    const result = createPrinterCommandResult(request, {
+      status: transportStatus,
       response,
-      error: {
-        code: "confirmation-error",
-        message: error?.message || String(error),
-      },
+      observedState: lastObservation.observedState,
+      sentSequence,
+      observedSequence: lastObservation.observedSequence,
+      observedSessionId: lastObservation.observedSessionId,
+      commandCorrelation: lastCommandCorrelation,
+      confirmationAttemptCount: attempt,
       completedAt: options.completedAt || null,
     });
+    if (result.completed || !confirmationPolicy.enabled || !transportAccepted) {
+      return result;
+    }
   }
-  const normalizedObservation = normalizeCommandObservation(observation, context);
-  const sentSequence = normalizeSequence(context.stateSequence);
-  const commandCorrelation = normalizedObservation.commandCorrelation ||
-    createTrustedCommandCorrelationFromObservation(
-      request,
-      context,
-      normalizedObservation,
-      sentSequence,
-      response,
-      options.trustedCorrelationIssuer
-    );
   return createPrinterCommandResult(request, {
-    status: normalizeTransportStatus(response),
+    status: "timeout",
+    transportAccepted: true,
     response,
-    observedState: normalizedObservation.observedState,
+    error: {
+      code: "confirmation-timeout",
+      message: "The command transport was accepted, but the terminal state was not observed in time.",
+    },
+    observedState: lastObservation.observedState,
     sentSequence,
-    observedSequence: normalizedObservation.observedSequence,
-    observedSessionId: normalizedObservation.observedSessionId,
-    commandCorrelation,
+    observedSequence: lastObservation.observedSequence,
+    observedSessionId: lastObservation.observedSessionId,
+    commandCorrelation: lastCommandCorrelation,
+    confirmationAttemptCount,
     completedAt: options.completedAt || null,
   });
 }
@@ -1896,11 +2177,13 @@ function evaluatePostCommandObservation(request, options = {}) {
  * @param {string=} options.status - result status
  * @param {object=} options.response - transport response
  * @param {object=} options.error - error 情報
+ * @param {boolean=} options.transportAccepted - 送信後確認error/timeout時に保持するtransport受理状態
  * @param {object=} options.observedState - confirmation に使う NormalizedPrinterState
  * @param {number=} options.sentSequence - command 送信時の state sequence
  * @param {number=} options.observedSequence - confirmation 観測時の state sequence
  * @param {string=} options.observedSessionId - confirmation 観測の session ID
  * @param {object=} options.commandCorrelation - command correlation evidence
+ * @param {number=} options.confirmationAttemptCount - 端末状態の観測試行回数
  * @param {string=} options.completedAt - 完了時刻 ISO 文字列
  * @returns {object} command result
  * @example
@@ -1909,12 +2192,13 @@ function evaluatePostCommandObservation(request, options = {}) {
 export function createPrinterCommandResult(request, options = {}) {
   const confirmation = evaluateExpectedStateConfirmation(request, options.observedState);
   const status = options.status || "unknown";
-  const transportAccepted = !options.error && COMMAND_TRANSPORT_ACCEPTED_STATUSES.has(status);
-  const hasError = Boolean(options.error) || !transportAccepted;
+  const transportAccepted = typeof options.transportAccepted === "boolean"
+    ? options.transportAccepted
+    : (!options.error && COMMAND_TRANSPORT_ACCEPTED_STATUSES.has(status));
   const postCommandObservation = evaluatePostCommandObservation(request, options);
-  const completed = transportAccepted &&
+  const completed = transportAccepted && !options.error &&
     (!request.expectedStateRequired || (confirmation.confirmed && postCommandObservation.confirmed));
-  return {
+  const result = {
     schemaVersion: PRINTER_COMMAND_SCHEMA_VERSION,
     commandId: request.commandId,
     deviceId: request.deviceId,
@@ -1929,6 +2213,10 @@ export function createPrinterCommandResult(request, options = {}) {
     postCommandObservation,
     completedAt: options.completedAt || null,
   };
+  if (Number.isFinite(Number(options.confirmationAttemptCount))) {
+    result.confirmationAttemptCount = Number(options.confirmationAttemptCount);
+  }
+  return result;
 }
 
 /**

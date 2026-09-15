@@ -1,12 +1,25 @@
 /**
- * @fileoverview K2 CFS read-only calibration CLI の単体テスト
- * @description
- * - K2/F012 live certification前に、/info、printer status、boxsInfoを副作用なしで観測することを検証する。
- * - read-only calibrationがCFS操作frameを送らず、複数probe結果をJSONへ保持することを検証する。
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 K2 CFS read-only calibration CLI 単体テスト
+ * @file capture_k2_cfs_readonly_calibration.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module capture_k2_cfs_readonly_calibration_test
  *
- * @version 1.390.1618 (PR #440)
- * @since 1.390.1545 (PR #439)
- * @lastModified 2026-09-02 00:18:00
+ * 【機能内容サマリ】
+ * - K2/F012 live certification前のread-only観測を検証
+ * - CFS操作frameを送らず、複数probeと合成statusをJSONへ保持する境界を固定
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1672 (PR #442)
+ * @since   1.390.1545 (PR #439)
+ * @lastModified 2026-09-09 12:05:20
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 
 import { EventEmitter } from "node:events";
@@ -15,6 +28,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  createAssembledPrinterStatusProjection,
   parseArgs,
   runK2CfsReadOnlyCalibration,
 } from "../../scripts/capture_k2_cfs_readonly_calibration.mjs";
@@ -34,6 +48,7 @@ const PRINTER_STATUS_GET_FRAME = {
     bedTemp0: 1,
     targetNozzleTemp: 1,
     targetBedTemp0: 1,
+    feedState: 1,
   },
 };
 
@@ -169,8 +184,10 @@ describe("capture_k2_cfs_readonly_calibration", () => {
     expect(result.printerStatusSeries[0]).toMatchObject({
       status: "observed",
       summary: {
-        idle: false,
-        active: true,
+        idle: true,
+        active: false,
+        activityState: "idle",
+        physicalIdleEvidenceComplete: true,
         state: 2,
         printJobTime: 613,
       },
@@ -478,6 +495,50 @@ describe("capture_k2_cfs_readonly_calibration", () => {
         nozzleTemp: 28.4,
         bedTemp0: 27.8,
       },
+    });
+  });
+
+  it("assembled projectionは観測済みcritical scalarのnullで以前のidle証拠を失効させる", () => {
+    const projection = createAssembledPrinterStatusProjection([{
+      status: "observed",
+      probeMode: "printer-status:1",
+      observedAt: "2026-09-09T11:16:25.000+09:00",
+      summary: {
+        complete: true,
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        observedScalarKeys: [
+          "state",
+          "deviceState",
+          "printProgress",
+          "printLeftTime",
+          "targetNozzleTemp",
+          "targetBedTemp0",
+        ],
+      },
+    }, {
+      status: "partial",
+      probeMode: "printer-status:2",
+      observedAt: "2026-09-09T11:16:26.000+09:00",
+      summary: {
+        complete: false,
+        printLeftTime: null,
+        observedScalarKeys: ["printLeftTime"],
+      },
+    }], {
+      ttlMs: 5000,
+      asOfMs: Date.parse("2026-09-09T11:16:27.000+09:00"),
+    });
+
+    expect(projection).toMatchObject({
+      status: "observed",
+      idle: false,
+      physicalIdleEvidenceComplete: false,
+      snapshot: { printLeftTime: null },
     });
   });
 

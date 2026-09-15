@@ -1,13 +1,25 @@
 /**
- * @fileoverview K2 CFS slot control certification CLI の単体テスト
- * @description
- * - CLIが既定dry-runで、明示 `--send` なしに実機送信へ進まないことを検証する。
- * - certification-only planがlive確認なしに送信されないことを検証する。
- * - live certification用のread-only boxsInfo probeが送信前後で安全に待機できることを検証する。
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 K2 CFS slot control certification CLI 単体テスト
+ * @file capture_k2_cfs_slot_control.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module capture_k2_cfs_slot_control_test
  *
- * @version 1.390.1612 (PR #440)
- * @since 1.390.1415 (PR #435)
- * @lastModified 2026-09-01 23:09:20
+ * 【機能内容サマリ】
+ * - CLIが既定dry-runで、明示確認なしに実機送信へ進まないことを検証
+ * - live certification用のread-only前後観測とK2 physical idle境界を固定
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1673 (PR #442)
+ * @since   1.390.1415 (PR #435)
+ * @lastModified 2026-09-09 13:05:16
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 
 import { EventEmitter } from "node:events";
@@ -84,10 +96,10 @@ function isPrinterStatusProbeFrame(frame) {
 }
 
 /**
- * live certification mockへidle状態のprinter statusを返す。
+ * live certification mockへ実機で観測した正常終了後のphysical idle statusを返す。
  *
  * 【詳細説明】
- * - 実機送信前guardの通過条件を満たすため、state/deviceStateおよび活動指標をすべて0で返す。
+ * - F012が前ジョブのstate/job timeを保持しても、残り時間とtarget温度が0ならidle候補になる境界を通す。
  *
  * @function emitIdlePrinterStatus
  * @param {EventEmitter} ws - テスト用WebSocket mock
@@ -96,13 +108,14 @@ function isPrinterStatusProbeFrame(frame) {
 function emitIdlePrinterStatus(ws) {
   setTimeout(() => {
     ws.emit("message", JSON.stringify({
-      state: 0,
+      state: 2,
       deviceState: 0,
-      printProgress: 0,
-      printJobTime: 0,
+      printProgress: 100,
+      printJobTime: 613,
       printLeftTime: 0,
       targetNozzleTemp: 0,
       targetBedTemp0: 0,
+      feedState: 0,
       printFileName: "",
       printId: "",
     }));
@@ -124,6 +137,7 @@ const PRINTER_STATUS_GET_FRAME = {
     bedTemp0: 1,
     targetNozzleTemp: 1,
     targetBedTemp0: 1,
+    feedState: 1,
   },
 };
 
@@ -527,7 +541,7 @@ describe("capture_k2_cfs_slot_control", () => {
     });
   });
 
-  it("--require-printer-idle指定時は印刷活動中のK2へCFS操作frameを送らない", async () => {
+  it("--require-printer-idle指定時は正常終了stateでもノズル加熱中のK2へCFS操作frameを送らない", async () => {
     class ActivePrinterStatusWs extends EventEmitter {
       constructor() {
         super();
@@ -546,6 +560,8 @@ describe("capture_k2_cfs_slot_control", () => {
               printProgress: 100,
               printJobTime: 613,
               printLeftTime: 0,
+              targetNozzleTemp: 220,
+              targetBedTemp0: 0,
               printFileName: "/mnt/UDISK/printer_data/gcodes/bracket.stl_PLA_8m15s.gcode",
             }));
           }, 1);
@@ -582,6 +598,131 @@ describe("capture_k2_cfs_slot_control", () => {
           active: true,
           state: 2,
           printJobTime: 613,
+        },
+      },
+      response: null,
+    });
+    expect(ws.sentFrames).toEqual([PRINTER_STATUS_GET_FRAME]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("印刷状態がidleでもfeedStateが操作中ならCFS操作frameを送らない", async () => {
+    class BusyFeedStateWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              state: 0,
+              deviceState: 0,
+              printProgress: 100,
+              printJobTime: 0,
+              printLeftTime: 0,
+              targetNozzleTemp: 0,
+              targetBedTemp0: 0,
+              feedState: 101,
+              printFileName: "",
+              printId: "",
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new BusyFeedStateWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs()),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-cfs-feed-state-not-idle",
+      blindRetryAllowed: false,
+      printerStatus: {
+        status: "observed",
+        summary: {
+          idle: true,
+          feedState: 101,
+        },
+      },
+      response: null,
+    });
+    expect(ws.sentFrames).toEqual([PRINTER_STATUS_GET_FRAME]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("印刷状態がidleでもfeedStateを観測できなければCFS操作frameを送らない", async () => {
+    class MissingFeedStateWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              state: 0,
+              deviceState: 0,
+              printProgress: 100,
+              printJobTime: 0,
+              printLeftTime: 0,
+              targetNozzleTemp: 0,
+              targetBedTemp0: 0,
+              printFileName: "",
+              printId: "",
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new MissingFeedStateWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs()),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-cfs-feed-state-observation-failed",
+      blindRetryAllowed: false,
+      printerStatus: {
+        status: "observed",
+        summary: {
+          idle: true,
+          feedState: null,
         },
       },
       response: null,
@@ -820,6 +961,10 @@ describe("capture_k2_cfs_slot_control", () => {
               },
             }));
           }, 1);
+        } else if (frame?.params?.feedInOrOut) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({ feedState: 1 }));
+          }, 1);
         }
         setTimeout(() => callback(), 1);
       }
@@ -886,6 +1031,13 @@ describe("capture_k2_cfs_slot_control", () => {
           percent: 99,
         },
         changedFields: ["percent"],
+      },
+      commandTelemetry: {
+        events: [
+          {
+            feedState: 1,
+          },
+        ],
       },
     });
   });
@@ -1252,7 +1404,7 @@ describe("capture_k2_cfs_slot_control", () => {
     expect(ws.closed).toBe(true);
   });
 
-  it("pre-command probeでtarget sourceがloadedでも未選択ならCFS操作frameを送らない", async () => {
+  it("pre-command probeで別sourceが選択中なら未選択targetへの押出しframeを送らない", async () => {
     class UnselectedBeforeProbeWs extends EventEmitter {
       constructor() {
         super();
@@ -1304,10 +1456,141 @@ describe("capture_k2_cfs_slot_control", () => {
       sent: false,
       dryRun: false,
       status: "rejected",
-      reason: "pre-command-target-source-not-selected",
+      reason: "pre-command-selected-source-conflict",
       blindRetryAllowed: false,
     });
     expect(result.probes.before.summary.selectedSourceIds).toEqual(["cfs:1:slot:1"]);
+    expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("pre-command probeで全sourceが未選択でもloaded targetへの押出しframeを送る", async () => {
+    class IdleAutoFeedBeforeProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [
+                      { id: 0, state: 1, selected: 0, name: "Target" },
+                      { id: 1, state: 1, selected: 0, name: "Other" },
+                    ],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new IdleAutoFeedBeforeProbeWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs([
+        "--probe-after-delay-ms",
+        "0",
+        "--probe-after-count",
+        "1",
+      ])),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: true,
+      sent: true,
+      dryRun: false,
+      status: "post-observed",
+    });
+    expect(result.probes.before.summary.selectedSourceIds).toEqual([]);
+    expect(ws.sentFrames).toEqual([
+      PRINTER_STATUS_GET_FRAME,
+      { method: "get", params: { boxsInfo: 1 } },
+      { method: "set", params: { feedInOrOut: { boxId: 1, materialId: 0, isFeed: 1 } } },
+      { method: "get", params: { boxsInfo: 1 } },
+    ]);
+    expect(ws.closed).toBe(true);
+  });
+
+  it("pre-command probeでtargetが未選択なら引戻しframeを送らない", async () => {
+    class UnselectedRetractBeforeProbeWs extends EventEmitter {
+      constructor() {
+        super();
+        this.sentFrames = [];
+        this.closed = false;
+      }
+
+      send(payload, callback) {
+        const frame = JSON.parse(payload);
+        this.sentFrames.push(frame);
+        if (isPrinterStatusProbeFrame(frame)) {
+          emitIdlePrinterStatus(this);
+        } else if (frame?.params?.boxsInfo === 1) {
+          setTimeout(() => {
+            this.emit("message", JSON.stringify({
+              result: {
+                boxsInfo: {
+                  materialBoxs: [{
+                    id: 1,
+                    type: 0,
+                    materials: [
+                      { id: 0, state: 1, selected: 0, name: "Target" },
+                      { id: 1, state: 1, selected: 0, name: "Other" },
+                    ],
+                  }],
+                },
+              },
+            }));
+          }, 1);
+        }
+        setTimeout(() => callback(), 1);
+      }
+
+      close() {
+        this.closed = true;
+      }
+    }
+    const ws = new UnselectedRetractBeforeProbeWs();
+    const options = {
+      ...parseArgs(createConfirmedF012LiveArgs([], { command: "cfs-unload" })),
+      fetchInfo: createF012InfoFetch(),
+      openWs: async () => ws,
+    };
+
+    const result = await runK2CfsSlotControlCertification(options);
+
+    expect(result).toMatchObject({
+      ok: false,
+      sent: false,
+      dryRun: false,
+      status: "rejected",
+      reason: "pre-command-target-source-not-selected",
+      blindRetryAllowed: false,
+    });
+    expect(result.probes.before.summary.selectedSourceIds).toEqual([]);
     expect(ws.sentFrames).toEqual([
       PRINTER_STATUS_GET_FRAME,
       { method: "get", params: { boxsInfo: 1 } },
@@ -1534,6 +1817,50 @@ describe("capture_k2_cfs_slot_control", () => {
         deviceState: null,
         bedTemp0: 28.1,
         nozzleTemp: 31.4,
+      },
+    });
+    expect(ws.listenerCount("message")).toBe(0);
+  });
+
+  it("printer status probeは実機同等の正常終了full frameをcompleted lifecycleかつphysical idleとして返す", async () => {
+    class CompletedIdlePrinterStatusWs extends EventEmitter {
+      send(payload, callback) {
+        this.sentPayload = payload;
+        setTimeout(() => {
+          this.emit("message", JSON.stringify({
+            state: 2,
+            deviceState: 0,
+            printProgress: 100,
+            printJobTime: 613,
+            printLeftTime: 0,
+            targetNozzleTemp: 0,
+            targetBedTemp0: 0,
+            printFileName: "/mnt/UDISK/printer_data/gcodes/bracket.stl_PLA_8m15s.gcode",
+            printId: "6a936e4ab9e9df20004c5066",
+          }));
+          callback();
+        }, 1);
+      }
+    }
+    const ws = new CompletedIdlePrinterStatusWs();
+
+    const result = await sendPrinterStatusProbeAndWait(ws, {
+      probeMode: "pre-command-printer-status",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toMatchObject({
+      status: "observed",
+      summary: {
+        complete: true,
+        idle: true,
+        active: false,
+        activityState: "idle",
+        coreStateComplete: true,
+        physicalIdleEvidenceComplete: true,
+        state: 2,
+        deviceState: 0,
+        printJobTime: 613,
       },
     });
     expect(ws.listenerCount("message")).toBe(0);

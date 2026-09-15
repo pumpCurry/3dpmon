@@ -23,9 +23,9 @@
  * - {@link endK1LiveShadowSession}：K1 live shadow session を終了
  * - {@link endK2LiveShadowSession}：K2 live shadow session を終了
  *
- * @version 1.390.1621 (PR #440)
+ * @version 1.390.1676 (PR #442)
  * @since   1.390.1299 (PR #432)
- * @lastModified 2026-09-02 02:24:00
+ * @lastModified 2026-09-15 13:07:22
  * -----------------------------------------------------------
  * @todo
  * - K2 Pro Combo 実機で CFS disconnect/reconnect の到着順を検証する
@@ -47,6 +47,10 @@ import {
   recordMaterialTopologyObservation,
   rekeyMaterialSourceObservationDevice,
 } from "./dashboard_material_source_observation.js";
+import {
+  classifyK2PrinterActivity,
+  mergeK2PrinterStatusScalarSnapshot,
+} from "./dashboard_k2_printer_activity.js";
 
 /**
  * live shadow runtime record の schema version。
@@ -143,18 +147,29 @@ function parseIsoEpochMs(value) {
 }
 
 /**
- * K2 print state labelがCFS物理操作前のidle候補か判定する。
+ * status観測値を有限numberへ正規化する。
  *
  * 【詳細説明】
- * - `completed` はジョブ完了を示しても物理操作可能な待機状態を保証しないため含めない。
+ * - null、空文字、boolean、object、NaN、Infinityは観測不成立としてnullへ倒す。
+ * - K2 firmwareが数値文字列を返す場合だけnumberへ変換する。
  *
  * @private
- * @function isK2CfsSafeIdleLabel
- * @param {*} value - print state label候補
- * @returns {boolean} idle/ready/standbyならtrue
+ * @function toFiniteNumberOrNull
+ * @param {*} value - 数値候補
+ * @returns {number|null} 有限number、またはnull
  */
-function isK2CfsSafeIdleLabel(value) {
-  return ["idle", "ready", "standby"].includes(String(value || "").trim().toLowerCase());
+function toFiniteNumberOrNull(value) {
+  if (value === null || value === undefined || typeof value === "boolean") {
+    return null;
+  }
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
+  if (typeof value !== "number" && typeof value !== "string") {
+    return null;
+  }
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
 }
 
 /**
@@ -162,6 +177,7 @@ function isK2CfsSafeIdleLabel(value) {
  *
  * 【詳細説明】
  * - boxsInfoだけのframeでprinter idle証跡を延命しないため、CFS物理操作に関係するstatus keyだけを見る。
+ * - raw `err`だけのdeltaも直前の安全証跡を即時失効させる必要があるため、status frameとして扱う。
  *
  * @private
  * @function hasK2PrinterStatusScalarFrame
@@ -186,6 +202,8 @@ function hasK2PrinterStatusScalarFrame(frame) {
     "printFileName",
     "fileName",
     "printId",
+    "feedState",
+    "err",
   ].some((key) => hasOwn(frame, key));
 }
 
@@ -202,6 +220,7 @@ function hasK2PrinterStatusScalarFrame(frame) {
  * @param {object} options - 生成オプション
  * @param {object|null|undefined} options.previousRecord - 直前shadow record
  * @param {object|null|undefined} options.lastState - Facade累積後のNormalizedState
+ * @param {object|null|undefined} options.frame - 今回観測したK2 raw status frame
  * @param {string} options.sessionId - shadow session ID
  * @param {number|null} options.connectionGeneration - WebSocket接続世代
  * @param {string} options.observedAt - status frame受信時刻
@@ -217,18 +236,18 @@ function createK2PrinterIdleObservationForShadow(options) {
   if (observedAtMs === null) {
     return null;
   }
-  const snapshotCompleteness = String(print.snapshotCompleteness || "").trim().toLowerCase();
-  const activityState = String(print.activityState || "").trim().toLowerCase();
-  const coreStateComplete = print.coreStateComplete === true;
   const connectionGeneration = Number.isFinite(Number(options.connectionGeneration))
     ? Number(options.connectionGeneration)
     : null;
   const sequence = Number.isFinite(Number(options.sequence)) ? Number(options.sequence) : null;
   const expiresAtMs = observedAtMs + K2_PRINTER_IDLE_OBSERVATION_TTL_MS;
+  const scalarSnapshot = mergeK2PrinterStatusScalarSnapshot({}, options.frame);
+  const frameClassification = classifyK2PrinterActivity(scalarSnapshot);
   const base = {
-    activityState: activityState || "unknown",
-    coreStateComplete,
-    snapshotCompleteness: snapshotCompleteness || "unknown",
+    activityState: frameClassification.activityState,
+    coreStateComplete: frameClassification.coreStateComplete,
+    physicalIdleEvidenceComplete: frameClassification.physicalIdleEvidenceComplete,
+    snapshotCompleteness: frameClassification.snapshotCompleteness,
     observedAt: options.observedAt,
     receivedAt: options.observedAt,
     expiresAt: new Date(expiresAtMs).toISOString(),
@@ -238,9 +257,12 @@ function createK2PrinterIdleObservationForShadow(options) {
     lastAppliedSequence: sequence,
     appliedDeltaCount: 0,
     fresh: true,
-    idle: isK2CfsSafeIdleLabel(print.stateLabel || print.state) && activityState === "idle" && coreStateComplete,
+    idle: frameClassification.idle === true,
+    idleReason: frameClassification.idleReason || null,
+    physicalIdleConflictReasons: [...frameClassification.physicalIdleConflictReasons],
+    scalarSnapshot,
   };
-  if (snapshotCompleteness === "complete" && coreStateComplete) {
+  if (frameClassification.snapshotCompleteness === "complete" && frameClassification.coreStateComplete) {
     return {
       ...base,
       status: "observed",
@@ -251,6 +273,8 @@ function createK2PrinterIdleObservationForShadow(options) {
   const previousComplete = previous &&
     ["observed", "assembled"].includes(String(previous.status || "").toLowerCase()) &&
     previous.coreStateComplete === true &&
+    previous.scalarSnapshot &&
+    typeof previous.scalarSnapshot === "object" &&
     String(previous.sessionId || "") === String(options.sessionId || "") &&
     Number(previous.connectionGeneration) === connectionGeneration;
   const orderedDelta = sequence !== null &&
@@ -267,18 +291,93 @@ function createK2PrinterIdleObservationForShadow(options) {
     };
   }
 
-  const partialShowsActive = activityState === "active" ||
-    activityState === "active-without-core-state" ||
-    ["printing", "paused", "busy", "heating", "checking", "running"].includes(String(print.stateLabel || print.state || "").toLowerCase());
+  const assembledSnapshot = mergeK2PrinterStatusScalarSnapshot(
+    previous.scalarSnapshot,
+    options.frame
+  );
+  const assembledClassification = classifyK2PrinterActivity(assembledSnapshot);
   return {
     ...base,
     status: "assembled",
-    activityState: partialShowsActive ? "active" : (previous.activityState || "idle"),
-    coreStateComplete: true,
-    snapshotCompleteness: "complete",
+    activityState: assembledClassification.activityState,
+    coreStateComplete: assembledClassification.coreStateComplete,
+    physicalIdleEvidenceComplete: assembledClassification.physicalIdleEvidenceComplete,
+    snapshotCompleteness: assembledClassification.snapshotCompleteness,
     baselineSequence: previous.baselineSequence ?? previous.lastAppliedSequence ?? sequence,
     appliedDeltaCount: Number(previous.appliedDeltaCount || 0) + 1,
-    idle: partialShowsActive ? false : previous.idle === true,
+    idle: assembledClassification.idle,
+    idleReason: assembledClassification.idleReason,
+    physicalIdleConflictReasons: [...assembledClassification.physicalIdleConflictReasons],
+    scalarSnapshot: assembledSnapshot,
+  };
+}
+
+/**
+ * K2 status frameからCFS物理操作用の統合安全証跡を生成する。
+ *
+ * 【詳細説明】
+ * - printer idle、feedState、raw errを同じstatus受信sequenceへ束縛し、別frameや欠損値から安全状態を推定しない。
+ * - `err.errcode`と`err.key`はraw objectで明示観測された場合だけ有効とし、NormalizedStateのinactive fallbackは使わない。
+ * - feedStateやerrが欠けたstatus frameは以前のsafe値を延命せずpartialへ落とす。
+ *
+ * @private
+ * @function createK2CfsPhysicalSafetyObservationForShadow
+ * @param {object} options - 生成オプション
+ * @param {object|null|undefined} options.printerIdleObservation - 同じstatus frame由来のidle証跡
+ * @param {object|null|undefined} options.frame - 今回観測したK2 raw status frame
+ * @param {string} options.sessionId - shadow session ID
+ * @param {number|null} options.connectionGeneration - WebSocket接続世代
+ * @param {string} options.observedAt - status frame受信時刻
+ * @param {number|null} options.sequence - current sequence
+ * @returns {object} CFS物理操作用統合安全証跡
+ */
+function createK2CfsPhysicalSafetyObservationForShadow(options) {
+  const idleObservation = options.printerIdleObservation && typeof options.printerIdleObservation === "object"
+    ? options.printerIdleObservation
+    : {};
+  const frame = options.frame && typeof options.frame === "object" ? options.frame : {};
+  const rawError = hasOwn(frame, "err") && frame.err && typeof frame.err === "object" && !Array.isArray(frame.err)
+    ? frame.err
+    : null;
+  const feedState = hasOwn(frame, "feedState") ? toFiniteNumberOrNull(frame.feedState) : null;
+  const printerErrorCode = rawError && hasOwn(rawError, "errcode")
+    ? toFiniteNumberOrNull(rawError.errcode)
+    : null;
+  const printerErrorKey = rawError && hasOwn(rawError, "key")
+    ? toFiniteNumberOrNull(rawError.key)
+    : null;
+  const feedStateObserved = feedState !== null;
+  const printerErrorObserved = printerErrorCode !== null && printerErrorKey !== null;
+  const idleEvidenceComplete = ["observed", "assembled"].includes(
+    String(idleObservation.status || "").trim().toLowerCase()
+  ) && idleObservation.coreStateComplete === true &&
+    idleObservation.physicalIdleEvidenceComplete === true &&
+    String(idleObservation.snapshotCompleteness || "").trim().toLowerCase() === "complete";
+  const evidenceComplete = idleEvidenceComplete && feedStateObserved && printerErrorObserved;
+  return {
+    status: evidenceComplete ? idleObservation.status : "partial",
+    activityState: idleObservation.activityState || "unknown",
+    coreStateComplete: idleObservation.coreStateComplete === true,
+    physicalIdleEvidenceComplete: idleObservation.physicalIdleEvidenceComplete === true,
+    snapshotCompleteness: idleObservation.snapshotCompleteness || "unknown",
+    observedAt: options.observedAt || null,
+    receivedAt: options.observedAt || null,
+    expiresAt: idleObservation.expiresAt || null,
+    sessionId: options.sessionId || null,
+    connectionGeneration: Number.isFinite(Number(options.connectionGeneration))
+      ? Number(options.connectionGeneration)
+      : null,
+    baselineSequence: idleObservation.baselineSequence ?? null,
+    lastAppliedSequence: Number.isFinite(Number(options.sequence)) ? Number(options.sequence) : null,
+    appliedDeltaCount: idleObservation.appliedDeltaCount ?? null,
+    fresh: evidenceComplete && idleObservation.fresh === true,
+    idle: idleObservation.idle === true,
+    feedStateObserved,
+    feedState,
+    printerErrorObserved,
+    printerErrorCode,
+    printerErrorKey,
+    errorClear: printerErrorObserved && printerErrorCode === 0 && printerErrorKey === 0,
   };
 }
 
@@ -1919,6 +2018,9 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
   const materialProviderLastObservedAt = hasBoxsInfoFrame
     ? lastObservedAt
     : previousMaterialObservedAt;
+  const materialProviderLastSequence = hasBoxsInfoFrame
+    ? (state.source?.sequence ?? null)
+    : (previous.materialProviderLastSequence ?? null);
   const materials = state.materials && materialProviderLastObservedAt
     ? {
         ...state.materials,
@@ -1949,6 +2051,7 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     lastSequence: state.source?.sequence ?? null,
     lastState,
     materialProviderLastObservedAt,
+    materialProviderLastSequence,
     cfsConnected: materials?.cfs?.connected ?? null,
     cfsTopologyState: materials?.cfs?.topologyState ?? null,
     cfsSourceCount: Array.isArray(materials?.sources) ? materials.sources.length : 0,
@@ -1966,12 +2069,23 @@ export function observeK2LiveShadowFrame(options, dependencies = {}) {
     ? createK2PrinterIdleObservationForShadow({
         previousRecord: previous,
         lastState: runtimeLastState,
+        frame: options.frame,
         sessionId,
         connectionGeneration: record.connectionGeneration,
         observedAt: lastObservedAt,
         sequence: record.lastSequence,
       })
     : (previous.printerIdleObservation || null);
+  record.cfsPhysicalSafetyObservation = hasK2PrinterStatusScalarFrame(options.frame)
+    ? createK2CfsPhysicalSafetyObservationForShadow({
+        printerIdleObservation: record.printerIdleObservation,
+        frame: options.frame,
+        sessionId,
+        connectionGeneration: record.connectionGeneration,
+        observedAt: lastObservedAt,
+        sequence: record.lastSequence,
+      })
+    : (previous.cfsPhysicalSafetyObservation || null);
   record.cfsConnected = runtimeMaterials?.cfs?.connected ?? null;
   record.cfsTopologyState = runtimeMaterials?.cfs?.topologyState ?? null;
   record.cfsSourceCount = Array.isArray(runtimeMaterials?.sources) ? runtimeMaterials.sources.length : 0;

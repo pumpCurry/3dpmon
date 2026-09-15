@@ -3,9 +3,9 @@
  * @description
  * - CFS操作intentがfail-closedにcommand requestへ変換され、bound dispatcherだけへ渡されることを検証する。
  *
- * @version 1.390.1560 (PR #439)
+ * @version 1.390.1675 (PR #442)
  * @since 1.390.1380 (PR #432)
- * @lastModified 2026-08-31 20:19:55
+ * @lastModified 2026-09-15 12:17:15
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -75,6 +75,8 @@ function createSendTimeContext() {
     sessionId: "session:live",
     transportKind: "ws9999",
     active: true,
+    stateSequence: 10,
+    connectionGeneration: 1,
     capabilities: ["material.cfs", "material.cfsTopology", "command.cfs-control"],
     materialTopology: {
       cfsConnected: true,
@@ -101,6 +103,28 @@ function createSendTimeContext() {
       print: {
         stateLabel: "idle",
       },
+    },
+    cfsPhysicalSafetyObservation: {
+      status: "observed",
+      activityState: "idle",
+      coreStateComplete: true,
+      physicalIdleEvidenceComplete: true,
+      snapshotCompleteness: "complete",
+      observedAt: "2026-09-15T12:17:15.000+09:00",
+      receivedAt: "2026-09-15T12:17:15.000+09:00",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      sessionId: "session:live",
+      connectionGeneration: 1,
+      baselineSequence: 10,
+      lastAppliedSequence: 10,
+      fresh: true,
+      idle: true,
+      feedStateObserved: true,
+      feedState: 0,
+      printerErrorObserved: true,
+      printerErrorCode: 0,
+      printerErrorKey: 0,
+      errorClear: true,
     },
   };
 }
@@ -134,7 +158,71 @@ describe("Printer Core v3 CFS command integration scaffold", () => {
     }]);
   });
 
-  it("load/feed/retract系intentでは未certifiedな期待状態を推測しない", () => {
+  it("load intentは対象選択・搬送停止・error clear・freshをterminal stateとして要求する", () => {
+    const request = createCfsControlCommandRequest(
+      createSlotIntent({ action: "load", commandKind: "cfs-load" }),
+      createRequestContext()
+    );
+
+    expect(request.commandKind).toBe("cfs-load");
+    expect(request.timeoutMs).toBe(120000);
+    expect(request.expectedState).toEqual([
+      {
+        path: "materials.selectedSource.sourceId",
+        operator: "equals",
+        expected: "cfs:1:slot:2",
+      },
+      {
+        path: "materials.cfsPhysicalSafety.feedState",
+        operator: "equals",
+        expected: 0,
+      },
+      {
+        path: "materials.cfsPhysicalSafety.errorClear",
+        operator: "equals",
+        expected: true,
+      },
+      {
+        path: "materials.cfsPhysicalSafety.fresh",
+        operator: "equals",
+        expected: true,
+      },
+    ]);
+  });
+
+  it("unload intentは選択解除・搬送停止・error clear・freshをterminal stateとして要求する", () => {
+    const request = createCfsControlCommandRequest(
+      createSlotIntent({ action: "unload", commandKind: "cfs-unload" }),
+      createRequestContext()
+    );
+
+    expect(request.commandKind).toBe("cfs-unload");
+    expect(request.timeoutMs).toBe(120000);
+    expect(request.expectedState).toEqual([
+      {
+        path: "materials.selectedSource.sourceId",
+        operator: "equals",
+        expected: null,
+      },
+      {
+        path: "materials.cfsPhysicalSafety.feedState",
+        operator: "equals",
+        expected: 0,
+      },
+      {
+        path: "materials.cfsPhysicalSafety.errorClear",
+        operator: "equals",
+        expected: true,
+      },
+      {
+        path: "materials.cfsPhysicalSafety.fresh",
+        operator: "equals",
+        expected: true,
+      },
+    ]);
+  });
+
+  it("feed/retract intentでは未certifiedな期待状態を推測しない", () => {
     const request = createCfsControlCommandRequest(
       createSlotIntent({ action: "feed", commandKind: "cfs-feed" }),
       createRequestContext()

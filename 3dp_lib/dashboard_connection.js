@@ -13,6 +13,7 @@
  * - UI 更新通知および aggregator 起動
  * - Printer Core v3 identity の dry-run 記録
  * - Printer Core v3 K1/K2 live shadow の read-only 観測
+ * - Gate 19.5 K2 CFS狭域操作の接続先別opt-in設定
  *
  * 【公開関数一覧】
  * - {@link fetchStoredData}：サーバーからデータ取得
@@ -33,9 +34,9 @@
  * - {@link getConnectionTarget}：指定ホスト/接続先の保存済み接続設定取得
  * - {@link getPrinterType}：ホストのプリンタ種別取得
  *
- * @version 1.390.1667 (PR #440)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.451 (PR #205)
- * @lastModified 2026-09-02 19:43:12
+ * @lastModified 2026-09-15 13:44:11
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -89,6 +90,8 @@ import {
   resolvePrinterCoreV3LiveShadowDeviceId,
 } from "./printer_core/dashboard_live_shadow.js";
 import {
+  K2_CFS_NARROW_CONTROL_ALLOWED_ACTIONS,
+  K2_CFS_NARROW_CONTROL_CERTIFICATION_ID,
   MATERIAL_DISPLAY_MODE,
   MATERIAL_PROVIDER_MODE,
   MATERIAL_SYSTEM_MODE,
@@ -3236,7 +3239,8 @@ function _materialSupplyOptionsHtml(materialSettings) {
  * 供給構成select値を保存用material system設定へ変換する。
  *
  * 【詳細説明】
- * - 保存時もread-only/権限なしを固定し、表示設定がcommand/ledger authorityを開かないようにする。
+ * - material system本体はread-only/ledger権限なしを固定し、表示設定が会計authorityを開かないようにする。
+ * - CFS controlはF012/CFS 1台向けの明示opt-inを別objectへ保存し、registry参照以外を受け付けない。
  * - 外部スプール表示はCFS/CFS-C監視パネル内の追加1枠として扱い、0/1へ丸める。
  *
  * @private
@@ -3244,9 +3248,16 @@ function _materialSupplyOptionsHtml(materialSettings) {
  * @param {string} supplyValue - supply select値
  * @param {boolean} externalEnabled - 外部スプール表示を有効にするか
  * @param {object} currentMaterialSystem - 現在の正規化済みmaterial system設定
+ * @param {boolean=} cfsControlEnabled - 狭域CFS操作へ明示opt-inする場合true
  * @returns {object} normalizeMaterialSystemSettingsへ渡す保存候補
  */
-export function _materialSystemFromSupplyValue(supplyValue, externalEnabled, currentMaterialSystem) {
+export function _materialSystemFromSupplyValue(
+  supplyValue,
+  externalEnabled,
+  currentMaterialSystem,
+  cfsControlEnabled = false
+) {
+  const narrowControlEnabled = cfsControlEnabled === true && supplyValue === "cfs-1";
   const base = {
     provider: currentMaterialSystem.provider,
     providerEndpoint: currentMaterialSystem.providerEndpoint,
@@ -3255,6 +3266,17 @@ export function _materialSystemFromSupplyValue(supplyValue, externalEnabled, cur
     readOnly: true,
     canSendCommands: false,
     canDriveLedger: false,
+    cfsControl: narrowControlEnabled
+      ? {
+        enabled: true,
+        certificationId: K2_CFS_NARROW_CONTROL_CERTIFICATION_ID,
+        allowedActions: [...K2_CFS_NARROW_CONTROL_ALLOWED_ACTIONS],
+      }
+      : {
+        enabled: false,
+        certificationId: "",
+        allowedActions: [],
+      },
   };
   if (supplyValue === "single") {
     return {
@@ -3295,13 +3317,15 @@ export function _materialSystemFromSupplyValue(supplyValue, externalEnabled, cur
  * 接続設定ダイアログ用のmaterial system設定HTMLを生成する。
  *
  * 【詳細説明】
- * - ここで設定する値は表示とread-only provider選択だけで、feed/retract/selectなどの操作権限は開かない。
+ * - K2/CFS 1台のときだけ、実機認証済み1A・1B load/unloadへの明示opt-in checkboxを表示する。
+ * - checkboxはregistry参照を保存するだけで、model/firmware/topology/send-time safety不一致では送信できない。
  *
  * @private
  * @param {object} materialSettings - 正規化済みmaterial system設定
+ * @param {string=} printerType - 接続先プリンタ種別
  * @returns {string} ダイアログHTML断片
  */
-function _materialSystemSettingsHtml(materialSettings) {
+export function _materialSystemSettingsHtml(materialSettings, printerType = "") {
   const providerOptions = [
     [MATERIAL_PROVIDER_MODE.AUTO, "自動"],
     [MATERIAL_PROVIDER_MODE.K2_BOXS_INFO, "K2 boxsInfo"],
@@ -3309,6 +3333,16 @@ function _materialSystemSettingsHtml(materialSettings) {
     [MATERIAL_PROVIDER_MODE.NONE, "なし"],
   ].map(([value, label]) => _optionHtml(value, label, materialSettings.provider)).join("");
   const externalChecked = materialSettings.externalSourceLimit > 0 ? "checked" : "";
+  const supplyValue = _materialSupplyValue(materialSettings);
+  const showCfsControl = printerType === "creality-k2";
+  const cfsControlEligible = showCfsControl && supplyValue === "cfs-1";
+  const cfsControlChecked = cfsControlEligible && materialSettings.cfsControl?.enabled === true ? "checked" : "";
+  const cfsControlDisabled = cfsControlEligible ? "" : "disabled";
+  const cfsControlHtml = showCfsControl
+    ? `
+              <label>CFS操作:</label>
+              <label class="conn-edit-check"><input type="checkbox" id="edit-cfs-control-enabled" ${cfsControlChecked} ${cfsControlDisabled}> 認証済み1A・1Bの押出し・引戻しを有効化</label>`
+    : "";
   return `
               <label>フィラメント供給:</label>
               <select id="edit-material-supply">${_materialSupplyOptionsHtml(materialSettings)}</select>
@@ -3317,7 +3351,7 @@ function _materialSystemSettingsHtml(materialSettings) {
               <label>Provider:</label>
               <select id="edit-material-provider" title="CFS-CはMoonraker boxsInfoを指定し、endpointを入力してください">${providerOptions}</select>
               <label>Provider endpoint:</label>
-              <input type="text" id="edit-material-provider-endpoint" value="${_escAttr(materialSettings.providerEndpoint || "")}" placeholder="例: 192.168.54.150:80">`;
+              <input type="text" id="edit-material-provider-endpoint" value="${_escAttr(materialSettings.providerEndpoint || "")}" placeholder="例: 192.168.54.150:80">${cfsControlHtml}`;
 }
 
 /**
@@ -3609,11 +3643,11 @@ export function updatePrinterListUI() {
               <input type="text" value="${_escAttr(hnText)}" disabled title="機器報告値（内部管理キー）">
               <label>機種設定:</label>
               <input type="text" value="${_escAttr(ptText)}" disabled>
-${_materialSystemSettingsHtml(currentMaterialSystem)}
+${_materialSystemSettingsHtml(currentMaterialSystem, tgt.printerType)}
             </div>
             <div class="conn-edit-note">
               機器ホスト名は<strong>機器から報告された名前で内部管理</strong>されます。機器側で名称を変更すると<strong>別機器として扱われ</strong>、履歴・設定が分かれます。
-              CFS/CFS-Cはread-only表示のみで、Feed/Retract/slot選択などの操作権限はまだ開きません。
+              CFS/CFS-Cは既定read-onlyです。K2 Pro F012・firmware 1.0.0・CFS 1台では、明示的に有効化した接続先の1A・1Bに限り、押出し・引戻しを利用できます。選択・送り・巻戻し、1C・1D、外部、複数CFSは対象外です。
             </div>`,
           confirmText: "保存",
           cancelText: "キャンセル"
@@ -3628,6 +3662,26 @@ ${_materialSystemSettingsHtml(currentMaterialSystem)}
         const materialExternalEnabledEl = document.getElementById("edit-material-external-enabled");
         const materialProviderEl = document.getElementById("edit-material-provider");
         const materialProviderEndpointEl = document.getElementById("edit-material-provider-endpoint");
+        const cfsControlEnabledEl = document.getElementById("edit-cfs-control-enabled");
+        /**
+         * 現在選択中の供給構成に応じて狭域CFS操作checkboxを同期する。
+         *
+         * 【詳細説明】
+         * - K2かつCFS 1台構成だけをUI候補とし、それ以外へ変更した時点で明示opt-inを解除する。
+         * - 保存時normalizerとsend-time registry検証も別途行うため、これは誤設定を減らすUI境界である。
+         *
+         * @private
+         * @function syncCfsControlEligibility
+         * @returns {void}
+         */
+        const syncCfsControlEligibility = () => {
+          if (!cfsControlEnabledEl) return;
+          const eligible = tgt.printerType === "creality-k2" && materialSupplyEl?.value === "cfs-1";
+          cfsControlEnabledEl.disabled = !eligible;
+          if (!eligible) cfsControlEnabledEl.checked = false;
+        };
+        materialSupplyEl?.addEventListener("change", syncCfsControlEligibility);
+        syncCfsControlEligibility();
         const result = await dlgPromise;
         if (!result) return;
         if (labelEl) tgt.label = labelEl.value.trim();
@@ -3640,7 +3694,8 @@ ${_materialSystemSettingsHtml(currentMaterialSystem)}
             ...currentMaterialSystem,
             provider: materialProviderEl?.value ?? currentMaterialSystem.provider,
             providerEndpoint: materialProviderEndpointEl?.value ?? currentMaterialSystem.providerEndpoint,
-          }
+          },
+          cfsControlEnabledEl?.checked === true
         );
         tgt.materialSystem = normalizeMaterialSystemSettings(materialDraft, tgt.printerType);
         _ensureSecondaryMaterialProviderSession(_resolveHostForPanelRefresh(tgt, dest), getState(_resolveHostForPanelRefresh(tgt, dest)));

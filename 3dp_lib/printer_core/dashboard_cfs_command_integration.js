@@ -17,9 +17,9 @@
  * - {@link createBoundCfsControlIntegration}：CFS操作intentのbound integrationを生成
  * - {@link dispatchCfsControlIntent}：CFS操作intentをbound dispatcherへ渡す
  *
- * @version 1.390.1382 (PR #432)
+ * @version 1.390.1675 (PR #442)
  * @since   1.390.1380 (PR #432)
- * @lastModified 2026-08-25 22:35:00
+ * @lastModified 2026-09-15 12:17:15
  * -----------------------------------------------------------
  * @todo
  * - actual adapter transport mapping と実機certificationが完了するまで production UI では enabled にしない
@@ -59,6 +59,17 @@ const CFS_ACTION_COMMAND_KIND = Object.freeze({
  * @constant {string[]}
  */
 const DEFAULT_CFS_CONTROL_ACTIONS = Object.freeze(Object.keys(CFS_ACTION_COMMAND_KIND));
+
+/**
+ * CFS物理操作の端末状態確認を含むrequest timeout。
+ *
+ * 【詳細説明】
+ * - K2実機ではload/unloadが初期の短い観測窓を超える場合があるため、送信後観測を含めて120秒確保する。
+ * - この値は物理commandの再送許可ではなく、一度送信したcommandの結果を観測する上限として使う。
+ *
+ * @constant {number}
+ */
+const CFS_PHYSICAL_COMMAND_TIMEOUT_MS = 120000;
 
 /**
  * createBoundCfsControlIntegration() が生成したintegrationを記録するWeakSet。
@@ -178,6 +189,7 @@ function normalizeCommandRequestContext(context = {}) {
     transportKind: toNonEmptyString(context.transportKind) || "pending-adapter",
     idempotencyKey: toNonEmptyString(context.idempotencyKey),
     createdAt: toNonEmptyString(context.createdAt),
+    timeoutMs: toFiniteNumberOrNull(context.timeoutMs),
     entropySource: typeof context.entropySource === "function" ? context.entropySource : undefined,
   };
 }
@@ -186,20 +198,42 @@ function normalizeCommandRequestContext(context = {}) {
  * CFS操作intentに対応する期待状態を返す。
  *
  * 【詳細説明】
- * - slot selectだけはNormalizedState上のselected sourceとして汎用的に確認できる。
- * - load/unload/feed/retractの物理・protocol semanticsは実機certification前なので、ここでは推測しない。
+ * - slot selectはNormalizedState上のselected sourceで確認する。
+ * - loadは対象sourceの選択、unloadは選択解除に加え、搬送停止、error clear、freshを端末状態とする。
+ * - feed/retractは連続操作の終端を単一状態として証明できないため、ここでは推測しない。
  *
  * @private
  * @param {object} normalizedIntent - 正規化済みCFS操作intent
  * @returns {Array<object>} expected-state条件
  */
 function createCfsExpectedState(normalizedIntent) {
+  const selectedSourceCondition = {
+    path: "materials.selectedSource.sourceId",
+    operator: "equals",
+    expected: normalizedIntent.action === "unload" ? null : normalizedIntent.sourceId,
+  };
   if (normalizedIntent.action === "select") {
-    return [{
-      path: "materials.selectedSource.sourceId",
-      operator: "equals",
-      expected: normalizedIntent.sourceId,
-    }];
+    return [selectedSourceCondition];
+  }
+  if (normalizedIntent.action === "load" || normalizedIntent.action === "unload") {
+    return [
+      selectedSourceCondition,
+      {
+        path: "materials.cfsPhysicalSafety.feedState",
+        operator: "equals",
+        expected: 0,
+      },
+      {
+        path: "materials.cfsPhysicalSafety.errorClear",
+        operator: "equals",
+        expected: true,
+      },
+      {
+        path: "materials.cfsPhysicalSafety.fresh",
+        operator: "equals",
+        expected: true,
+      },
+    ];
   }
   return [];
 }
@@ -236,6 +270,7 @@ export function createCfsControlCommandRequest(intent = {}, context = {}) {
       protocolSlotId: normalizedIntent.protocolSlotId,
     },
     expectedState: createCfsExpectedState(normalizedIntent),
+    timeoutMs: requestContext.timeoutMs || CFS_PHYSICAL_COMMAND_TIMEOUT_MS,
     idempotencyKey: requestContext.idempotencyKey,
     entropySource: requestContext.entropySource,
     createdAt: requestContext.createdAt,

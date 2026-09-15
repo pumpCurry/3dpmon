@@ -17,9 +17,9 @@
  * - {@link renderCfsCertificationPanel}：CertificationパネルViewModelをDOMへ描画
  * - {@link createCfsCertificationExportBundle}：レビュー/fixture化用の証跡bundleを生成
  *
- * @version 1.390.1647 (PR #440)
+ * @version 1.390.1669 (PR #442)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-09-02 16:08:12
+ * @lastModified 2026-09-09 10:31:00
  * -----------------------------------------------------------
  * @todo
  * - Gate 19 live certification後に、registry登録済みcommandだけLIVE送信ボタンへ接続する
@@ -386,12 +386,25 @@ function createPrinterIdlePreflightDetail(printer) {
         detail: "idle未証明: incomplete",
       };
     }
+    if (idleObservation.physicalIdleEvidenceComplete !== true) {
+      return {
+        state: "fail",
+        detail: "idle未証明: physical evidence incomplete",
+      };
+    }
     if (idleObservation.idle !== true) {
       return {
         state: "fail",
         detail: toText(idleObservation.activityState || printerState, "idle未証明"),
       };
     }
+    const lifecycleLabel = idleObservation.idleReason === "completed-terminal-state"
+      ? "完了"
+      : "待機";
+    return {
+      state: "ok",
+      detail: `${lifecycleLabel} / physical idle確認済み`,
+    };
   }
   const probeStatus = toText(printer?.statusProbeStatus || printer?.printStatusProbeStatus, "");
   const activityState = toText(printer?.printActivityState || printer?.activityState, "");

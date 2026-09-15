@@ -1,5 +1,25 @@
 /**
- * @fileoverview Printer Core v3 K2 read-only adapter の単体テスト
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 Printer Core v3 K2 read-only adapter 単体テスト
+ * @file printer_core_k2_adapter.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module printer_core_k2_adapter_test
+ *
+ * 【機能内容サマリ】
+ * - K2 status/CFS payloadの正規化とadapter境界を検証
+ * - 完了後sticky job timeとphysical idle複合判定の回帰を固定
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1670 (PR #442)
+ * @since   1.390.1296 (PR #432)
+ * @lastModified 2026-09-09 11:16:25
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -111,6 +131,220 @@ describe("Printer Core v3 K2 read-only adapter", () => {
       activityState: "idle",
       coreStateComplete: true,
       observedScalarKeys: ["bedTemp0", "deviceState", "nozzleTemp", "state"],
+    });
+  });
+
+  it("K2完了後に残るprintJobTimeをactive根拠にせずcomplete core stateのidleを優先する", () => {
+    const patch = createK2StatusPatch({
+      state: 0,
+      deviceState: 0,
+      printJobTime: 613,
+      printLeftTime: 0,
+      printProgress: 100,
+      targetNozzleTemp: 0,
+      targetBedTemp0: 0,
+    }, {
+      deviceId: "fixture:k2-completed-job-idle",
+      sessionId: "fixture-session-k2-completed-job-idle",
+      sequence: 11,
+      receivedAt: "2026-09-09T09:50:00.000+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      stateCode: 0,
+      stateLabel: "idle",
+      deviceStateCode: 0,
+      snapshotCompleteness: "complete",
+      activityState: "idle",
+      coreStateComplete: true,
+      physicalIdleEvidenceComplete: true,
+    });
+  });
+
+  it("K2の正常終了stateをfreshなphysical idle複合証拠が揃った場合だけidleへ分類する", () => {
+    const patch = createK2StatusPatch({
+      state: 2,
+      deviceState: 0,
+      printJobTime: 613,
+      printLeftTime: 0,
+      printProgress: 100,
+      targetNozzleTemp: 0,
+      targetBedTemp0: 0,
+      printFileName: "/mnt/UDISK/printer_data/gcodes/bracket.stl_PLA_8m15s.gcode",
+      printId: "6a936e4ab9e9df20004c5066",
+    }, {
+      deviceId: "fixture:k2-completed-terminal-idle",
+      sessionId: "fixture-session-k2-completed-terminal-idle",
+      sequence: 12,
+      receivedAt: "2026-09-09T10:02:04.276+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      stateCode: 2,
+      stateLabel: "completed",
+      deviceStateCode: 0,
+      snapshotCompleteness: "complete",
+      activityState: "idle",
+      coreStateComplete: true,
+      physicalIdleEvidenceComplete: true,
+      idleReason: "completed-terminal-state",
+    });
+  });
+
+  it.each([
+    ["残り時間", { printLeftTime: 1 }],
+    ["ノズル設定温度", { targetNozzleTemp: 220 }],
+    ["ベッド設定温度", { targetBedTemp0: 60 }],
+    ["deviceState", { deviceState: 1 }],
+  ])("K2の正常終了stateでも%sが活動を示す場合はidleにしない", (_label, override) => {
+    const patch = createK2StatusPatch({
+      state: 2,
+      deviceState: 0,
+      printJobTime: 613,
+      printLeftTime: 0,
+      printProgress: 100,
+      targetNozzleTemp: 0,
+      targetBedTemp0: 0,
+      ...override,
+    }, {
+      deviceId: "fixture:k2-completed-active-counterexample",
+      sessionId: "fixture-session-k2-completed-active-counterexample",
+      sequence: 13,
+      receivedAt: "2026-09-09T10:03:00.000+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      stateCode: 2,
+      stateLabel: "completed",
+      snapshotCompleteness: "complete",
+      activityState: "active",
+      coreStateComplete: true,
+      physicalIdleEvidenceComplete: true,
+    });
+  });
+
+  it.each([
+    ["残り時間", { printLeftTime: -1 }, "invalid-negative-print-left-time"],
+    ["ノズル設定温度", { targetNozzleTemp: -1 }, "invalid-negative-target-nozzle-temperature"],
+    ["ベッド設定温度", { targetBedTemp0: -1 }, "invalid-negative-target-bed-temperature"],
+  ])("K2のphysical idle必須%sが負のsentinelならidle authorityを拒否する", (_label, override, reason) => {
+    const patch = createK2StatusPatch({
+      state: 2,
+      deviceState: 0,
+      printProgress: 100,
+      printLeftTime: 0,
+      targetNozzleTemp: 0,
+      targetBedTemp0: 0,
+      ...override,
+    }, {
+      deviceId: "fixture:k2-negative-idle-sentinel",
+      sessionId: "fixture-session-k2-negative-idle-sentinel",
+      sequence: 14,
+      receivedAt: "2026-09-09T11:16:25.000+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      stateLabel: "completed",
+      physicalIdle: false,
+      physicalIdleConflictReasons: [reason],
+    });
+  });
+
+  it("K2の空白physical idle scalarをzeroへ変換せず未観測として拒否する", () => {
+    const patch = createK2StatusPatch({
+      state: 2,
+      deviceState: 0,
+      printProgress: 100,
+      printLeftTime: 0,
+      targetNozzleTemp: "   ",
+      targetBedTemp0: 0,
+    }, {
+      deviceId: "fixture:k2-blank-idle-scalar",
+      sessionId: "fixture-session-k2-blank-idle-scalar",
+      sequence: 15,
+      receivedAt: "2026-09-09T11:16:26.000+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      physicalIdleEvidenceComplete: false,
+      physicalIdle: false,
+    });
+  });
+
+  it("K2の正常終了stateでもphysical idle必須scalarが欠落した場合はidle authorityを完成させない", () => {
+    const patch = createK2StatusPatch({
+      state: 2,
+      deviceState: 0,
+      printJobTime: 613,
+      printProgress: 100,
+    }, {
+      deviceId: "fixture:k2-completed-incomplete-physical-idle",
+      sessionId: "fixture-session-k2-completed-incomplete-physical-idle",
+      sequence: 14,
+      receivedAt: "2026-09-09T10:04:00.000+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      stateCode: 2,
+      stateLabel: "completed",
+      snapshotCompleteness: "complete",
+      activityState: "idle",
+      coreStateComplete: true,
+      physicalIdleEvidenceComplete: false,
+    });
+  });
+
+  it.each([
+    [1, "printing"],
+    [3, "checking"],
+    [4, "failed"],
+    [5, "paused"],
+  ])("K2の非terminal state %i (%s)はphysical idleへ分類しない", (state, stateLabel) => {
+    const patch = createK2StatusPatch({
+      state,
+      deviceState: 0,
+      printJobTime: 613,
+      printLeftTime: 0,
+      targetNozzleTemp: 0,
+      targetBedTemp0: 0,
+    }, {
+      deviceId: `fixture:k2-${stateLabel}`,
+      sessionId: `fixture-session-k2-${stateLabel}`,
+      sequence: 14 + state,
+      receivedAt: "2026-09-09T10:05:00.000+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      stateCode: state,
+      stateLabel,
+      activityState: "active",
+      physicalIdleEvidenceComplete: true,
+      physicalIdle: false,
+    });
+  });
+
+  it("K2の正常終了stateと100以外の進捗が同居する矛盾frameはphysical idleにしない", () => {
+    const patch = createK2StatusPatch({
+      state: 2,
+      deviceState: 0,
+      printProgress: 75,
+      printJobTime: 613,
+      printLeftTime: 0,
+      targetNozzleTemp: 0,
+      targetBedTemp0: 0,
+    }, {
+      deviceId: "fixture:k2-completed-progress-conflict",
+      sessionId: "fixture-session-k2-completed-progress-conflict",
+      sequence: 20,
+      receivedAt: "2026-09-09T10:06:00.000+09:00",
+    });
+
+    expect(patch.patch.print).toMatchObject({
+      stateLabel: "completed",
+      activityState: "active",
+      physicalIdleEvidenceComplete: true,
+      physicalIdle: false,
+      physicalIdleConflictReasons: ["completed-progress-conflict"],
     });
   });
 

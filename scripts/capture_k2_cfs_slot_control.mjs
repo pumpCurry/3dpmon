@@ -22,9 +22,9 @@
  * - {@link sendBoxsInfoProbeAndWait}：read-only boxsInfo probeを送信して応答を待つ
  * - {@link runK2CfsSlotControlCertification}：dry-runまたは明示送信を実行
  *
- * @version 1.390.1612 (PR #440)
+ * @version 1.390.1673 (PR #442)
  * @since   1.390.1415 (PR #435)
- * @lastModified 2026-09-01 23:09:20
+ * @lastModified 2026-09-09 13:05:16
  * -----------------------------------------------------------
  * @todo
  * - 実機Gateでpost-command boxsInfo probeとscenario fixture保存を統合する
@@ -38,6 +38,7 @@ import {
   createK2CfsCommandTransportPlan,
   sendK2CfsCommandTransportPlan,
 } from "../3dp_lib/printer_core/dashboard_k2_cfs_command_transport.js";
+import { classifyK2PrinterActivity } from "../3dp_lib/printer_core/dashboard_k2_printer_activity.js";
 
 /**
  * CLI usage text。
@@ -158,6 +159,7 @@ const PRINTER_STATUS_KEYS = Object.freeze([
   "bedTemp0",
   "targetNozzleTemp",
   "targetBedTemp0",
+  "feedState",
 ]);
 
 /**
@@ -1137,15 +1139,17 @@ function findPreCommandIndeterminateSelectionSources(summary) {
  *
  * 【詳細説明】
  * - certification runnerは、通信応答があっただけでは送信してよいとは扱わない。
- * - 対象sourceが一意で、duplicate locatorがなく、明示loadedかつselectedが一意である場合だけCFS操作frameを送る。
+ * - 押出し候補はF012待機時の自動供給仕様に合わせ、選択なし、または対象だけが選択中の場合に許可する。
+ * - 引戻し候補は対象だけが一意に選択中の場合に限り、別経路を誤って戻さないようfail-closedにする。
  *
  * @private
  * @function validatePreCommandProbeSummary
  * @param {object|null|undefined} summary - pre-command boxsInfo summary
  * @param {string} targetSourceId - 操作対象source ID
+ * @param {string} commandKind - 実行するCFS command kind
  * @returns {{ok:boolean, reason:?string}} 検査結果
  */
-function validatePreCommandProbeSummary(summary, targetSourceId) {
+function validatePreCommandProbeSummary(summary, targetSourceId, commandKind) {
   if (!summary || typeof summary !== "object") {
     return { ok: false, reason: "pre-command-observation-failed" };
   }
@@ -1159,9 +1163,6 @@ function validatePreCommandProbeSummary(summary, targetSourceId) {
   if (targetSources[0].presence !== "loaded") {
     return { ok: false, reason: "pre-command-target-source-not-loaded" };
   }
-  if (targetSources[0].selected !== true) {
-    return { ok: false, reason: "pre-command-target-source-not-selected" };
-  }
   const indeterminateSelectionSources = findPreCommandIndeterminateSelectionSources(summary);
   if (indeterminateSelectionSources.some((source) => source?.selectionValid === false)) {
     return { ok: false, reason: "pre-command-selected-value-invalid" };
@@ -1169,12 +1170,26 @@ function validatePreCommandProbeSummary(summary, targetSourceId) {
   if (indeterminateSelectionSources.length > 0) {
     return { ok: false, reason: "pre-command-selected-source-observation-incomplete" };
   }
-  if (!Array.isArray(summary.selectedSourceIds) ||
-      summary.selectedSourceIds.length !== 1 ||
-      summary.selectedSourceIds[0] !== targetSourceId) {
+  if (!Array.isArray(summary.selectedSourceIds)) {
     return { ok: false, reason: "pre-command-selected-source-ambiguous" };
   }
-  return { ok: true, reason: null };
+  if (commandKind === "cfs-load") {
+    if (summary.selectedSourceIds.length === 0 ||
+        (summary.selectedSourceIds.length === 1 && summary.selectedSourceIds[0] === targetSourceId)) {
+      return { ok: true, reason: null };
+    }
+    return { ok: false, reason: "pre-command-selected-source-conflict" };
+  }
+  if (commandKind === "cfs-unload") {
+    if (targetSources[0].selected !== true) {
+      return { ok: false, reason: "pre-command-target-source-not-selected" };
+    }
+    if (summary.selectedSourceIds.length !== 1 || summary.selectedSourceIds[0] !== targetSourceId) {
+      return { ok: false, reason: "pre-command-selected-source-ambiguous" };
+    }
+    return { ok: true, reason: null };
+  }
+  return { ok: false, reason: "pre-command-command-not-supported" };
 }
 
 /**
@@ -1358,6 +1373,106 @@ function extractPrinterStatusPayload(payload) {
 }
 
 /**
+ * CFS physical command送信中に機器が通知したfeedStateを収集する。
+ *
+ * 【詳細説明】
+ * - 追加のpollは送らず、command送信直前からafter probe終了までに届いた自発通知だけを時系列化する。
+ * - feedStateを含まないstatusやboxsInfo応答は記録せず、物理供給経路の変化だけを証跡へ残す。
+ * - stopは冪等にし、成功・失敗・例外のどの終了経路でもlistenerを残さない。
+ *
+ * @private
+ * @function createCommandTelemetryRecorder
+ * @param {WebSocket|EventEmitter} ws - 観測対象WebSocket
+ * @returns {{start:function():void, stop:function():object}} telemetry recorder
+ */
+function createCommandTelemetryRecorder(ws) {
+  const events = [];
+  let startedAt = null;
+  let completedAt = null;
+  let listening = false;
+
+  /**
+   * feedStateを含む自発通知を証跡配列へ追加する。
+   *
+   * 【詳細説明】
+   * - status payloadを抽出できない通知、およびfeedStateを含まない通知は記録対象外とする。
+   * - raw payloadも保持し、後日のprotocol解析で正規化前の証跡を確認できるようにする。
+   *
+   * @private
+   * @function handleMessage
+   * @param {string|Buffer|ArrayBuffer|object} data - WebSocket message payload
+   * @returns {void}
+   */
+  const handleMessage = (data) => {
+    const payload = parseJsonMessage(data);
+    const statusPayload = extractPrinterStatusPayload(payload);
+    if (!statusPayload || !Object.prototype.hasOwnProperty.call(statusPayload, "feedState")) {
+      return;
+    }
+    events.push({
+      observedAt: new Date().toISOString(),
+      feedState: toFiniteNumberOrNull(statusPayload.feedState),
+      feedStateRaw: statusPayload.feedState,
+      payload,
+    });
+  };
+
+  /**
+   * command telemetryの観測を開始する。
+   *
+   * 【詳細説明】
+   * - 二重開始ではlistenerを増やさず、最初の開始時刻を保持する。
+   *
+   * @private
+   * @function start
+   * @returns {void}
+   */
+  function start() {
+    if (listening) {
+      return;
+    }
+    listening = true;
+    startedAt = new Date().toISOString();
+    if (typeof ws.on === "function") {
+      ws.on("message", handleMessage);
+    }
+  }
+
+  /**
+   * command telemetryの観測を終了してsnapshotを返す。
+   *
+   * 【詳細説明】
+   * - listener解除は一度だけ行い、複数回呼ばれても同じ観測結果を返す。
+   * - 呼び出し元が内部配列を書き換えないよう、event objectを複製する。
+   *
+   * @private
+   * @function stop
+   * @returns {{startedAt:?string, completedAt:?string, events:Array<object>}} telemetry snapshot
+   */
+  function stop() {
+    if (listening) {
+      listening = false;
+      completedAt = new Date().toISOString();
+      if (typeof ws.off === "function") {
+        ws.off("message", handleMessage);
+      } else if (typeof ws.removeListener === "function") {
+        ws.removeListener("message", handleMessage);
+      }
+    }
+    return {
+      startedAt,
+      completedAt,
+      events: events.map((event) => ({ ...event })),
+    };
+  }
+
+  return {
+    start,
+    stop,
+  };
+}
+
+/**
  * 任意値を有限数へ正規化する。
  *
  * @private
@@ -1394,48 +1509,22 @@ function toFiniteNumberOrNull(value) {
  * @returns {object} idle判定summary
  */
 function summarizePrinterStatusPayload(statusPayload) {
-  const state = toFiniteNumberOrNull(statusPayload?.state);
-  const deviceState = toFiniteNumberOrNull(statusPayload?.deviceState);
-  const printProgress = toFiniteNumberOrNull(statusPayload?.printProgress);
-  const printJobTime = toFiniteNumberOrNull(statusPayload?.printJobTime);
-  const printLeftTime = toFiniteNumberOrNull(statusPayload?.printLeftTime);
+  const classification = classifyK2PrinterActivity(statusPayload);
   const nozzleTemp = toFiniteNumberOrNull(statusPayload?.nozzleTemp);
   const bedTemp0 = toFiniteNumberOrNull(statusPayload?.bedTemp0);
-  const targetNozzleTemp = toFiniteNumberOrNull(statusPayload?.targetNozzleTemp);
-  const targetBedTemp0 = toFiniteNumberOrNull(statusPayload?.targetBedTemp0);
   const printFileName = toNonEmptyString(statusPayload?.printFileName) ||
     toNonEmptyString(statusPayload?.fileName);
   const printId = toNonEmptyString(statusPayload?.printId);
-  const hasCoreState = state !== null && deviceState !== null;
-  const active = (state !== null && state !== 0) ||
-    (deviceState !== null && deviceState !== 0) ||
-    (printJobTime !== null && printJobTime > 0) ||
-    (printLeftTime !== null && printLeftTime > 0) ||
-    (targetNozzleTemp !== null && targetNozzleTemp > 0) ||
-    (targetBedTemp0 !== null && targetBedTemp0 > 0);
-  const activityState = hasCoreState
-    ? (active ? "active" : "idle")
-    : (active ? "active-without-core-state" : "unknown-core-state");
-  const observedScalarKeys = Object.keys(statusPayload || {}).sort();
+  const feedState = toFiniteNumberOrNull(statusPayload?.feedState);
   return {
+    ...classification,
     observed: true,
-    complete: hasCoreState,
-    idle: hasCoreState && !active,
-    active,
-    activityState,
-    coreStateComplete: hasCoreState,
-    state,
-    deviceState,
-    printProgress,
-    printJobTime,
-    printLeftTime,
+    complete: classification.coreStateComplete,
     nozzleTemp,
     bedTemp0,
-    targetNozzleTemp,
-    targetBedTemp0,
     printFileName,
     printId,
-    observedScalarKeys,
+    feedState,
   };
 }
 
@@ -1925,6 +2014,7 @@ export async function runK2CfsSlotControlCertification(options) {
     }
   }
   const ws = await (options.openWs || openWs)(options.host, options.wsPort);
+  let commandTelemetryRecorder = null;
   try {
     let printerStatus = null;
     if (options.requirePrinterIdle === true) {
@@ -1988,6 +2078,38 @@ export async function runK2CfsSlotControlCertification(options) {
           targetSourceDelta: null,
         }, options);
       }
+      const preCommandFeedState = printerStatus.summary?.feedState;
+      const feedStateRejectionReason = preCommandFeedState === null
+        ? "pre-command-cfs-feed-state-observation-failed"
+        : (preCommandFeedState !== 0 ? "pre-command-cfs-feed-state-not-idle" : null);
+      if (feedStateRejectionReason) {
+        return finalizeCertificationResult({
+          ok: false,
+          sent: false,
+          dryRun: false,
+          status: "rejected",
+          reason: feedStateRejectionReason,
+          blindRetryAllowed: false,
+          startedAt,
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - startedAtMs,
+          host: options.host,
+          wsPort: options.wsPort,
+          request,
+          plan,
+          probePlan: createProbePlanSummary(options),
+          response: null,
+          printerStatus,
+          probes: {
+            before: null,
+            after: null,
+            afterSeries: [],
+          },
+          printerInfo,
+          operatorMarker,
+          targetSourceDelta: null,
+        }, options);
+      }
     }
     const probes = {
       before: null,
@@ -2027,7 +2149,8 @@ export async function runK2CfsSlotControlCertification(options) {
       }
       const preCommandValidation = validatePreCommandProbeSummary(
         probes.before.summary,
-        request.payload.sourceId
+        request.payload.sourceId,
+        request.commandKind
       );
       if (!preCommandValidation.ok) {
         return finalizeCertificationResult({
@@ -2055,6 +2178,8 @@ export async function runK2CfsSlotControlCertification(options) {
         }, options);
       }
     }
+    commandTelemetryRecorder = createCommandTelemetryRecorder(ws);
+    commandTelemetryRecorder.start();
     let response = null;
     try {
       response = await sendK2CfsCommandTransportPlan(plan, async (frame) => {
@@ -2063,6 +2188,7 @@ export async function runK2CfsSlotControlCertification(options) {
         allowCertificationOnly: true,
       });
     } catch (error) {
+      const commandTelemetry = commandTelemetryRecorder.stop();
       return finalizeCertificationResult({
         ok: false,
         sent: true,
@@ -2085,6 +2211,7 @@ export async function runK2CfsSlotControlCertification(options) {
         printerInfo,
         operatorMarker,
         targetSourceDelta: null,
+        commandTelemetry,
         error: serializeCertificationError(error),
       }, options);
     }
@@ -2114,6 +2241,7 @@ export async function runK2CfsSlotControlCertification(options) {
       );
       const hasFailedAfterProbe = probes.afterSeries.some((probe) => probe?.status !== "observed");
       if (hasFailedAfterProbe || lastAfterProbe?.status !== "observed") {
+        const commandTelemetry = commandTelemetryRecorder.stop();
         return finalizeCertificationResult({
           ok: false,
           sent: true,
@@ -2135,6 +2263,7 @@ export async function runK2CfsSlotControlCertification(options) {
           printerInfo,
           operatorMarker,
           targetSourceDelta,
+          commandTelemetry,
           ...summarizeProbeAttempts(probes),
         }, options);
       }
@@ -2142,6 +2271,7 @@ export async function runK2CfsSlotControlCertification(options) {
     const postCommandObserved = options.probeAfter === true &&
       probes.afterSeries.length > 0 &&
       probes.afterSeries.every((probe) => probe?.status === "observed");
+    const commandTelemetry = commandTelemetryRecorder.stop();
     return finalizeCertificationResult({
       ok: true,
       sent: true,
@@ -2163,9 +2293,11 @@ export async function runK2CfsSlotControlCertification(options) {
       printerInfo,
       operatorMarker,
       targetSourceDelta,
+      commandTelemetry,
       ...summarizeProbeAttempts(probes),
     }, options);
   } finally {
+    commandTelemetryRecorder?.stop();
     ws.close();
   }
 }

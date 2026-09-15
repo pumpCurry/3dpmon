@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1432 (PR #435)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.1362 (PR #432)
- * @lastModified 2026-08-28 09:40:48
+ * @lastModified 2026-09-15 13:44:11
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -25,9 +25,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  K2_CFS_NARROW_CONTROL_CERTIFICATION_ID,
   MATERIAL_DISPLAY_MODE,
   MATERIAL_PROVIDER_MODE,
   MATERIAL_SYSTEM_MODE,
+  createDefaultMaterialSystemSettings,
   normalizeMaterialSystemSettings,
   resolveDisplayMaterialTopology,
   resolveMaterialDisplayMode,
@@ -59,6 +61,85 @@ function createObservedTopology(unitCount) {
 }
 
 describe("Printer Core v3 material system settings", () => {
+  it("CFS physical controlは全プリンタ種別で既定OFFになる", () => {
+    expect(createDefaultMaterialSystemSettings("creality-k2").cfsControl).toEqual({
+      enabled: false,
+      certificationId: "",
+      allowedActions: [],
+    });
+    expect(createDefaultMaterialSystemSettings("creality-k1").cfsControl).toEqual({
+      enabled: false,
+      certificationId: "",
+      allowedActions: [],
+    });
+  });
+
+  it("K2の既知certificationIdはload/unloadだけを明示opt-inとして保存する", () => {
+    const normalized = normalizeMaterialSystemSettings({
+      mode: MATERIAL_SYSTEM_MODE.CFS_READONLY,
+      unitLimit: 1,
+      cfsControl: {
+        enabled: true,
+        certificationId: K2_CFS_NARROW_CONTROL_CERTIFICATION_ID,
+        allowedActions: ["load", "select", "unload", "feed", "load"],
+      },
+    }, "creality-k2");
+
+    expect(normalized.cfsControl).toEqual({
+      enabled: true,
+      certificationId: K2_CFS_NARROW_CONTROL_CERTIFICATION_ID,
+      allowedActions: ["load", "unload"],
+    });
+    expect(normalized.readOnly).toBe(true);
+    expect(normalized.canSendCommands).toBe(false);
+  });
+
+  it("未知certificationIdまたはK2以外では保存済みCFS controlを強制OFFにする", () => {
+    const unknownCertification = normalizeMaterialSystemSettings({
+      cfsControl: {
+        enabled: true,
+        certificationId: "caller-supplied-certification",
+        allowedActions: ["load", "unload"],
+      },
+    }, "creality-k2");
+    const k1Target = normalizeMaterialSystemSettings({
+      cfsControl: {
+        enabled: true,
+        certificationId: K2_CFS_NARROW_CONTROL_CERTIFICATION_ID,
+        allowedActions: ["load", "unload"],
+      },
+    }, "creality-k1");
+
+    expect(unknownCertification.cfsControl).toEqual({
+      enabled: false,
+      certificationId: "",
+      allowedActions: [],
+    });
+    expect(k1Target.cfsControl).toEqual({
+      enabled: false,
+      certificationId: "",
+      allowedActions: [],
+    });
+  });
+
+  it("K2でもCFS 2台以上の設定では狭域certificationを強制OFFにする", () => {
+    const normalized = normalizeMaterialSystemSettings({
+      mode: MATERIAL_SYSTEM_MODE.CFS_READONLY,
+      unitLimit: 2,
+      cfsControl: {
+        enabled: true,
+        certificationId: K2_CFS_NARROW_CONTROL_CERTIFICATION_ID,
+        allowedActions: ["load", "unload"],
+      },
+    }, "creality-k2");
+
+    expect(normalized.cfsControl).toEqual({
+      enabled: false,
+      certificationId: "",
+      allowedActions: [],
+    });
+  });
+
   it("K2は既定でCombo標準の1台CFS表示へ進める", () => {
     const target = { printerType: "creality-k2" };
 

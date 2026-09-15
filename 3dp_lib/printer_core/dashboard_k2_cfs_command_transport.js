@@ -16,16 +16,18 @@
  * 【公開関数一覧】
  * - {@link validateK2CfsSlotControlCertificationEvidence}：production CFS slot操作の実機証跡を検証
  * - {@link validateRegisteredK2CfsSlotControlCertificationEvidence}：registry登録済みproduction証跡を検証
+ * - {@link validateRegisteredK2CfsSlotControlCertificationTarget}：UI composition用の静的認証scopeを検証
+ * - {@link resolveRegisteredK2CfsSlotControlCertificationEvidence}：認証IDからmodule-owned証跡を解決
  * - {@link createImmutableK2CfsSlotControlCertificationRegistry}：registry entryを再帰的に不変化
  * - {@link createK2CfsCommandTransportPlan}：command request から送信計画を生成
  * - {@link sendK2CfsCommandTransportPlan}：送信計画を注入済みsend hookで順次送信
  *
- * @version 1.390.1452 (PR #435)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.1384 (PR #432)
- * @lastModified 2026-08-28 14:28:57
+ * @lastModified 2026-09-15 14:12:00
  * -----------------------------------------------------------
  * @todo
- * - K2実機Gateでslot select/load/unload/feed/retractのLAN commandをcertifyしてから追加する
+ * - 1C・1D・外部sourceとslot select/feed/retractは個別の実機認証が完了するまでproductionへ追加しない
  */
 
 "use strict";
@@ -68,8 +70,8 @@ export const K2_CFS_SLOT_CONTROL_CERTIFICATION_TRANSPORT_PROFILE = "k2-ws9999-fe
  * 実機certification済みCFS slot操作で採用するWS9999 transport profile名。
  *
  * 【詳細説明】
- * - `feedInOrOut` をproduction commandとして使う場合は、command kindごとの実機証跡を
- *   `certifiedCfsSlotControlCommands` と `certificationEvidence` で明示した時だけこのprofileへ昇格する。
+ * - `feedInOrOut` をproduction commandとして使う場合は、module-owned registryに登録した
+ *   `certificationId`を解決できる時だけこのprofileへ昇格する。
  *
  * @constant {string}
  */
@@ -282,6 +284,17 @@ export function createImmutableK2CfsSlotControlCertificationRegistry(entries) {
   const normalizedEntries = Array.isArray(entries)
     ? entries.map((entry) => cloneJsonValue(entry))
     : [];
+  const seenCertificationIds = new Set();
+  for (const entry of normalizedEntries) {
+    const certificationId = toNonEmptyString(entry?.certificationId);
+    if (!certificationId) {
+      throw new TypeError("K2 CFS certification registry entry requires certificationId.");
+    }
+    if (seenCertificationIds.has(certificationId)) {
+      throw new TypeError(`Duplicate K2 CFS certificationId: ${certificationId}`);
+    }
+    seenCertificationIds.add(certificationId);
+  }
   return deepFreezeJsonValue(normalizedEntries);
 }
 
@@ -291,13 +304,110 @@ export function createImmutableK2CfsSlotControlCertificationRegistry(entries) {
  * 【詳細説明】
  * - connection targetやUI設定に保存された証跡だけでproduction commandを有効化しないため、
  *   実機certificationをコードレビュー済みのimmutable registryとして保持する。
- * - 現時点ではGate 10/12の物理certificationが未完了のため空配列にし、slot操作はfail-closedを維持する。
- * - 将来certificationを追加する場合は、このfactory経由で完全な証跡を追加し、reviewとlive testを通す。
+ * - F012 firmware 1.0.0 / CFS 1台 / box 1の1A・1Bについて反復実機確認したload/unloadだけを登録する。
+ * - 1C・1D・external・複数CFS・別firmware・select/feed/retractは証跡scope外として拒否する。
+ * - review metadataはGate 19のコード適格性GOを監査記録として残すが、runtime authority判定には使用しない。
  *
  * @constant {ReadonlyArray<object>}
  */
 export const K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY =
-  createImmutableK2CfsSlotControlCertificationRegistry([]);
+  createImmutableK2CfsSlotControlCertificationRegistry([{
+    schemaVersion: 1,
+    certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
+    fixtureId: "k2-pro-cfs-f012-slot-control-live-20260909",
+    captureId: "capture_f012_cfs_slot_control_live_20260909_a",
+    status: "certified",
+    certifiedAt: "2026-09-09T04:03:28.568Z",
+    gate: "Gate 19",
+    commandKinds: ["cfs-load", "cfs-unload"],
+    printerType: "creality-k2",
+    model: "F012",
+    firmwareVersion: "1.0.0",
+    attachment: "CFS",
+    transportProfile: K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE,
+    scope: {
+      cfsUnitCount: 1,
+      certifiedBoxIds: [1],
+      expectedSlotIdsByBox: {
+        1: [0, 1, 2, 3],
+      },
+      certifiedSources: [
+        {
+          sourceId: "cfs:1:slot:0",
+          boxId: 1,
+          slotId: 0,
+          displayLabel: "1A",
+        },
+        {
+          sourceId: "cfs:1:slot:1",
+          boxId: 1,
+          slotId: 1,
+          displayLabel: "1B",
+        },
+      ],
+      untestedSources: ["cfs:1:slot:2"],
+      physicallyExcludedSources: ["cfs:1:slot:3", "external"],
+    },
+    commandPolicies: {
+      "cfs-load": {
+        requiredSelectedSources: [],
+        targetPresence: "loaded",
+        terminalSelectedSource: "target",
+      },
+      "cfs-unload": {
+        requiredSelectedSource: "target",
+        selectedMustBeUnique: true,
+        targetPresence: "loaded",
+        terminalSelectedSources: [],
+      },
+    },
+    safety: {
+      physicalCommandCount: 8,
+      eachCommandSentOnce: true,
+      blindRetryAllowed: false,
+      printerIdleRequired: true,
+      feedStateIdleRequired: true,
+      printerErrorClearRequired: true,
+      singleFlightRequired: true,
+    },
+    review: {
+      status: "reviewed-go-code-eligibility",
+      reviewDecision: "GO",
+      gate19Decision: "closed-narrow-scope",
+      reviewedImplementationHead: "ea3e642d623803902e3c43d458e23d069177f949",
+      fixtureSha256: "sha256:fee414a5b4e04bd0dfb7723f41a03de331d13f500c7a7ec06498bcfbf39732eb",
+      fixtureCanonicalSha256: "sha256:600732eb0f165ab96116cecd3dccfb93f80b8cce954a3e60c03e8062fcd3cf4a",
+      runtimePolicyCanonicalSha256: "sha256:dccd7b5859eb6e648b14afc5c40861104cd24395a6c5a05a39b1d9c5ee3189e7",
+      physicalCertificationCommit: "60f3517b96618cfdcbabc2da71dbe0c89a6da358",
+      operatorConfirmation: "repeated-load-unload-success",
+      activationPrerequisiteCommit: "05133bf82d9b40eaafa25c60abc0194e21e12811",
+    },
+  }]);
+
+/**
+ * certification IDからmodule-owned CFS slot操作証跡を解決する。
+ *
+ * 【詳細説明】
+ * - 接続設定には巨大で変更可能な証跡objectを複製せず、安定したcertification IDだけを保存する。
+ * - IDが空、未知、または重複している場合は権限を推測せずnullを返す。
+ * - 戻り値はregistry生成時にdeep freezeされたmodule-owned objectであり、callerは変更できない。
+ *
+ * @function resolveRegisteredK2CfsSlotControlCertificationEvidence
+ * @param {*} certificationId - 接続設定から得たcertification ID候補
+ * @returns {object|null} 一意に一致するimmutable証跡、またはnull
+ * @example
+ * const evidence = resolveRegisteredK2CfsSlotControlCertificationEvidence("gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1");
+ */
+export function resolveRegisteredK2CfsSlotControlCertificationEvidence(certificationId) {
+  const normalizedId = toNonEmptyString(certificationId);
+  if (!normalizedId) {
+    return null;
+  }
+  const matches = K2_CFS_SLOT_CONTROL_CERTIFICATION_REGISTRY.filter(
+    (entry) => toNonEmptyString(entry?.certificationId) === normalizedId
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
 
 /**
  * JSON互換値をkey順に正規化して文字列化する。
@@ -416,12 +526,171 @@ function matchesCertificationFirmwareScope(evidence, currentFirmwareVersion) {
 }
 
 /**
+ * command kindごとのGate 19認証policyを返す。
+ *
+ * 【詳細説明】
+ * - 実機で反復確認したpreconditionとterminal conditionを固定し、証跡側がより広い操作条件へ
+ *   書き換えられていないことをproduction昇格前に検査する。
+ * - loadは未選択状態からtargetを選択する操作だけ、unloadはtargetが唯一選択された状態から
+ *   選択を解除する操作だけを初期production scopeとする。
+ *
+ * @private
+ * @function getRequiredCfsSlotControlCommandPolicy
+ * @param {string} commandKind - 検証対象command kind
+ * @returns {object|null} 必須policy。対象外commandではnull
+ */
+function getRequiredCfsSlotControlCommandPolicy(commandKind) {
+  if (commandKind === "cfs-load") {
+    return {
+      requiredSelectedSources: [],
+      targetPresence: "loaded",
+      terminalSelectedSource: "target",
+    };
+  }
+  if (commandKind === "cfs-unload") {
+    return {
+      requiredSelectedSource: "target",
+      selectedMustBeUnique: true,
+      targetPresence: "loaded",
+      terminalSelectedSources: [],
+    };
+  }
+  return null;
+}
+
+/**
+ * 任意配列を重複のない昇順整数配列へ正規化する。
+ *
+ * 【詳細説明】
+ * - CFS box/slot topologyを順序差に影響されず比較するため、有限整数だけを採用して昇順化する。
+ * - 配列でない値は、scopeを推測せず空配列として扱う。
+ *
+ * @private
+ * @function normalizeIntegerArray
+ * @param {*} values - box IDまたはslot IDの配列候補
+ * @returns {number[]} 重複を除いた昇順整数配列
+ */
+function normalizeIntegerArray(values) {
+  return Array.isArray(values)
+    ? [...new Set(values
+      .map((value) => toFiniteNumberOrNull(value))
+      .filter((value) => Number.isInteger(value)))]
+      .sort((left, right) => left - right)
+    : [];
+}
+
+/**
+ * certification evidenceのCFS attachment・台数・source scopeを検査する。
+ *
+ * 【詳細説明】
+ * - runtime側のsource IDだけでなくbox/slot数値も一致させ、未認証slotへ別source IDを流用する余地を閉じる。
+ * - 初期認証はCFS 1台だけであり、CFS-Cや複数CFS構成は同じF012/firmwareでも拒否する。
+ *
+ * @private
+ * @function collectCfsCertificationScopeErrors
+ * @param {object} evidence - certification evidence
+ * @param {object} scope - 現在target/runtimeから得たscope
+ * @returns {string[]} scope error code配列
+ */
+function collectCfsCertificationScopeErrors(evidence, scope) {
+  const errors = [];
+  if (toNonEmptyString(evidence?.attachment) !== "CFS" || toNonEmptyString(scope?.attachment) !== "CFS") {
+    errors.push("attachment-scope-missing-or-mismatch");
+  }
+
+  const evidenceUnitCount = toFiniteNumberOrNull(evidence?.scope?.cfsUnitCount);
+  const currentUnitCount = toFiniteNumberOrNull(scope?.cfsUnitCount);
+  if (!Number.isInteger(evidenceUnitCount) || evidenceUnitCount !== 1 || currentUnitCount !== evidenceUnitCount) {
+    errors.push("cfs-unit-count-scope-missing-or-mismatch");
+  }
+
+  const actualUnitCount = toFiniteNumberOrNull(scope?.actualCfsUnitCount);
+  if (!Number.isInteger(actualUnitCount) || actualUnitCount !== evidenceUnitCount) {
+    errors.push("actual-cfs-unit-count-missing-or-mismatch");
+  }
+
+  const expectedBoxIds = normalizeIntegerArray(evidence?.scope?.certifiedBoxIds);
+  const actualBoxIds = normalizeIntegerArray(scope?.actualCfsBoxIds);
+  if (
+    expectedBoxIds.length === 0 ||
+    stableJsonStringify(actualBoxIds) !== stableJsonStringify(expectedBoxIds)
+  ) {
+    errors.push("actual-cfs-box-ids-missing-or-mismatch");
+  }
+  const expectedSlotIdsByBox = evidence?.scope?.expectedSlotIdsByBox;
+  const actualSlotIdsByBox = scope?.actualSlotIdsByBox;
+  const slotsMatch = expectedBoxIds.length > 0 && expectedBoxIds.every((boxId) => {
+    const expectedSlotIds = normalizeIntegerArray(expectedSlotIdsByBox?.[boxId]);
+    const actualSlotIds = normalizeIntegerArray(actualSlotIdsByBox?.[boxId]);
+    return expectedSlotIds.length > 0 &&
+      stableJsonStringify(actualSlotIds) === stableJsonStringify(expectedSlotIds);
+  });
+  if (!slotsMatch) {
+    errors.push("actual-cfs-slot-ids-missing-or-mismatch");
+  }
+
+  const sourceId = toNonEmptyString(scope?.sourceId || scope?.materialSourceId);
+  const location = parseMaterialSourceLocation(sourceId);
+  const currentBoxId = toFiniteNumberOrNull(scope?.boxId);
+  const currentSlotId = toFiniteNumberOrNull(scope?.slotId ?? scope?.materialId);
+  const certifiedSources = Array.isArray(evidence?.scope?.certifiedSources)
+    ? evidence.scope.certifiedSources
+    : [];
+  const sourceMatched = location.kind === "cfs-slot" && certifiedSources.some((entry) => (
+    toNonEmptyString(entry?.sourceId) === sourceId &&
+    toFiniteNumberOrNull(entry?.boxId) === location.boxId &&
+    toFiniteNumberOrNull(entry?.slotId) === location.materialId &&
+    currentBoxId === location.boxId &&
+    currentSlotId === location.materialId
+  ));
+  if (!sourceMatched) {
+    errors.push("source-scope-missing-or-mismatch");
+  }
+  return errors;
+}
+
+/**
+ * certification evidenceのcommand policyと安全policyを検査する。
+ *
+ * 【詳細説明】
+ * - command policyは実機認証済みshapeと完全一致させ、未認証preconditionやterminal stateを許可しない。
+ * - safety policyはsend-time idle/feed/error確認、blind retry禁止、single-flightをすべて必須とする。
+ *
+ * @private
+ * @function collectCfsCertificationPolicyErrors
+ * @param {object} evidence - certification evidence
+ * @param {string} commandKind - 検証対象command kind
+ * @returns {string[]} policy error code配列
+ */
+function collectCfsCertificationPolicyErrors(evidence, commandKind) {
+  const errors = [];
+  const requiredCommandPolicy = getRequiredCfsSlotControlCommandPolicy(commandKind);
+  const actualCommandPolicy = evidence?.commandPolicies?.[commandKind];
+  if (!requiredCommandPolicy || stableJsonStringify(actualCommandPolicy) !== stableJsonStringify(requiredCommandPolicy)) {
+    errors.push("command-policy-missing-or-mismatch");
+  }
+
+  const safety = evidence?.safety;
+  if (
+    safety?.printerIdleRequired !== true ||
+    safety?.feedStateIdleRequired !== true ||
+    safety?.printerErrorClearRequired !== true ||
+    safety?.blindRetryAllowed !== false ||
+    safety?.singleFlightRequired !== true
+  ) {
+    errors.push("safety-policy-missing-or-mismatch");
+  }
+  return errors;
+}
+
+/**
  * K2/CFS slot操作のproduction certification evidenceを検証する。
  *
  * 【詳細説明】
  * - 空objectや配列を「証跡あり」と見なさず、command kind・transport profile・K2 printer scope・
- *   model/firmware/capture metadata が揃った場合だけproduction昇格へ使う。
- * - runtime/target側でprinterType/model/firmwareが未観測の場合は、証跡の流用を防ぐため拒否する。
+ *   model/firmware/CFS/source/policy/capture metadata が揃った場合だけproduction昇格へ使う。
+ * - runtime/target側でprinterType/model/firmware/attachment/CFS台数/sourceが未観測の場合は、
+ *   証跡の流用を防ぐため拒否する。
  *
  * @function validateK2CfsSlotControlCertificationEvidence
  * @param {*} evidence - 検証対象のcertification evidence
@@ -430,6 +699,14 @@ function matchesCertificationFirmwareScope(evidence, currentFirmwareVersion) {
  * @param {string=} scope.printerType - 現在のprinterType
  * @param {string=} scope.model - 現在のmodel code
  * @param {string=} scope.firmwareVersion - 現在のfirmware version
+ * @param {string=} scope.attachment - 現在のmaterial attachment種別
+ * @param {number=} scope.cfsUnitCount - 現在接続中のCFS台数
+ * @param {number=} scope.actualCfsUnitCount - send-time topologyで実観測したCFS台数
+ * @param {number[]=} scope.actualCfsBoxIds - send-time topologyで実観測したbox ID一覧
+ * @param {Object<string, number[]>=} scope.actualSlotIdsByBox - boxごとの実観測slot ID一覧
+ * @param {string=} scope.sourceId - 現在の操作対象source ID
+ * @param {number=} scope.boxId - 現在の操作対象CFS box ID
+ * @param {number=} scope.slotId - 現在の操作対象slot ID
  * @returns {{ok: boolean, errors: string[]}} 検証結果
  * @example
  * const result = validateK2CfsSlotControlCertificationEvidence(evidence, "cfs-load", { printerType: "creality-k2" });
@@ -465,6 +742,8 @@ export function validateK2CfsSlotControlCertificationEvidence(evidence, commandK
   if (!matchesCertificationFirmwareScope(evidence, scope?.firmwareVersion || scope?.version || scope?.reportedFirmwareVersion)) {
     errors.push("firmware-scope-missing-or-mismatch");
   }
+  errors.push(...collectCfsCertificationScopeErrors(evidence, scope));
+  errors.push(...collectCfsCertificationPolicyErrors(evidence, commandKind));
   if (!toNonEmptyString(evidence.gate)) {
     errors.push("gate-missing");
   }
@@ -512,29 +791,63 @@ export function validateRegisteredK2CfsSlotControlCertificationEvidence(evidence
 }
 
 /**
- * 指定command kindが実機certification済みとして明示されているか判定する。
+ * module-owned certificationが現在targetのcomposition候補へ適用可能か検証する。
  *
  * 【詳細説明】
- * - 既定では常にfalseに倒し、単独CFS操作が暗黙にproductionへ昇格しないようにする。
- * - optionは配列/Set/object mapを受けるが、どれも呼び出し側が明示したallow-listとしてのみ扱う。
+ * - UI compositionでは現在`/info`と保存設定だけを照合し、実トポロジーは送信時validatorへ委ねる。
+ * - この判定はボタン候補を構成するだけでproduction transport authorityにはならない。
+ * - command kind、model、firmware、attachment、設定CFS台数、policy、registry完全一致を検査する。
  *
- * @private
- * @param {string} commandKind - 正規化済みcommand kind
- * @param {object=} options - transport plan生成option
- * @returns {boolean} 実機certification済みとして扱う場合true
+ * @function validateRegisteredK2CfsSlotControlCertificationTarget
+ * @param {*} evidence - module-owned registryから解決したcertification evidence
+ * @param {string} commandKind - composition候補のcommand kind
+ * @param {object=} scope - 現在targetと`/info`から得た静的scope
+ * @returns {{ok: boolean, errors: string[]}} composition候補の検証結果
+ * @example
+ * const result = validateRegisteredK2CfsSlotControlCertificationTarget(evidence, "cfs-load", scope);
  */
-function isCertifiedCfsSlotControlCommand(commandKind, options = {}) {
-  const registry = options?.certifiedCfsSlotControlCommands;
-  if (Array.isArray(registry)) {
-    return registry.includes(commandKind);
+export function validateRegisteredK2CfsSlotControlCertificationTarget(evidence, commandKind, scope = {}) {
+  const errors = [];
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return { ok: false, errors: ["evidence-not-object"] };
   }
-  if (registry instanceof Set) {
-    return registry.has(commandKind);
+  if (!isRegisteredCfsSlotControlCertificationEvidence(evidence, commandKind)) {
+    errors.push("certification-evidence-not-registered");
   }
-  if (registry && typeof registry === "object") {
-    return registry[commandKind] === true;
+  if (Number(evidence.schemaVersion) !== 1) {
+    errors.push("schema-version-missing");
   }
-  return false;
+  if (toNonEmptyString(evidence.status) !== "certified") {
+    errors.push("status-not-certified");
+  }
+  if (toNonEmptyString(evidence.transportProfile) !== K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE) {
+    errors.push("transport-profile-mismatch");
+  }
+  if (!normalizeCertificationEvidenceCommandKinds(evidence).has(commandKind)) {
+    errors.push("command-kind-not-certified");
+  }
+  if (toNonEmptyString(evidence.printerType) !== "creality-k2" || toNonEmptyString(scope?.printerType) !== "creality-k2") {
+    errors.push("printer-type-not-k2");
+  }
+  if (!matchesCertificationModelScope(evidence, scope?.model || scope?.reportedModel)) {
+    errors.push("model-scope-missing-or-mismatch");
+  }
+  if (!matchesCertificationFirmwareScope(evidence, scope?.firmwareVersion || scope?.version || scope?.reportedFirmwareVersion)) {
+    errors.push("firmware-scope-missing-or-mismatch");
+  }
+  if (toNonEmptyString(evidence?.attachment) !== "CFS" || toNonEmptyString(scope?.attachment) !== "CFS") {
+    errors.push("attachment-scope-missing-or-mismatch");
+  }
+  const evidenceUnitCount = toFiniteNumberOrNull(evidence?.scope?.cfsUnitCount);
+  const configuredUnitCount = toFiniteNumberOrNull(scope?.cfsUnitCount);
+  if (!Number.isInteger(evidenceUnitCount) || configuredUnitCount !== evidenceUnitCount) {
+    errors.push("cfs-unit-count-scope-missing-or-mismatch");
+  }
+  errors.push(...collectCfsCertificationPolicyErrors(evidence, commandKind));
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
 }
 
 /**
@@ -989,7 +1302,7 @@ function createK2CfsSlotControlCertificationPlan(request, commandKind) {
  * 実機certification済みCFS slot操作用のproduction transport frame列を生成する。
  *
  * 【詳細説明】
- * - command kindごとのallow-listを通過した場合だけ使う。
+ * - module-owned registryから認証IDを一意に解決できた場合だけ使う。
  * - 送信直前のsession/capability/topology確認はdispatcher層が担当し、この関数はWS9999 frame shapeだけを固定する。
  *
  * @private
@@ -999,8 +1312,16 @@ function createK2CfsSlotControlCertificationPlan(request, commandKind) {
  * @returns {object} production transport plan
  */
 function createK2CfsSlotControlProductionPlan(request, commandKind, options = {}) {
+  const certificationEvidence = resolveRegisteredK2CfsSlotControlCertificationEvidence(
+    options.certificationId
+  );
+  if (!certificationEvidence) {
+    return createRejectedTransportPlan("invalid-cfs-slot-certification-id", {
+      commandKind,
+    });
+  }
   const evidenceValidation = validateRegisteredK2CfsSlotControlCertificationEvidence(
-    options.certificationEvidence,
+    certificationEvidence,
     commandKind,
     options.certificationScope || {}
   );
@@ -1012,7 +1333,7 @@ function createK2CfsSlotControlProductionPlan(request, commandKind, options = {}
   }
   return createK2CfsSlotControlFeedInOrOutPlan(request, commandKind, {
     production: true,
-    certificationEvidence: options.certificationEvidence || null,
+    certificationEvidence,
   });
 }
 
@@ -1029,8 +1350,8 @@ function createK2CfsSlotControlProductionPlan(request, commandKind, options = {}
  * @param {object|null|undefined} request - Printer Core command request
  * @param {object=} options - transport plan生成option
  * @param {boolean=} options.allowUncertifiedCfsSlotCommandCandidates - 未certified slot操作候補のdry-run生成可否
- * @param {Array<string>|Set<string>|Object<string,boolean>=} options.certifiedCfsSlotControlCommands - 実機certification済みslot操作allow-list
- * @param {object=} options.certificationEvidence - production昇格の実機証跡metadata
+ * @param {string=} options.certificationId - module-owned registryの実機certification ID
+ * @param {object=} options.certificationScope - 現在runtimeから得た実トポロジーを含むscope
  * @returns {object} K2/CFS transport plan
  * @example
  * const plan = createK2CfsCommandTransportPlan(request);
@@ -1041,7 +1362,7 @@ export function createK2CfsCommandTransportPlan(request, options = {}) {
     return createRejectedTransportPlan("missing-command-kind");
   }
   if (UNCERTIFIED_CFS_SLOT_COMMAND_KINDS.has(commandKind)) {
-    if (isCertifiedCfsSlotControlCommand(commandKind, options)) {
+    if (resolveRegisteredK2CfsSlotControlCertificationEvidence(options?.certificationId)) {
       return createK2CfsSlotControlProductionPlan(request, commandKind, options);
     }
     if (options?.allowUncertifiedCfsSlotCommandCandidates === true) {

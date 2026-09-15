@@ -15,9 +15,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1647 (PR #440)
+ * @version 1.390.1669 (PR #442)
  * @since   1.390.1469 (PR #436)
- * @lastModified 2026-09-02 16:08:12
+ * @lastModified 2026-09-09 10:54:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -922,6 +922,94 @@ describe("dashboard_cfs_certification_panel", () => {
     expect(viewModel.liveSend.enabled).toBe(false);
     expect(viewModel.liveSend.reason).toBe("preflight-failed:printer-idle");
     expect(container.textContent).toContain("idle未証明: partial / unknown-core-state");
+  });
+
+  it("printer coreがidleでもphysical idle複合証拠が未完成ならLIVE不可理由として表示する", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      nowMs: Date.parse("2026-09-09T10:02:05.000+09:00"),
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "completed",
+        printerIdleObservation: {
+          status: "observed",
+          activityState: "idle",
+          coreStateComplete: true,
+          physicalIdleEvidenceComplete: false,
+          snapshotCompleteness: "complete",
+          expiresAt: "2099-09-09T10:02:09.276+09:00",
+          fresh: true,
+          idle: true,
+        },
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+    });
+
+    expect(viewModel.preflight.find((item) => item.key === "printer-idle")).toMatchObject({
+      state: "fail",
+      detail: "idle未証明: physical evidence incomplete",
+    });
+    expect(viewModel.liveSend.enabled).toBe(false);
+  });
+
+  it("fresh assembled idle証跡があれば累積stateのpartial表示でPrinter idleをFAILへ戻さない", () => {
+    const viewModel = createCfsCertificationPanelViewModel({
+      printer: {
+        displayName: "K2Pro-69E7",
+        model: "F012",
+        deviceId: "device-k2",
+        sessionId: "session-1",
+        active: true,
+        state: "completed",
+        statusProbeStatus: "partial",
+        printActivityState: "unknown-core-state",
+        coreStateComplete: false,
+        printerIdleObservation: {
+          status: "assembled",
+          activityState: "idle",
+          coreStateComplete: true,
+          physicalIdleEvidenceComplete: true,
+          snapshotCompleteness: "complete",
+          expiresAt: "2099-09-09T10:02:09.276+09:00",
+          fresh: true,
+          idle: true,
+          idleReason: "completed-terminal-state",
+        },
+      },
+      materialViewModel: createMaterialViewModel(),
+      command: {
+        commandKind: "cfs-load",
+        certificationStatus: "certified",
+      },
+      dryRunPlan: {
+        ok: true,
+        details: {
+          commandKind: "cfs-load",
+          sourceId: "cfs:1:slot:2",
+          semanticStatus: "certified",
+        },
+      },
+    });
+
+    expect(viewModel.preflight.find((item) => item.key === "printer-idle")).toMatchObject({
+      state: "ok",
+      detail: "完了 / physical idle確認済み",
+    });
   });
 
   it("認証未完了はpreflight項目名ではなくcertification-uncertifiedとしてLIVE不可理由にする", () => {

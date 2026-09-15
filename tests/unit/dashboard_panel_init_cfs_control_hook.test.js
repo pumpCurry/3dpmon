@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1620 (PR #440)
+ * @version 1.390.1677 (PR #442)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-09-02 01:07:00
+ * @lastModified 2026-09-15 14:12:00
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -33,6 +33,7 @@ const mockState = vi.hoisted(() => ({
   resolveMaterialDisplayMode: vi.fn(),
   resolveMaterialTopologyViewOptions: vi.fn(),
   createBoundCfsControlIntegration: vi.fn(),
+  resolveRegisteredK2CfsSlotControlCertificationEvidence: vi.fn(),
   validateRegisteredK2CfsSlotControlCertificationEvidence: vi.fn(),
   createK2CfsCommandTransportPlan: vi.fn(),
   sendK2CfsCommandTransportPlan: vi.fn(),
@@ -42,6 +43,7 @@ const mockState = vi.hoisted(() => ({
   isPhysicalCommandRecoveryBlocked: vi.fn(),
   saveUnifiedStorage: vi.fn(),
   saveUnifiedStorageDurably: vi.fn(),
+  showConfirmDialog: vi.fn(),
   boundOnCommand: vi.fn(),
   panelDestroy: vi.fn(),
   connectionTarget: {
@@ -131,6 +133,10 @@ vi.mock("../../3dp_lib/dashboard_notification_manager.js", () => ({
   showAlert: vi.fn(),
 }));
 
+vi.mock("../../3dp_lib/dashboard_ui_confirm.js", () => ({
+  showConfirmDialog: mockState.showConfirmDialog,
+}));
+
 vi.mock("../../3dp_lib/dashboard_connection.js", () => ({
   getDeviceIp: vi.fn(),
   getDisplayBaseUrl: vi.fn(),
@@ -199,8 +205,10 @@ vi.mock("../../3dp_lib/printer_core/dashboard_cfs_command_integration.js", () =>
 vi.mock("../../3dp_lib/printer_core/dashboard_k2_cfs_command_transport.js", () => ({
   K2_CFS_SLOT_CONTROL_PRODUCTION_TRANSPORT_PROFILE: "k2-ws9999-feed-in-or-out-certified-v1",
   createK2CfsCommandTransportPlan: mockState.createK2CfsCommandTransportPlan,
+  resolveRegisteredK2CfsSlotControlCertificationEvidence: mockState.resolveRegisteredK2CfsSlotControlCertificationEvidence,
   sendK2CfsCommandTransportPlan: mockState.sendK2CfsCommandTransportPlan,
   validateRegisteredK2CfsSlotControlCertificationEvidence: mockState.validateRegisteredK2CfsSlotControlCertificationEvidence,
+  validateRegisteredK2CfsSlotControlCertificationTarget: mockState.validateRegisteredK2CfsSlotControlCertificationEvidence,
 }));
 
 vi.mock("../../3dp_lib/printer_core/dashboard_physical_command_recovery_latch.js", () => ({
@@ -237,6 +245,134 @@ function createFilamentPanelBody() {
     <button id="filament-list-btn" type="button"></button>
   `;
   return body;
+}
+
+/**
+ * production CFS commandを許可できる統合安全証跡fixtureを生成する。
+ *
+ * 【詳細説明】
+ * - printer idle、feedState、raw errorを同一session/generation/sequenceへ束縛したlive shadow出力を再現する。
+ * - overrideによりTTL切れや接続世代不一致のfail-closed testにも利用する。
+ *
+ * @function createCfsPhysicalSafetyObservation
+ * @param {object=} overrides - 証跡上書き値
+ * @returns {object} CFS物理操作用統合安全証跡fixture
+ */
+function createCfsPhysicalSafetyObservation(overrides = {}) {
+  return {
+    status: "observed",
+    activityState: "idle",
+    coreStateComplete: true,
+    physicalIdleEvidenceComplete: true,
+    snapshotCompleteness: "complete",
+    observedAt: "2026-09-15T03:00:00.000Z",
+    receivedAt: "2026-09-15T03:00:00.000Z",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    sessionId: "session:1",
+    connectionGeneration: 7,
+    baselineSequence: 10,
+    lastAppliedSequence: 10,
+    appliedDeltaCount: 0,
+    fresh: true,
+    idle: true,
+    feedStateObserved: true,
+    feedState: 0,
+    printerErrorObserved: true,
+    printerErrorCode: 0,
+    printerErrorKey: 0,
+    errorClear: true,
+    ...overrides,
+  };
+}
+
+/**
+ * load/unload実機認証済みのK2 CFS control target fixtureを生成する。
+ *
+ * 【詳細説明】
+ * - production composition、端末状態観測、timeout testで同一scopeを再利用する。
+ *
+ * @function createCertifiedCfsControlTarget
+ * @param {object=} overrides - target上書き値
+ * @returns {object} production CFS control target fixture
+ */
+function createCertifiedCfsControlTarget(overrides = {}) {
+  return {
+    printerType: "creality-k2",
+    printerCoreV3Info: {
+      model: "F012",
+      version: "1.0.0",
+      probeSessionId: "test-runtime-probe-session",
+      connectionGeneration: 7,
+      connectionDest: "192.0.2.10:9999",
+      connectionHost: "K2Pro",
+    },
+    dest: "192.0.2.10:9999",
+    materialSystem: {
+      mode: "cfs-readonly",
+      unitLimit: 1,
+      externalSourceLimit: 1,
+      cfsControl: {
+        enabled: true,
+        allowedActions: ["load", "unload"],
+        certifiedCfsSlotControlCommands: ["cfs-load", "cfs-unload"],
+        certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
+      },
+    },
+    ...overrides,
+  };
+}
+
+/**
+ * CFS load開始前のK2 live shadow fixtureを生成する。
+ *
+ * 【詳細説明】
+ * - 1Cがloadedかつ未選択、printer/CFS搬送系がidleなsend-time stateを表す。
+ *
+ * @function createCfsLoadShadow
+ * @param {object=} overrides - shadow上書き値
+ * @returns {object} K2 live shadow fixture
+ */
+function createCfsLoadShadow(overrides = {}) {
+  return {
+    state: "observed",
+    deviceId: "serial:demo",
+    sessionId: "session:1",
+    connectionGeneration: 7,
+    lastSequence: 10,
+    materialProviderLastSequence: 10,
+    cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation(),
+    lastState: {
+      source: {
+        sessionId: "session:1",
+        sequence: 10,
+      },
+      print: {
+        stateLabel: "idle",
+      },
+      materials: {
+        cfs: {
+          connected: true,
+          topologyState: "fresh",
+        },
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          protocolSlotId: 2,
+          presence: "loaded",
+          selected: false,
+          status: {
+            presence: "loaded",
+            stateCode: 1,
+            selected: false,
+            selectionState: "unselected",
+            selectionValid: true,
+          },
+        }],
+      },
+    },
+    ...overrides,
+  };
 }
 
 const activePanelRecords = [];
@@ -286,6 +422,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     mockState.resolveMaterialDisplayMode.mockReset();
     mockState.resolveMaterialTopologyViewOptions.mockReset();
     mockState.createBoundCfsControlIntegration.mockReset();
+    mockState.resolveRegisteredK2CfsSlotControlCertificationEvidence.mockReset();
     mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReset();
     mockState.createK2CfsCommandTransportPlan.mockReset();
     mockState.sendK2CfsCommandTransportPlan.mockReset();
@@ -295,6 +432,7 @@ describe("dashboard_panel_init CFS control hook", () => {
     mockState.isPhysicalCommandRecoveryBlocked.mockReset();
     mockState.saveUnifiedStorage.mockReset();
     mockState.saveUnifiedStorageDurably.mockReset();
+    mockState.showConfirmDialog.mockReset();
     mockState.boundOnCommand.mockReset();
     mockState.panelDestroy.mockReset();
     mockState.sendCommand.mockReset();
@@ -374,6 +512,32 @@ describe("dashboard_panel_init CFS control hook", () => {
       accepted: false,
       reason: "cfs-command-integration-disabled",
     });
+    mockState.resolveRegisteredK2CfsSlotControlCertificationEvidence.mockImplementation((certificationId) => {
+      if (!certificationId) {
+        return null;
+      }
+      return certificationId === "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1"
+        ? {
+          certificationId,
+          schemaVersion: 1,
+          status: "certified",
+          gate: "Gate 19",
+          commandKinds: ["cfs-load", "cfs-unload"],
+          transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+          printerType: "creality-k2",
+          model: "F012",
+          firmwareVersion: "1.0.0",
+          attachment: "CFS",
+          scope: {
+            cfsUnitCount: 1,
+            certifiedSources: [
+              { sourceId: "cfs:1:slot:0", boxId: 1, slotId: 0, displayLabel: "1A" },
+              { sourceId: "cfs:1:slot:1", boxId: 1, slotId: 1, displayLabel: "1B" },
+            ],
+          },
+        }
+        : null;
+    });
     mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
       ok: false,
       errors: ["certification-evidence-not-registered"],
@@ -393,6 +557,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       backend: "indexedDB",
       reason: "flushed",
     });
+    mockState.showConfirmDialog.mockResolvedValue(true);
     mockState.createPhysicalCommandRecoveryLatchRecord.mockImplementation((input) => ({
       commandId: input.commandId,
       commandKind: input.commandKind,
@@ -462,7 +627,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       showControls: true,
       canSendCommands: false,
       allowedActions: ["select", "load", "unload", "feed", "retract"],
-      disabledReason: "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です",
+      disabledReason: "接続設定で認証済みCFS操作が有効化されていないか、現在の実機条件が認証範囲外です",
     });
     expect(typeof options.control.onCommand).toBe("function");
     expect(typeof options.control.validateCommandIntent).toBe("function");
@@ -580,8 +745,100 @@ describe("dashboard_panel_init CFS control hook", () => {
       showControls: true,
       canSendCommands: false,
       allowedActions: ["select", "load", "unload", "feed", "retract"],
-      disabledReason: "実機認証前のため3dpmonからのCFS/CFS-C操作は無効です",
+      disabledReason: "接続設定で認証済みCFS操作が有効化されていないか、現在の実機条件が認証範囲外です",
     });
+  });
+
+  it("certificationIdが有効でもallowedActions未指定ならproduction dispatcherを構成しない", async () => {
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    delete mockState.connectionTarget.materialSystem.cfsControl.allowedActions;
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+
+    expect(mockState.createBoundCfsControlIntegration).toHaveBeenCalledWith({
+      enabled: false,
+      allowedActions: ["select", "load", "unload", "feed", "retract"],
+    });
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    expect(options.control.canSendCommands).toBe(false);
+  });
+
+  it("allowedActionsはregistry認証commandとの積集合だけをproductionへ渡す", async () => {
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    mockState.connectionTarget.materialSystem.cfsControl.allowedActions = ["load", "select", "feed"];
+    mockState.createMaterialTopologyViewModel.mockImplementation((topology, options) => ({
+      summary: { topologyState: "fresh" },
+      authority: options.commandAuthority,
+      units: [],
+    }));
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockImplementation((evidence, commandKind) => ({
+      ok: ["cfs-load", "cfs-unload"].includes(commandKind),
+      errors: ["cfs-load", "cfs-unload"].includes(commandKind) ? [] : ["command-kind-not-certified"],
+    }));
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+
+    const integrationOptions = mockState.createBoundCfsControlIntegration.mock.calls[0][0];
+    expect(integrationOptions.enabled).toBe(true);
+    expect(integrationOptions.allowedActions).toEqual(["load"]);
+    const [, viewModel, options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    expect(viewModel.authority.allowedActions).toEqual(["load"]);
+    expect(options.control.allowedActions).toEqual(["load"]);
+  });
+
+  it("Gate19.5: production CFS controlはsourceと物理動作を明示するoperator確認を要求する", async () => {
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    mockState.createMaterialTopologyViewModel.mockImplementation((topology, options) => ({
+      summary: { topologyState: "fresh" },
+      authority: options.commandAuthority,
+      units: [],
+    }));
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    expect(typeof options.control.confirmCommand).toBe("function");
+    expect(options.control.requireOperatorConfirmation).toBe(true);
+    await expect(options.control.confirmCommand({
+      action: "load",
+      commandKind: "cfs-load",
+      displaySlot: "1A",
+      sourceId: "cfs:1:slot:0",
+    })).resolves.toBe(true);
+    expect(mockState.showConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warnRed",
+      title: "CFS 1Aを押し出しますか？",
+      confirmText: "押出しを実行",
+      cancelText: "キャンセル",
+    }));
+    expect(mockState.showConfirmDialog.mock.calls[0][0].message).toContain("実際に動作します");
+    expect(options.control.unknownRecoveryMessage).toContain("CFS認証カード");
   });
 
   it("certificationEvidenceだけで現在targetのmodel/firmwareが無い場合はproduction CFS controlを有効化しない", async () => {
@@ -1029,6 +1286,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -1277,6 +1535,7 @@ describe("dashboard_panel_init CFS control hook", () => {
             enabled: true,
             allowedActions: ["load"],
             certifiedCfsSlotControlCommands: ["cfs-load"],
+            certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
             certificationEvidence: {
               schemaVersion: 1,
               status: "certified",
@@ -1305,15 +1564,12 @@ describe("dashboard_panel_init CFS control hook", () => {
         update: updatePanel,
         destroy: mockState.panelDestroy,
       });
-      mockState.validateRegisteredK2CfsSlotControlCertificationEvidence
-        .mockReturnValueOnce({
-          ok: false,
-          errors: ["certification-evidence-not-registered"],
-        })
-        .mockReturnValue({
-          ok: true,
-          errors: [],
-        });
+      let certificationReady = false;
+      mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockImplementation(() => (
+        certificationReady
+          ? { ok: true, errors: [] }
+          : { ok: false, errors: ["certification-evidence-not-registered"] }
+      ));
 
       const body = createFilamentPanelBody();
       const {
@@ -1329,6 +1585,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       expect(initialViewModel.authority.canSendCommands).toBe(false);
       expect(initialOptions.control.canSendCommands).toBe(false);
 
+      certificationReady = true;
       await vi.advanceTimersByTimeAsync(1100);
 
       expect(updatePanel).toHaveBeenCalledWith(
@@ -1352,6 +1609,478 @@ describe("dashboard_panel_init CFS control hook", () => {
     }
   });
 
+  it("terminal state確認済みのCFS commandは送信前予約ラッチを観測解決する", async () => {
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    mockState.monitorData.physicalCommandRecoveryLatch = {
+      unresolvedByCommandId: {
+        "cmd:k2-load-terminal": {
+          commandId: "cmd:k2-load-terminal",
+          commandKind: "cfs-load",
+          deviceId: "serial:demo",
+          sessionId: "session:1",
+          materialSourceId: "cfs:1:slot:2",
+          status: "submitted",
+          digest: "fnv1a128:terminal-reservation",
+        },
+      },
+      conflictedCommandIds: [],
+      retainedUnsupportedEntries: [],
+      events: [],
+    };
+    mockState.boundOnCommand.mockResolvedValue({
+      accepted: true,
+      request: {
+        commandId: "cmd:k2-load-terminal",
+        commandKind: "cfs-load",
+        deviceId: "serial:demo",
+        sessionId: "session:1",
+        payload: {
+          sourceId: "cfs:1:slot:2",
+        },
+      },
+      result: {
+        completed: true,
+        completedAt: "2026-09-15T03:17:30.000Z",
+        postCommandObservation: {
+          observedSequence: 12,
+          correlationId: "cmd:terminal-correlation",
+        },
+      },
+    });
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    const output = await options.control.onCommand({
+      action: "load",
+      commandKind: "cfs-load",
+      sourceId: "cfs:1:slot:2",
+    });
+
+    expect(mockState.resolvePhysicalCommandRecoveryLatchRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unresolvedByCommandId: expect.objectContaining({
+          "cmd:k2-load-terminal": expect.objectContaining({
+            digest: "fnv1a128:terminal-reservation",
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        commandId: "cmd:k2-load-terminal",
+        resolution: "observed-terminal-confirmed",
+        expectedDeviceId: "serial:demo",
+        expectedDigest: "fnv1a128:terminal-reservation",
+        expectedCommandKind: "cfs-load",
+        expectedMaterialSourceId: "cfs:1:slot:2",
+        resolutionSource: "printer-core-command-dispatcher",
+        operatorAcknowledged: false,
+        postObservation: {
+          sequence: 12,
+          digest: "cmd:terminal-correlation",
+          observedAt: "2026-09-15T03:17:30.000Z",
+        },
+      })
+    );
+    expect(mockState.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
+    expect(output.recoveryLatch).toMatchObject({
+      ok: true,
+      status: "resolved",
+      commandId: "cmd:k2-load-terminal",
+      latchStatus: "completed",
+    });
+  });
+
+  it("terminal state確認後の復旧ラッチ解決をdurable保存できなければ未解決storeへ戻す", async () => {
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({ ok: true, errors: [] });
+    const originalStore = {
+      unresolvedByCommandId: {
+        "cmd:k2-load-1c": {
+          commandId: "cmd:k2-load-1c",
+          commandKind: "cfs-load",
+          deviceId: "serial:demo",
+          sessionId: "session:1",
+          materialSourceId: "cfs:1:slot:2",
+          status: "submitted",
+          digest: "fnv1a128:terminal-durable-failure",
+        },
+      },
+      conflictedCommandIds: [],
+      retainedUnsupportedEntries: [],
+      events: [],
+    };
+    mockState.monitorData.physicalCommandRecoveryLatch = originalStore;
+    mockState.saveUnifiedStorageDurably.mockResolvedValue({
+      ok: false,
+      backend: "indexedDB",
+      reason: "transaction-aborted",
+    });
+    mockState.boundOnCommand.mockResolvedValue({
+      accepted: true,
+      request: {
+        commandId: "cmd:k2-load-1c",
+        commandKind: "cfs-load",
+        deviceId: "serial:demo",
+        sessionId: "session:1",
+        payload: { sourceId: "cfs:1:slot:2" },
+      },
+      result: {
+        completed: true,
+        completedAt: "2026-09-15T03:27:30.000Z",
+        postCommandObservation: {
+          observedSequence: 12,
+          correlationId: "cmd:terminal-durable-failure",
+        },
+      },
+    });
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    const output = await options.control.onCommand({
+      action: "load",
+      commandKind: "cfs-load",
+      sourceId: "cfs:1:slot:2",
+    });
+
+    expect(mockState.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
+    expect(mockState.monitorData.physicalCommandRecoveryLatch).toBe(originalStore);
+    expect(output.recoveryLatch).toEqual({
+      ok: false,
+      status: "durable-save-failed",
+      commandId: "cmd:k2-load-1c",
+      latchStatus: "submitted",
+    });
+  });
+
+  it("terminal state確認後のdurable保存が例外でも未解決storeへ戻して結果を返す", async () => {
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({ ok: true, errors: [] });
+    const originalStore = {
+      unresolvedByCommandId: {
+        "cmd:k2-load-save-rejected": {
+          commandId: "cmd:k2-load-save-rejected",
+          commandKind: "cfs-load",
+          deviceId: "serial:demo",
+          sessionId: "session:1",
+          materialSourceId: "cfs:1:slot:2",
+          status: "submitted",
+          digest: "fnv1a128:terminal-save-rejected",
+        },
+      },
+      conflictedCommandIds: [],
+      retainedUnsupportedEntries: [],
+      events: [],
+    };
+    mockState.monitorData.physicalCommandRecoveryLatch = originalStore;
+    mockState.saveUnifiedStorageDurably.mockRejectedValue(new Error("indexeddb-write-rejected"));
+    mockState.boundOnCommand.mockResolvedValue({
+      accepted: true,
+      request: {
+        commandId: "cmd:k2-load-save-rejected",
+        commandKind: "cfs-load",
+        deviceId: "serial:demo",
+        sessionId: "session:1",
+        payload: { sourceId: "cfs:1:slot:2" },
+      },
+      result: {
+        completed: true,
+        completedAt: "2026-09-15T03:28:30.000Z",
+        postCommandObservation: {
+          observedSequence: 12,
+          correlationId: "cmd:terminal-save-rejected",
+        },
+      },
+    });
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    const output = await options.control.onCommand({
+      action: "load",
+      commandKind: "cfs-load",
+      sourceId: "cfs:1:slot:2",
+    });
+
+    expect(mockState.monitorData.physicalCommandRecoveryLatch).toBe(originalStore);
+    expect(output.recoveryLatch).toEqual({
+      ok: false,
+      status: "durable-save-failed",
+      commandId: "cmd:k2-load-save-rejected",
+      latchStatus: "submitted",
+    });
+  });
+
+  it("production dispatcherはCFS loadを一度だけ送信しbusy後のterminal stateまで観測を続ける", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-15T12:17:15.000+09:00"));
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    const shadowRecord = createCfsLoadShadow();
+    mockState.monitorData.machines.K2Pro.runtimeData.printerCoreV3Shadow = shadowRecord;
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    mockState.createK2CfsCommandTransportPlan.mockReturnValue({
+      ok: true,
+      frames: [],
+      details: {
+        semanticStatus: "certified",
+      },
+    });
+    mockState.sendK2CfsCommandTransportPlan.mockResolvedValue({ status: "acknowledged" });
+    const body = createFilamentPanelBody();
+    const {
+      createPrinterCommandRequest,
+    } = await import("../../3dp_lib/printer_core/dashboard_command_authority.js");
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+    const integrationOptions = mockState.createBoundCfsControlIntegration.mock.calls[0][0];
+    const request = createPrinterCommandRequest({
+      deviceId: "serial:demo",
+      sessionId: "session:1",
+      commandKind: "cfs-load",
+      transportKind: "ws9999",
+      timeoutMs: 120000,
+      idempotencyKey: "load-1c-terminal-observation",
+      createdAt: "2026-09-15T12:17:15.000+09:00",
+      entropySource: () => "terminal-observation",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        slotIndex: 2,
+      },
+      expectedState: [
+        { path: "materials.selectedSource.sourceId", expected: "cfs:1:slot:2" },
+        { path: "materials.cfsPhysicalSafety.feedState", expected: 0 },
+        { path: "materials.cfsPhysicalSafety.errorClear", expected: true },
+        { path: "materials.cfsPhysicalSafety.fresh", expected: true },
+      ],
+    });
+    const dispatchPromise = integrationOptions.dispatcher.dispatch(request);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+
+    shadowRecord.lastSequence = 11;
+    shadowRecord.materialProviderLastSequence = 11;
+    shadowRecord.lastState.source.sequence = 11;
+    shadowRecord.lastState.materials.sources[0].selected = true;
+    shadowRecord.lastState.materials.sources[0].status.selected = true;
+    shadowRecord.lastState.materials.sources[0].status.selectionState = "selected";
+    shadowRecord.cfsPhysicalSafetyObservation = createCfsPhysicalSafetyObservation({
+      lastAppliedSequence: 11,
+      feedState: 1,
+      idle: false,
+    });
+    await vi.advanceTimersByTimeAsync(1500);
+
+    shadowRecord.lastSequence = 12;
+    shadowRecord.materialProviderLastSequence = 12;
+    shadowRecord.lastState.source.sequence = 12;
+    shadowRecord.cfsPhysicalSafetyObservation = createCfsPhysicalSafetyObservation({
+      lastAppliedSequence: 12,
+      feedState: 0,
+      idle: true,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    const result = await dispatchPromise;
+
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "acknowledged",
+      transportAccepted: true,
+      completed: true,
+      confirmationAttemptCount: 2,
+    });
+    expect(result.confirmation.confirmed).toBe(true);
+    expect(result.postCommandObservation).toMatchObject({
+      confirmed: true,
+      sequenceAdvanced: true,
+      sameSession: true,
+      commandCorrelated: true,
+    });
+  });
+
+  it("production dispatcherはunload後に対象sourceが消えた場合をterminal成功にしない", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-15T12:27:15.000+09:00"));
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    const shadowRecord = createCfsLoadShadow();
+    shadowRecord.lastState.materials.sources[0].selected = true;
+    shadowRecord.lastState.materials.sources[0].status.selected = true;
+    shadowRecord.lastState.materials.sources[0].status.selectionState = "selected";
+    mockState.monitorData.machines.K2Pro.runtimeData.printerCoreV3Shadow = shadowRecord;
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    mockState.createK2CfsCommandTransportPlan.mockReturnValue({
+      ok: true,
+      frames: [],
+      details: { semanticStatus: "certified" },
+    });
+    mockState.sendK2CfsCommandTransportPlan.mockResolvedValue({ status: "acknowledged" });
+    const body = createFilamentPanelBody();
+    const {
+      createPrinterCommandRequest,
+    } = await import("../../3dp_lib/printer_core/dashboard_command_authority.js");
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+    const integrationOptions = mockState.createBoundCfsControlIntegration.mock.calls[0][0];
+    const request = createPrinterCommandRequest({
+      deviceId: "serial:demo",
+      sessionId: "session:1",
+      commandKind: "cfs-unload",
+      transportKind: "ws9999",
+      timeoutMs: 120000,
+      idempotencyKey: "unload-disappeared-source",
+      createdAt: "2026-09-15T12:27:15.000+09:00",
+      entropySource: () => "unload-disappeared-source",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        slotIndex: 2,
+      },
+      expectedState: [
+        { path: "materials.selectedSource.sourceId", expected: null },
+        { path: "materials.cfsPhysicalSafety.feedState", expected: 0 },
+        { path: "materials.cfsPhysicalSafety.errorClear", expected: true },
+        { path: "materials.cfsPhysicalSafety.fresh", expected: true },
+      ],
+    });
+    const dispatchPromise = integrationOptions.dispatcher.dispatch(request);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    shadowRecord.lastSequence = 11;
+    shadowRecord.materialProviderLastSequence = 11;
+    shadowRecord.lastState.source.sequence = 11;
+    shadowRecord.lastState.materials.sources = [];
+    shadowRecord.cfsPhysicalSafetyObservation = createCfsPhysicalSafetyObservation({
+      lastAppliedSequence: 11,
+      feedState: 0,
+      idle: true,
+    });
+    await vi.advanceTimersByTimeAsync(120000);
+    const result = await dispatchPromise;
+
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "timeout",
+      transportAccepted: true,
+      completed: false,
+      error: {
+        code: "confirmation-timeout",
+      },
+    });
+  });
+
+  it("production dispatcherは送信後にsessionが変わった場合に再送せずunknown結果を返す", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-15T12:17:15.000+09:00"));
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    const shadowRecord = createCfsLoadShadow();
+    mockState.monitorData.machines.K2Pro.runtimeData.printerCoreV3Shadow = shadowRecord;
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    mockState.createK2CfsCommandTransportPlan.mockReturnValue({
+      ok: true,
+      frames: [],
+      details: {
+        semanticStatus: "certified",
+      },
+    });
+    mockState.sendK2CfsCommandTransportPlan.mockResolvedValue({ status: "acknowledged" });
+    const body = createFilamentPanelBody();
+    const {
+      createPrinterCommandRequest,
+    } = await import("../../3dp_lib/printer_core/dashboard_command_authority.js");
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+    const integrationOptions = mockState.createBoundCfsControlIntegration.mock.calls[0][0];
+    const request = createPrinterCommandRequest({
+      deviceId: "serial:demo",
+      sessionId: "session:1",
+      commandKind: "cfs-load",
+      transportKind: "ws9999",
+      timeoutMs: 120000,
+      idempotencyKey: "load-1c-session-change",
+      createdAt: "2026-09-15T12:17:15.000+09:00",
+      entropySource: () => "session-change",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        slotIndex: 2,
+      },
+      expectedState: {
+        path: "materials.selectedSource.sourceId",
+        expected: "cfs:1:slot:2",
+      },
+    });
+    const dispatchPromise = integrationOptions.dispatcher.dispatch(request);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+
+    shadowRecord.sessionId = "session:2";
+    shadowRecord.lastState.source.sessionId = "session:2";
+    shadowRecord.lastSequence = 11;
+    shadowRecord.lastState.source.sequence = 11;
+    await vi.advanceTimersByTimeAsync(1500);
+    const result = await dispatchPromise;
+
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "confirmation-error",
+      transportAccepted: true,
+      completed: false,
+      confirmationAttemptCount: 1,
+      error: {
+        code: "confirmation-session-changed",
+      },
+    });
+  });
+
   it("production dispatcherはsend-time topologyへCFS選択証跡を渡す", async () => {
     mockState.connectionTarget = {
       printerType: "creality-k2",
@@ -1372,6 +2101,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -1393,6 +2123,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       deviceId: "serial:demo",
       sessionId: "session:1",
       lastSequence: 10,
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation(),
       lastState: {
         source: {
           sequence: 10,
@@ -1405,18 +2136,23 @@ describe("dashboard_panel_init CFS control hook", () => {
             connected: true,
             topologyState: "fresh",
           },
+          units: [{
+            unitId: "cfs:1",
+            boxId: 1,
+            observedSlotCount: 4,
+          }],
           sources: [
             {
-              sourceId: "cfs:1:slot:2",
+              sourceId: "cfs:1:slot:0",
               kind: "cfs-slot",
               boxId: 1,
-              protocolSlotId: 2,
+              protocolSlotId: 0,
               presence: "loaded",
-              selected: true,
+              selected: false,
               status: {
                 presence: "loaded",
                 stateCode: 1,
-                selectionState: "selected",
+                selectionState: "unselected",
                 selectionValid: true,
               },
               material: {
@@ -1446,6 +2182,24 @@ describe("dashboard_panel_init CFS control hook", () => {
                 },
               },
             },
+            {
+              sourceId: "cfs:1:slot:2",
+              kind: "cfs-slot",
+              boxId: 1,
+              protocolSlotId: 2,
+              presence: "empty",
+              selected: false,
+              status: { presence: "empty", stateCode: 0, selected: false },
+            },
+            {
+              sourceId: "cfs:1:slot:3",
+              kind: "cfs-slot",
+              boxId: 1,
+              protocolSlotId: 3,
+              presence: "empty",
+              selected: false,
+              status: { presence: "empty", stateCode: 0, selected: false },
+            },
           ],
         },
       },
@@ -1474,8 +2228,8 @@ describe("dashboard_panel_init CFS control hook", () => {
       },
       units: [{
         slots: [{
-          sourceId: "cfs:1:slot:2",
-          displaySlot: "1C",
+          sourceId: "cfs:1:slot:0",
+          displaySlot: "1A",
           presence: "loaded",
           selected: true,
         }],
@@ -1503,9 +2257,9 @@ describe("dashboard_panel_init CFS control hook", () => {
       createdAt: "2026-08-31T20:19:55.000+09:00",
       entropySource: () => "unit",
       payload: {
-        sourceId: "cfs:1:slot:2",
+        sourceId: "cfs:1:slot:0",
         boxId: 1,
-        slotIndex: 2,
+        slotIndex: 0,
       },
     });
     const result = await integrationOptions.dispatcher.dispatch(request);
@@ -1517,8 +2271,8 @@ describe("dashboard_panel_init CFS control hook", () => {
       deviceId: "serial:demo",
       sessionId: "session:1",
       status: "submitted",
-      materialSourceId: "cfs:1:slot:2",
-      certificationId: "capture:k2-f012-feed-in-or-out-20260828",
+      materialSourceId: "cfs:1:slot:0",
+      certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
       preObservation: expect.objectContaining({
         sequence: 10,
       }),
@@ -1526,6 +2280,22 @@ describe("dashboard_panel_init CFS control hook", () => {
     expect(mockState.appendPhysicalCommandRecoveryLatchRecord).toHaveBeenCalledTimes(1);
     expect(mockState.saveUnifiedStorageDurably).toHaveBeenCalledTimes(1);
     expect(mockState.createK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+    expect(mockState.createK2CfsCommandTransportPlan).toHaveBeenCalledWith(
+      request,
+      expect.objectContaining({
+        certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
+        certificationScope: expect.objectContaining({
+          sourceId: "cfs:1:slot:0",
+          boxId: 1,
+          slotId: 0,
+          actualCfsUnitCount: 1,
+          actualCfsBoxIds: [1],
+          actualSlotIdsByBox: {
+            1: [0, 1, 2, 3],
+          },
+        }),
+      })
+    );
     expect(mockState.createK2CfsCommandTransportPlan.mock.invocationCallOrder[0])
       .toBeLessThan(mockState.saveUnifiedStorageDurably.mock.invocationCallOrder[0]);
     expect(mockState.saveUnifiedStorageDurably.mock.invocationCallOrder[0])
@@ -1552,6 +2322,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -1573,6 +2344,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       deviceId: "serial:demo",
       sessionId: "session:1",
       lastSequence: 10,
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation(),
       lastState: {
         print: {
           stateLabel: "idle",
@@ -1588,11 +2360,11 @@ describe("dashboard_panel_init CFS control hook", () => {
             boxId: 1,
             protocolSlotId: 2,
             presence: "loaded",
-            selected: true,
+            selected: false,
             status: {
               presence: "loaded",
               stateCode: 1,
-              selectionState: "selected",
+              selectionState: "unselected",
               selectionValid: true,
             },
           }],
@@ -1673,6 +2445,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -1794,7 +2567,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       coreStateComplete: false,
     });
     expect(result.status).toBe("rejected");
-    expect(result.error.errors).toContain("cfs-control-printer-idle-observation-incomplete");
+    expect(result.error.errors).toContain("cfs-control-physical-safety-observation-missing");
     expect(mockState.createK2CfsCommandTransportPlan).not.toHaveBeenCalled();
     expect(mockState.sendK2CfsCommandTransportPlan).not.toHaveBeenCalled();
   });
@@ -1821,6 +2594,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -1844,6 +2618,12 @@ describe("dashboard_panel_init CFS control hook", () => {
       connectionGeneration: 7,
       lastSequence: 10,
       lastObservedAt: "2026-09-02T01:06:00.000+09:00",
+      printerIdleObservation: createCfsPhysicalSafetyObservation({
+        expiresAt: "2026-09-02T01:06:05.000+09:00",
+      }),
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation({
+        expiresAt: "2026-09-02T01:06:05.000+09:00",
+      }),
       lastState: {
         source: {
           sessionId: "session:1",
@@ -1946,6 +2726,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -1969,6 +2750,14 @@ describe("dashboard_panel_init CFS control hook", () => {
       connectionGeneration: 6,
       lastSequence: 10,
       lastObservedAt: "2026-09-02T01:07:09.000+09:00",
+      printerIdleObservation: createCfsPhysicalSafetyObservation({
+        connectionGeneration: 6,
+        expiresAt: "2026-09-02T01:07:15.000+09:00",
+      }),
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation({
+        connectionGeneration: 6,
+        expiresAt: "2026-09-02T01:07:15.000+09:00",
+      }),
       lastState: {
         source: {
           sessionId: "session:1",
@@ -2069,6 +2858,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -2090,6 +2880,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       deviceId: "serial:demo",
       sessionId: "session:1",
       lastSequence: 10,
+      cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation(),
       lastState: {
         print: {
           stateLabel: "idle",
@@ -2105,11 +2896,11 @@ describe("dashboard_panel_init CFS control hook", () => {
             boxId: 1,
             protocolSlotId: 2,
             presence: "loaded",
-            selected: true,
+            selected: false,
             status: {
               presence: "loaded",
               stateCode: 1,
-              selectionState: "selected",
+              selectionState: "unselected",
               selectionValid: true,
             },
           }],
@@ -2218,6 +3009,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -2362,7 +3154,7 @@ describe("dashboard_panel_init CFS control hook", () => {
       connectionGeneration: 7,
       status: "submitted",
       materialSourceId: "cfs:1:slot:2",
-      certificationId: "capture:k2-f012-feed-in-or-out-20260828",
+      certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
     }));
     expect(mockState.appendPhysicalCommandRecoveryLatchRecord).toHaveBeenCalledTimes(1);
     expect(mockState.saveUnifiedStorage).toHaveBeenCalledWith(true);
@@ -2391,8 +3183,9 @@ describe("dashboard_panel_init CFS control hook", () => {
         externalSourceLimit: 1,
         cfsControl: {
           enabled: true,
-          allowedActions: ["select"],
-          certifiedCfsSlotControlCommands: ["cfs-slot-select"],
+          allowedActions: ["load"],
+          certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -2494,6 +3287,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",
@@ -2609,6 +3403,7 @@ describe("dashboard_panel_init CFS control hook", () => {
           enabled: true,
           allowedActions: ["load"],
           certifiedCfsSlotControlCommands: ["cfs-load"],
+          certificationId: "gate19-k2-f012-cfs1-box1-slots-1a-1b-load-unload-v1",
           certificationEvidence: {
             schemaVersion: 1,
             status: "certified",

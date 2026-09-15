@@ -1,11 +1,25 @@
 /**
- * @fileoverview Printer Core v3 live shadow の単体テスト
- * @description
- * - K1 legacy differential と K2 read-only shadow の runtime record 境界を検証する。
+ * @fileoverview
+ * @description 3Dプリンタ監視ツール 3dpmon 用 Printer Core v3 live shadow 単体テスト
+ * @file printer_core_live_shadow.test.js
+ * @copyright (c) pumpCurry 2025 / 5r4ce2
+ * @author pumpCurry
+ * -----------------------------------------------------------
+ * @module printer_core_live_shadow_test
  *
- * @version 1.390.1620 (PR #440)
- * @since 1.390.1299 (PR #432)
- * @lastModified 2026-09-02 01:07:00
+ * 【機能内容サマリ】
+ * - K1 legacy differentialとK2 read-only shadowのruntime record境界を検証
+ * - complete baseline、partial delta、TTL、sessionを含むphysical idle証拠を固定
+ *
+ * 【公開関数一覧】
+ * - なし：Vitest による単体テストのみを提供
+ *
+ * @version 1.390.1676 (PR #442)
+ * @since   1.390.1299 (PR #432)
+ * @lastModified 2026-09-15 13:07:22
+ * -----------------------------------------------------------
+ * @todo
+ * - none
  *
  * @vitest-environment jsdom
  */
@@ -517,6 +531,7 @@ describe("Printer Core v3 K1 live shadow", () => {
         model: "F012",
         state: 0,
         deviceState: 0,
+        printLeftTime: 0,
         targetNozzleTemp: 0,
         targetBedTemp0: 0,
         nozzleTemp: 27.2,
@@ -557,6 +572,335 @@ describe("Printer Core v3 K1 live shadow", () => {
     });
   });
 
+  it("K2 live shadowは実機同等の正常終了full frameをfresh physical idle証跡として保持する", () => {
+    const host = "K2Pro-Live-Completed-Idle";
+    const deviceId = "host:K2Pro-Live-Completed-Idle";
+    const sessionId = "k2-live:completed-idle";
+    setMachine(host);
+    beginK2LiveShadowSession({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 8,
+    });
+
+    const record = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 8,
+      frame: {
+        hostname: host,
+        model: "F012",
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printJobTime: 613,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        printFileName: "/mnt/UDISK/printer_data/gcodes/bracket.stl_PLA_8m15s.gcode",
+        printId: "6a936e4ab9e9df20004c5066",
+        feedState: 0,
+        err: {
+          errcode: 0,
+          key: 0,
+        },
+      },
+      receivedAt: "2026-09-09T10:02:04.276+09:00",
+    });
+
+    expect(record.lastState.print).toMatchObject({
+      stateLabel: "completed",
+      activityState: "idle",
+      coreStateComplete: true,
+      physicalIdleEvidenceComplete: true,
+    });
+    expect(record.printerIdleObservation).toMatchObject({
+      status: "observed",
+      activityState: "idle",
+      coreStateComplete: true,
+      physicalIdleEvidenceComplete: true,
+      sessionId,
+      connectionGeneration: 8,
+      fresh: true,
+      idle: true,
+    });
+    expect(record.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "observed",
+      activityState: "idle",
+      physicalIdleEvidenceComplete: true,
+      sessionId,
+      connectionGeneration: 8,
+      baselineSequence: 1,
+      lastAppliedSequence: 1,
+      fresh: true,
+      idle: true,
+      feedStateObserved: true,
+      feedState: 0,
+      printerErrorObserved: true,
+      printerErrorCode: 0,
+      printerErrorKey: 0,
+      errorClear: true,
+    });
+  });
+
+  it("K2 live shadowはfeedStateまたはraw errが欠損・非safeならCFS安全証跡を成立させない", () => {
+    const host = "K2Pro-Live-Cfs-Safety-Rejected";
+    const deviceId = "host:K2Pro-Live-Cfs-Safety-Rejected";
+    const sessionId = "k2-live:cfs-safety-rejected";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 18 });
+
+    const missingError = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 18,
+      frame: {
+        state: 0,
+        deviceState: 0,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        feedState: 0,
+      },
+      receivedAt: "2026-09-15T02:30:00.000Z",
+    });
+    expect(missingError.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "partial",
+      printerErrorObserved: false,
+      errorClear: false,
+    });
+
+    const busyFeed = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 18,
+      frame: {
+        state: 0,
+        deviceState: 0,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        feedState: 101,
+        err: { errcode: 0, key: 0 },
+      },
+      receivedAt: "2026-09-15T02:30:01.000Z",
+    });
+    expect(busyFeed.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "observed",
+      feedStateObserved: true,
+      feedState: 101,
+      errorClear: true,
+    });
+
+    const activeError = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 18,
+      frame: {
+        state: 0,
+        deviceState: 0,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        feedState: 0,
+        err: { errcode: 7, key: 2 },
+      },
+      receivedAt: "2026-09-15T02:30:02.000Z",
+    });
+    expect(activeError.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "observed",
+      printerErrorObserved: true,
+      printerErrorCode: 7,
+      printerErrorKey: 2,
+      errorClear: false,
+    });
+  });
+
+  it("K2 live shadowはraw errだけのdeltaでも直前の安全証跡を延命しない", () => {
+    const host = "K2Pro-Live-Cfs-Error-Only";
+    const deviceId = "host:K2Pro-Live-Cfs-Error-Only";
+    const sessionId = "k2-live:cfs-error-only";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 19 });
+
+    const baseline = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 19,
+      frame: {
+        state: 0,
+        deviceState: 0,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+        feedState: 0,
+        err: { errcode: 0, key: 0 },
+      },
+      receivedAt: "2026-09-15T03:00:00.000Z",
+    });
+    expect(baseline.cfsPhysicalSafetyObservation.errorClear).toBe(true);
+
+    const errorOnly = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 19,
+      frame: {
+        err: { errcode: 9, key: 4 },
+      },
+      receivedAt: "2026-09-15T03:00:01.000Z",
+    });
+
+    expect(errorOnly.cfsPhysicalSafetyObservation).toMatchObject({
+      status: "partial",
+      lastAppliedSequence: 2,
+      fresh: false,
+      feedStateObserved: false,
+      printerErrorObserved: true,
+      printerErrorCode: 9,
+      printerErrorKey: 4,
+      errorClear: false,
+    });
+  });
+
+  it("K2 live shadowは正常終了idle後のprogress-only矛盾deltaでassembled idleを失効させる", () => {
+    const host = "K2Pro-Live-Completed-Progress-Conflict";
+    const deviceId = "host:K2Pro-Live-Completed-Progress-Conflict";
+    const sessionId = "k2-live:completed-progress-conflict";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 9 });
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 9,
+      frame: {
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+      },
+      receivedAt: "2026-09-09T11:16:25.000+09:00",
+    });
+
+    const record = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 9,
+      frame: { printProgress: 75 },
+      receivedAt: "2026-09-09T11:16:26.000+09:00",
+    });
+
+    expect(record.printerIdleObservation).toMatchObject({
+      status: "assembled",
+      idle: false,
+      physicalIdleConflictReasons: ["completed-progress-conflict"],
+    });
+  });
+
+  it.each([
+    ["残り時間null", { printLeftTime: null }],
+    ["残り時間negative", { printLeftTime: -1 }],
+    ["ノズル設定温度null", { targetNozzleTemp: null }],
+    ["ノズル設定温度negative", { targetNozzleTemp: -1 }],
+    ["ベッド設定温度blank", { targetBedTemp0: "   " }],
+    ["state active", { state: 1 }],
+    ["deviceState active", { deviceState: 1 }],
+    ["target heating", { targetNozzleTemp: 220 }],
+  ])("K2 live shadowは正常終了idle後の%s deltaでassembled idleを失効させる", (_label, delta) => {
+    const host = `K2Pro-Live-Idle-Revoked-${_label}`;
+    const deviceId = `host:${host}`;
+    const sessionId = `k2-live:idle-revoked:${_label}`;
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 10 });
+    observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 10,
+      frame: {
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+      },
+      receivedAt: "2026-09-09T11:16:25.000+09:00",
+    });
+
+    const record = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 10,
+      frame: delta,
+      receivedAt: "2026-09-09T11:16:26.000+09:00",
+    });
+
+    expect(record.printerIdleObservation).toMatchObject({
+      status: "assembled",
+      idle: false,
+    });
+  });
+
+  it("K2 live shadowはboxsInfoだけの後着で正常終了idle証跡の時刻やsequenceを延長しない", () => {
+    const host = "K2Pro-Live-Completed-Idle-Material-Only";
+    const deviceId = "host:K2Pro-Live-Completed-Idle-Material-Only";
+    const sessionId = "k2-live:completed-idle-material-only";
+    setMachine(host);
+    beginK2LiveShadowSession({ host, deviceId, sessionId, connectionGeneration: 9 });
+    const baseline = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 9,
+      frame: {
+        state: 2,
+        deviceState: 0,
+        printProgress: 100,
+        printJobTime: 613,
+        printLeftTime: 0,
+        targetNozzleTemp: 0,
+        targetBedTemp0: 0,
+      },
+      receivedAt: "2026-09-09T10:02:04.276+09:00",
+    });
+    const originalIdleObservation = globalThis.structuredClone(baseline.printerIdleObservation);
+    const originalCfsSafetyObservation = globalThis.structuredClone(baseline.cfsPhysicalSafetyObservation);
+
+    const afterMaterialOnly = observeK2LiveShadowFrame({
+      host,
+      deviceId,
+      sessionId,
+      connectionGeneration: 9,
+      frame: {
+        boxsInfo: {
+          enable: 1,
+          materialBoxs: [{
+            id: 1,
+            state: 1,
+            type: 0,
+            materials: [{ id: 0, state: 1, selected: 1, type: "PLA" }],
+          }],
+        },
+      },
+      receivedAt: "2026-09-09T10:02:08.276+09:00",
+    });
+
+    expect(afterMaterialOnly.printerIdleObservation).toEqual(originalIdleObservation);
+    expect(afterMaterialOnly.cfsPhysicalSafetyObservation).toEqual(originalCfsSafetyObservation);
+  });
+
   it("K2 CFS topologyの観測時刻はboxsInfo実受信時だけ更新し通常statusでは延命しない", () => {
     const host = "K2Pro-Live-Freshness";
     const deviceId = "host:K2Pro-Live-Freshness";
@@ -591,6 +935,7 @@ describe("Printer Core v3 K1 live shadow", () => {
     });
 
     expect(materialRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
+    expect(materialRecord.materialProviderLastSequence).toBe(materialRecord.lastSequence);
     expect(materialRecord.lastState.materials.provider.lastObservedAt).toBe("2026-08-07T08:15:04.000Z");
 
     const statusRecord = observeK2LiveShadowFrame({
@@ -606,6 +951,8 @@ describe("Printer Core v3 K1 live shadow", () => {
 
     expect(statusRecord.lastObservedAt).toBe("2026-08-07T08:16:04.000Z");
     expect(statusRecord.materialProviderLastObservedAt).toBe("2026-08-07T08:15:04.000Z");
+    expect(statusRecord.materialProviderLastSequence).toBe(materialRecord.materialProviderLastSequence);
+    expect(statusRecord.lastSequence).toBeGreaterThan(statusRecord.materialProviderLastSequence);
     expect(statusRecord.lastState.materials.provider.lastObservedAt).toBe("2026-08-07T08:15:04.000Z");
     expect(statusRecord.lastState.materials.sources[0].material.name).toBe("Silver PLA");
   });

@@ -2,8 +2,9 @@
 
 ## Context
 
-Gate 18.5, Gate 19, and Gate 19.5 closed the read-only CFS operation UI and
-command dispatcher safety boundary. The remaining release path needs actual K2
+Gate 18.5 closed the read-only CFS observation UI, and Gate 19 closed the
+narrow F012/1A/1B load/unload command safety boundary. Gate 19.5 adds the
+default-off operator UI activation. The remaining print-start release path needs actual K2
 WS9999 command transport mapping, but live evidence showed that unsafe
 `opGcodeFile` starts can complete without feeding filament when no CFS source is
 selected.
@@ -82,16 +83,22 @@ production-certified path for standalone CFS slot operations. That path remains
 closed by default and opens only when all of the following are true:
 
 - `materialSystem.cfsControl.enabled === true` on the current connection target.
-- `certifiedCfsSlotControlCommands[]` explicitly allows the command kind.
-- `certificationEvidence` uses schema version 1, certified status, the
-  production feed-in-or-out profile, and capture/fixture metadata.
-- The same certification evidence is present in the module-owned immutable
-  slot-control certification registry. Caller supplied target settings alone
-  cannot make a standalone CFS slot action production-certified.
+- `materialSystem.cfsControl.certificationId` resolves exactly one entry in the
+  module-owned immutable slot-control certification registry.
+- `materialSystem.cfsControl.allowedActions[]` and the registry command kinds
+  both allow the requested load/unload action. Unknown or duplicated actions do
+  not widen authority.
+- The resolved registry entry contains the reviewed schema, certified status,
+  production feed-in-or-out profile, capture/fixture digests, and exact scope.
+  Caller supplied evidence objects are diagnostic only and cannot certify a
+  standalone CFS slot action.
 - The current target/runtime reports `printerType:"creality-k2"` and the same
   model/firmware scope as the certification evidence.
 - Send-time validation still sees an active session, fresh connected topology,
   a loaded CFS slot target, and a non-busy printer state.
+- The normal panel asks the operator to confirm the exact source and physical
+  action immediately before dispatch. Cancel or confirmation UI failure sends
+  no command.
 
 The next live gates must verify:
 
@@ -108,6 +115,10 @@ without matching production certification and current send-time revalidation.
 Generated transport plans are deep-frozen before they are trusted by the sender,
 so a caller cannot mutate frames, certification details, or safety flags after
 the factory validation step.
+The bounded confirmation deadline currently starts at local dispatch and lasts
+at most 120 seconds. It is intentionally stricter than a deadline beginning at
+transport acceptance. No physical command is resent when the deadline expires.
+
 When a standalone slot action returns only `submitted` / `completed:false`, the
 UI must not unlock every physical CFS action just because the material provider
 timestamp advanced. `cfs-slot-select` may unlock after a later observation shows

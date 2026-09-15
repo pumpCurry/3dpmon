@@ -1,0 +1,303 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "k2-pro-cfs-f012-slot-control-live-20260909",
+  "captureId": "capture_f012_cfs_slot_control_live_20260909_a",
+  "status": "certified",
+  "certifiedAt": "2026-09-09T04:03:28.568Z",
+  "gate": "Gate 19",
+  "commandKinds": [
+    "cfs-load",
+    "cfs-unload"
+  ],
+  "printerType": "creality-k2",
+  "model": "F012",
+  "firmwareVersion": "1.0.0",
+  "attachment": "CFS",
+  "transportProfile": "k2-ws9999-feed-in-or-out-certified-v1",
+  "scope": {
+    "cfsUnitCount": 1,
+    "certifiedBoxIds": [
+      1
+    ],
+    "expectedSlotIdsByBox": {
+      "1": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "certifiedSources": [
+      {
+        "sourceId": "cfs:1:slot:0",
+        "boxId": 1,
+        "slotId": 0,
+        "displayLabel": "1A"
+      },
+      {
+        "sourceId": "cfs:1:slot:1",
+        "boxId": 1,
+        "slotId": 1,
+        "displayLabel": "1B"
+      }
+    ],
+    "untestedSources": [
+      "cfs:1:slot:2"
+    ],
+    "physicallyExcludedSources": [
+      "cfs:1:slot:3",
+      "external"
+    ]
+  },
+  "commandPolicies": {
+    "cfs-load": {
+      "requiredSelectedSources": [],
+      "targetPresence": "loaded",
+      "terminalSelectedSource": "target"
+    },
+    "cfs-unload": {
+      "requiredSelectedSource": "target",
+      "selectedMustBeUnique": true,
+      "targetPresence": "loaded",
+      "terminalSelectedSources": []
+    }
+  },
+  "safety": {
+    "physicalCommandCount": 8,
+    "eachCommandSentOnce": true,
+    "blindRetryAllowed": false,
+    "printerIdleRequired": true,
+    "feedStateIdleRequired": true,
+    "printerErrorClearRequired": true,
+    "singleFlightRequired": true
+  },
+  "sources": [
+    {
+      "sourceId": "cfs:1:slot:0",
+      "displayLabel": "1A",
+      "loadedAtFinalObservation": true
+    },
+    {
+      "sourceId": "cfs:1:slot:1",
+      "displayLabel": "1B",
+      "loadedAtFinalObservation": true
+    }
+  ],
+  "operations": [
+    {
+      "cycle": 1,
+      "sequence": 1,
+      "commandKind": "cfs-load",
+      "sourceId": "cfs:1:slot:0",
+      "frame": {
+        "boxId": 1,
+        "materialId": 0,
+        "isFeed": 1
+      },
+      "sentFrameCount": 1,
+      "blindRetryAllowed": false,
+      "status": "post-observed",
+      "feedStateSequence": [
+        101
+      ],
+      "selectedBefore": false,
+      "selectedWithinBoundedWindow": false,
+      "eventualSelected": true,
+      "observationCompletion": "follow-up-read-only",
+      "operatorObservedPhysicalMotion": true
+    },
+    {
+      "cycle": 1,
+      "sequence": 2,
+      "commandKind": "cfs-unload",
+      "sourceId": "cfs:1:slot:0",
+      "frame": {
+        "boxId": 1,
+        "materialId": 0,
+        "isFeed": 0
+      },
+      "sentFrameCount": 1,
+      "blindRetryAllowed": false,
+      "status": "post-observed",
+      "feedStateSequence": [
+        111
+      ],
+      "selectedBefore": true,
+      "selectedWithinBoundedWindow": true,
+      "eventualSelected": false,
+      "observationCompletion": "follow-up-read-only",
+      "operatorObservedPhysicalMotion": true
+    },
+    {
+      "cycle": 1,
+      "sequence": 3,
+      "commandKind": "cfs-load",
+      "sourceId": "cfs:1:slot:1",
+      "frame": {
+        "boxId": 1,
+        "materialId": 1,
+        "isFeed": 1
+      },
+      "sentFrameCount": 1,
+      "blindRetryAllowed": false,
+      "status": "post-observed",
+      "feedStateSequence": [
+        101,
+        103,
+        104,
+        105
+      ],
+      "selectedBefore": false,
+      "selectedWithinBoundedWindow": false,
+      "eventualSelected": true,
+      "observationCompletion": "follow-up-read-only",
+      "operatorObservedPhysicalMotion": true
+    },
+    {
+      "cycle": 1,
+      "sequence": 4,
+      "commandKind": "cfs-unload",
+      "sourceId": "cfs:1:slot:1",
+      "frame": {
+        "boxId": 1,
+        "materialId": 1,
+        "isFeed": 0
+      },
+      "sentFrameCount": 1,
+      "blindRetryAllowed": false,
+      "status": "post-observed",
+      "feedStateSequence": [
+        111,
+        112
+      ],
+      "selectedBefore": true,
+      "selectedWithinBoundedWindow": true,
+      "eventualSelected": false,
+      "observationCompletion": "follow-up-read-only",
+      "operatorObservedPhysicalMotion": true
+    },
+    {
+      "cycle": 2,
+      "sequence": 5,
+      "commandKind": "cfs-load",
+      "sourceId": "cfs:1:slot:0",
+      "frame": {
+        "boxId": 1,
+        "materialId": 0,
+        "isFeed": 1
+      },
+      "sentFrameCount": 1,
+      "blindRetryAllowed": false,
+      "status": "post-observed",
+      "feedStateSequence": [
+        101
+      ],
+      "selectedBefore": false,
+      "selectedWithinBoundedWindow": false,
+      "eventualSelected": true,
+      "observationCompletion": "follow-up-read-only",
+      "operatorObservedPhysicalMotion": true
+    },
+    {
+      "cycle": 2,
+      "sequence": 6,
+      "commandKind": "cfs-unload",
+      "sourceId": "cfs:1:slot:0",
+      "frame": {
+        "boxId": 1,
+        "materialId": 0,
+        "isFeed": 0
+      },
+      "sentFrameCount": 1,
+      "blindRetryAllowed": false,
+      "status": "post-observed",
+      "feedStateSequence": [
+        111,
+        112,
+        113
+      ],
+      "selectedBefore": true,
+      "selectedWithinBoundedWindow": true,
+      "eventualSelected": false,
+      "observationCompletion": "follow-up-read-only",
+      "operatorObservedPhysicalMotion": true
+    },
+    {
+      "cycle": 2,
+      "sequence": 7,
+      "commandKind": "cfs-load",
+      "sourceId": "cfs:1:slot:1",
+      "frame": {
+        "boxId": 1,
+        "materialId": 1,
+        "isFeed": 1
+      },
+      "sentFrameCount": 1,
+      "blindRetryAllowed": false,
+      "status": "post-observed",
+      "feedStateSequence": [
+        101,
+        103,
+        104,
+        105,
+        107
+      ],
+      "selectedBefore": false,
+      "selectedWithinBoundedWindow": true,
+      "eventualSelected": true,
+      "observationCompletion": "same-window",
+      "operatorObservedPhysicalMotion": true
+    },
+    {
+      "cycle": 2,
+      "sequence": 8,
+      "commandKind": "cfs-unload",
+      "sourceId": "cfs:1:slot:1",
+      "frame": {
+        "boxId": 1,
+        "materialId": 1,
+        "isFeed": 0
+      },
+      "sentFrameCount": 1,
+      "blindRetryAllowed": false,
+      "status": "post-observed",
+      "feedStateSequence": [
+        111,
+        112,
+        113,
+        14,
+        0
+      ],
+      "selectedBefore": true,
+      "selectedWithinBoundedWindow": false,
+      "eventualSelected": false,
+      "observationCompletion": "same-window",
+      "operatorObservedPhysicalMotion": true
+    }
+  ],
+  "finalObservation": {
+    "printerIdle": true,
+    "errorFree": true,
+    "feedState": 0,
+    "selectedSourceIds": [],
+    "loadedSourceIds": [
+      "cfs:1:slot:0",
+      "cfs:1:slot:1"
+    ],
+    "nozzleFilamentRetracted": true,
+    "residualMotionOrNoise": false
+  },
+  "operatorConfirmation": {
+    "result": "success",
+    "nozzleSetAndUnsetObserved": true,
+    "purgeGenerated": true,
+    "repeatedCycleCompleted": true
+  },
+  "limitations": [
+    "CFS slot 1C was not exercised in this certification sequence.",
+    "CFS slot 1D was excluded because it was physically unserviceable and unloaded.",
+    "The external source was excluded because this printer has no external spool holder.",
+    "Numeric feedState values are retained as observed transitions and are not treated as standalone semantic success codes.",
+    "Some operations completed after the initial bounded observation window and required a later read-only observation."
+  ]
+}
