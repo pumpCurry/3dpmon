@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1674 (PR #442)
+ * @version 1.390.1675 (PR #442)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-09-15 11:47:43
+ * @lastModified 2026-09-15 12:17:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -1955,5 +1955,134 @@ describe("Printer Core v3 command authority contract", () => {
       },
     });
     expect(shouldRetryPrinterCommand(request, result)).toBe(false);
+  });
+
+  it("bound dispatcherはtransportを一度だけ送信しterminal stateまで観測だけを有界反復する", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("set-led"),
+      expectedState: {
+        path: "light.enabled",
+        expected: true,
+      },
+    });
+    const sendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const observeState = vi.fn()
+      .mockResolvedValueOnce({
+        observedState: { light: { enabled: false } },
+        observedSequence: 10,
+        observedSessionId: "session:1",
+      })
+      .mockResolvedValueOnce({
+        observedState: { light: { enabled: true } },
+        observedSequence: 11,
+        observedSessionId: "session:1",
+        trustedCorrelationProof: {
+          evidenceSource: "terminal-state-transition",
+          transitionId: `transition:${request.commandId}:11`,
+          commandId: request.commandId,
+          sessionId: "session:1",
+        },
+      });
+    const waitForObservation = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createBoundPrinterCommandDispatcher({
+      getSendTimeContext: () => createBaseSendTimeSnapshot(),
+      sendTransport,
+      observeState,
+      confirmationInitialDelayMs: 5,
+      confirmationIntervalMs: 10,
+      confirmationMaxAttempts: 3,
+      waitForObservation,
+    });
+
+    const result = await dispatcher.dispatch(request);
+
+    expect(sendTransport).toHaveBeenCalledTimes(1);
+    expect(observeState).toHaveBeenCalledTimes(2);
+    expect(waitForObservation).toHaveBeenNthCalledWith(1, 5);
+    expect(waitForObservation).toHaveBeenNthCalledWith(2, 10);
+    expect(result).toMatchObject({
+      status: "acknowledged",
+      transportAccepted: true,
+      completed: true,
+      confirmationAttemptCount: 2,
+    });
+  });
+
+  it("terminal stateを観測できない場合は再送せずtransport acceptedのtimeoutとして返す", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("set-led"),
+      expectedState: {
+        path: "light.enabled",
+        expected: true,
+      },
+    });
+    const sendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const observeState = vi.fn().mockResolvedValue({
+      observedState: { light: { enabled: false } },
+      observedSequence: 10,
+      observedSessionId: "session:1",
+    });
+    const dispatcher = createBoundPrinterCommandDispatcher({
+      getSendTimeContext: () => createBaseSendTimeSnapshot(),
+      sendTransport,
+      observeState,
+      confirmationInitialDelayMs: 0,
+      confirmationIntervalMs: 0,
+      confirmationMaxAttempts: 2,
+      waitForObservation: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const result = await dispatcher.dispatch(request);
+
+    expect(sendTransport).toHaveBeenCalledTimes(1);
+    expect(observeState).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      status: "timeout",
+      transportAccepted: true,
+      completed: false,
+      confirmationAttemptCount: 2,
+      error: {
+        code: "confirmation-timeout",
+      },
+    });
+    expect(shouldRetryPrinterCommand(request, result)).toBe(false);
+  });
+
+  it("送信後にsession切替などのconfirmation errorを受けた場合は送信済みunknownとして停止する", async () => {
+    const request = createPrinterCommandRequest({
+      ...createBaseRequestOptions("set-led"),
+      expectedState: {
+        path: "light.enabled",
+        expected: true,
+      },
+    });
+    const sendTransport = vi.fn().mockResolvedValue({ status: "acknowledged" });
+    const observeState = vi.fn().mockResolvedValue({
+      confirmationError: {
+        code: "confirmation-session-changed",
+        message: "The active printer session changed after transport submission.",
+      },
+    });
+    const dispatcher = createBoundPrinterCommandDispatcher({
+      getSendTimeContext: () => createBaseSendTimeSnapshot(),
+      sendTransport,
+      observeState,
+      confirmationMaxAttempts: 3,
+      waitForObservation: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const result = await dispatcher.dispatch(request);
+
+    expect(sendTransport).toHaveBeenCalledTimes(1);
+    expect(observeState).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "confirmation-error",
+      transportAccepted: true,
+      completed: false,
+      confirmationAttemptCount: 1,
+      error: {
+        code: "confirmation-session-changed",
+      },
+    });
   });
 });

@@ -14,9 +14,9 @@
  * 【公開関数一覧】
  * - なし：Vitest による単体テストのみを提供
  *
- * @version 1.390.1674 (PR #442)
+ * @version 1.390.1675 (PR #442)
  * @since   1.390.1381 (PR #432)
- * @lastModified 2026-09-15 12:03:51
+ * @lastModified 2026-09-15 12:17:15
  * -----------------------------------------------------------
  * @todo
  * - none
@@ -273,6 +273,107 @@ function createCfsPhysicalSafetyObservation(overrides = {}) {
     printerErrorCode: 0,
     printerErrorKey: 0,
     errorClear: true,
+    ...overrides,
+  };
+}
+
+/**
+ * load/unload実機認証済みのK2 CFS control target fixtureを生成する。
+ *
+ * 【詳細説明】
+ * - production composition、端末状態観測、timeout testで同一scopeを再利用する。
+ *
+ * @function createCertifiedCfsControlTarget
+ * @param {object=} overrides - target上書き値
+ * @returns {object} production CFS control target fixture
+ */
+function createCertifiedCfsControlTarget(overrides = {}) {
+  return {
+    printerType: "creality-k2",
+    printerCoreV3Info: {
+      model: "F012",
+      version: "1.0.0",
+      probeSessionId: "test-runtime-probe-session",
+      connectionGeneration: 7,
+      connectionDest: "192.0.2.10:9999",
+      connectionHost: "K2Pro",
+    },
+    dest: "192.0.2.10:9999",
+    materialSystem: {
+      mode: "cfs-readonly",
+      unitLimit: 1,
+      externalSourceLimit: 1,
+      cfsControl: {
+        enabled: true,
+        allowedActions: ["load", "unload"],
+        certifiedCfsSlotControlCommands: ["cfs-load", "cfs-unload"],
+        certificationEvidence: {
+          schemaVersion: 1,
+          status: "certified",
+          gate: "Gate 19",
+          commandKinds: ["cfs-load", "cfs-unload"],
+          transportProfile: "k2-ws9999-feed-in-or-out-certified-v1",
+          printerType: "creality-k2",
+          model: "F012",
+          firmwareVersion: "1.0.0",
+          fixtureId: "k2-f012-feed-in-or-out-20260828",
+          captureId: "capture:k2-f012-feed-in-or-out-20260828",
+          certifiedAt: "2026-08-28T12:00:00.000+09:00",
+        },
+      },
+    },
+    ...overrides,
+  };
+}
+
+/**
+ * CFS load開始前のK2 live shadow fixtureを生成する。
+ *
+ * 【詳細説明】
+ * - 1Cがloadedかつ未選択、printer/CFS搬送系がidleなsend-time stateを表す。
+ *
+ * @function createCfsLoadShadow
+ * @param {object=} overrides - shadow上書き値
+ * @returns {object} K2 live shadow fixture
+ */
+function createCfsLoadShadow(overrides = {}) {
+  return {
+    state: "observed",
+    deviceId: "serial:demo",
+    sessionId: "session:1",
+    connectionGeneration: 7,
+    lastSequence: 10,
+    cfsPhysicalSafetyObservation: createCfsPhysicalSafetyObservation(),
+    lastState: {
+      source: {
+        sessionId: "session:1",
+        sequence: 10,
+      },
+      print: {
+        stateLabel: "idle",
+      },
+      materials: {
+        cfs: {
+          connected: true,
+          topologyState: "fresh",
+        },
+        sources: [{
+          sourceId: "cfs:1:slot:2",
+          kind: "cfs-slot",
+          boxId: 1,
+          protocolSlotId: 2,
+          presence: "loaded",
+          selected: false,
+          status: {
+            presence: "loaded",
+            stateCode: 1,
+            selected: false,
+            selectionState: "unselected",
+            selectionValid: true,
+          },
+        }],
+      },
+    },
     ...overrides,
   };
 }
@@ -1388,6 +1489,265 @@ describe("dashboard_panel_init CFS control hook", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("terminal state確認済みのCFS commandは送信前予約ラッチを観測解決する", async () => {
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    mockState.monitorData.physicalCommandRecoveryLatch = {
+      unresolvedByCommandId: {
+        "cmd:k2-load-terminal": {
+          commandId: "cmd:k2-load-terminal",
+          commandKind: "cfs-load",
+          deviceId: "serial:demo",
+          sessionId: "session:1",
+          materialSourceId: "cfs:1:slot:2",
+          status: "submitted",
+          digest: "fnv1a128:terminal-reservation",
+        },
+      },
+      conflictedCommandIds: [],
+      retainedUnsupportedEntries: [],
+      events: [],
+    };
+    mockState.boundOnCommand.mockResolvedValue({
+      accepted: true,
+      request: {
+        commandId: "cmd:k2-load-terminal",
+        commandKind: "cfs-load",
+        deviceId: "serial:demo",
+        sessionId: "session:1",
+        payload: {
+          sourceId: "cfs:1:slot:2",
+        },
+      },
+      result: {
+        completed: true,
+        completedAt: "2026-09-15T03:17:30.000Z",
+        postCommandObservation: {
+          observedSequence: 12,
+          correlationId: "cmd:terminal-correlation",
+        },
+      },
+    });
+    const body = createFilamentPanelBody();
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+    const [, , options] = mockState.renderMaterialTopologyPanel.mock.calls[0];
+    const output = await options.control.onCommand({
+      action: "load",
+      commandKind: "cfs-load",
+      sourceId: "cfs:1:slot:2",
+    });
+
+    expect(mockState.resolvePhysicalCommandRecoveryLatchRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unresolvedByCommandId: expect.objectContaining({
+          "cmd:k2-load-terminal": expect.objectContaining({
+            digest: "fnv1a128:terminal-reservation",
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        commandId: "cmd:k2-load-terminal",
+        resolution: "observed-terminal-confirmed",
+        expectedDeviceId: "serial:demo",
+        expectedDigest: "fnv1a128:terminal-reservation",
+        expectedCommandKind: "cfs-load",
+        expectedMaterialSourceId: "cfs:1:slot:2",
+        resolutionSource: "printer-core-command-dispatcher",
+        operatorAcknowledged: false,
+        postObservation: {
+          sequence: 12,
+          digest: "cmd:terminal-correlation",
+          observedAt: "2026-09-15T03:17:30.000Z",
+        },
+      })
+    );
+    expect(mockState.saveUnifiedStorage).toHaveBeenCalledWith(true);
+    expect(output.recoveryLatch).toMatchObject({
+      ok: true,
+      status: "resolved",
+      commandId: "cmd:k2-load-terminal",
+      latchStatus: "completed",
+    });
+  });
+
+  it("production dispatcherはCFS loadを一度だけ送信しbusy後のterminal stateまで観測を続ける", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-15T12:17:15.000+09:00"));
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    const shadowRecord = createCfsLoadShadow();
+    mockState.monitorData.machines.K2Pro.runtimeData.printerCoreV3Shadow = shadowRecord;
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    mockState.createK2CfsCommandTransportPlan.mockReturnValue({
+      ok: true,
+      frames: [],
+      details: {
+        semanticStatus: "certified",
+      },
+    });
+    mockState.sendK2CfsCommandTransportPlan.mockResolvedValue({ status: "acknowledged" });
+    const body = createFilamentPanelBody();
+    const {
+      createPrinterCommandRequest,
+    } = await import("../../3dp_lib/printer_core/dashboard_command_authority.js");
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+    const integrationOptions = mockState.createBoundCfsControlIntegration.mock.calls[0][0];
+    const request = createPrinterCommandRequest({
+      deviceId: "serial:demo",
+      sessionId: "session:1",
+      commandKind: "cfs-load",
+      transportKind: "ws9999",
+      timeoutMs: 120000,
+      idempotencyKey: "load-1c-terminal-observation",
+      createdAt: "2026-09-15T12:17:15.000+09:00",
+      entropySource: () => "terminal-observation",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        slotIndex: 2,
+      },
+      expectedState: [
+        { path: "materials.selectedSource.sourceId", expected: "cfs:1:slot:2" },
+        { path: "materials.cfsPhysicalSafety.feedState", expected: 0 },
+        { path: "materials.cfsPhysicalSafety.errorClear", expected: true },
+        { path: "materials.cfsPhysicalSafety.fresh", expected: true },
+      ],
+    });
+    const dispatchPromise = integrationOptions.dispatcher.dispatch(request);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+
+    shadowRecord.lastSequence = 11;
+    shadowRecord.lastState.source.sequence = 11;
+    shadowRecord.lastState.materials.sources[0].selected = true;
+    shadowRecord.lastState.materials.sources[0].status.selected = true;
+    shadowRecord.lastState.materials.sources[0].status.selectionState = "selected";
+    shadowRecord.cfsPhysicalSafetyObservation = createCfsPhysicalSafetyObservation({
+      lastAppliedSequence: 11,
+      feedState: 1,
+      idle: false,
+    });
+    await vi.advanceTimersByTimeAsync(1500);
+
+    shadowRecord.lastSequence = 12;
+    shadowRecord.lastState.source.sequence = 12;
+    shadowRecord.cfsPhysicalSafetyObservation = createCfsPhysicalSafetyObservation({
+      lastAppliedSequence: 12,
+      feedState: 0,
+      idle: true,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    const result = await dispatchPromise;
+
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "acknowledged",
+      transportAccepted: true,
+      completed: true,
+      confirmationAttemptCount: 2,
+    });
+    expect(result.confirmation.confirmed).toBe(true);
+    expect(result.postCommandObservation).toMatchObject({
+      confirmed: true,
+      sequenceAdvanced: true,
+      sameSession: true,
+      commandCorrelated: true,
+    });
+  });
+
+  it("production dispatcherは送信後にsessionが変わった場合に再送せずunknown結果を返す", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-15T12:17:15.000+09:00"));
+    mockState.connectionTarget = createCertifiedCfsControlTarget();
+    const shadowRecord = createCfsLoadShadow();
+    mockState.monitorData.machines.K2Pro.runtimeData.printerCoreV3Shadow = shadowRecord;
+    mockState.validateRegisteredK2CfsSlotControlCertificationEvidence.mockReturnValue({
+      ok: true,
+      errors: [],
+    });
+    mockState.createK2CfsCommandTransportPlan.mockReturnValue({
+      ok: true,
+      frames: [],
+      details: {
+        semanticStatus: "certified",
+      },
+    });
+    mockState.sendK2CfsCommandTransportPlan.mockResolvedValue({ status: "acknowledged" });
+    const body = createFilamentPanelBody();
+    const {
+      createPrinterCommandRequest,
+    } = await import("../../3dp_lib/printer_core/dashboard_command_authority.js");
+    const {
+      initializePanel,
+      registerAllPanelInits,
+    } = await import("../../3dp_lib/dashboard_panel_init.js");
+
+    registerAllPanelInits();
+    initializeTrackedPanel(initializePanel, "filament", body, "K2Pro");
+    const integrationOptions = mockState.createBoundCfsControlIntegration.mock.calls[0][0];
+    const request = createPrinterCommandRequest({
+      deviceId: "serial:demo",
+      sessionId: "session:1",
+      commandKind: "cfs-load",
+      transportKind: "ws9999",
+      timeoutMs: 120000,
+      idempotencyKey: "load-1c-session-change",
+      createdAt: "2026-09-15T12:17:15.000+09:00",
+      entropySource: () => "session-change",
+      payload: {
+        sourceId: "cfs:1:slot:2",
+        boxId: 1,
+        slotIndex: 2,
+      },
+      expectedState: {
+        path: "materials.selectedSource.sourceId",
+        expected: "cfs:1:slot:2",
+      },
+    });
+    const dispatchPromise = integrationOptions.dispatcher.dispatch(request);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+
+    shadowRecord.sessionId = "session:2";
+    shadowRecord.lastState.source.sessionId = "session:2";
+    shadowRecord.lastSequence = 11;
+    shadowRecord.lastState.source.sequence = 11;
+    await vi.advanceTimersByTimeAsync(1500);
+    const result = await dispatchPromise;
+
+    expect(mockState.sendK2CfsCommandTransportPlan).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "confirmation-error",
+      transportAccepted: true,
+      completed: false,
+      confirmationAttemptCount: 1,
+      error: {
+        code: "confirmation-session-changed",
+      },
+    });
   });
 
   it("production dispatcherはsend-time topologyへCFS選択証跡を渡す", async () => {

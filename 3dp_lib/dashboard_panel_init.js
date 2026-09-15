@@ -25,9 +25,9 @@
  * - {@link destroyPanel}：パネル破棄前のクリーンアップ実行
  * - {@link registerAllPanelInits}：全パネル種別の初期化関数を一括登録
  *
- * @version 1.390.1674 (PR #442)
+ * @version 1.390.1675 (PR #442)
  * @since   1.390.783 (PR #366)
- * @lastModified 2026-09-15 12:03:51
+ * @lastModified 2026-09-15 12:17:15
  * -----------------------------------------------------------
  */
 
@@ -180,6 +180,48 @@ const CFS_CONTROL_DISABLED_REASON = "実機認証前のため3dpmonからのCFS/
  * @constant {Map<string, symbol>}
  */
 const CFS_PHYSICAL_COMMAND_IN_FLIGHT_BY_DEVICE = new Map();
+
+/**
+ * K2 CFS物理command送信後、最初の端末状態観測まで待つ時間ms。
+ *
+ * @constant {number}
+ */
+const CFS_CONTROL_CONFIRMATION_INITIAL_DELAY_MS = 1500;
+
+/**
+ * K2 CFS物理command送信後の端末状態観測間隔ms。
+ *
+ * @constant {number}
+ */
+const CFS_CONTROL_CONFIRMATION_INTERVAL_MS = 5000;
+
+/**
+ * K2 CFS物理command送信後の最大端末状態観測回数。
+ *
+ * 【詳細説明】
+ * - 実機captureで初期の短い観測窓を超えた操作があったため、約116.5秒まで状態だけを追跡する。
+ * - transport command自体は再送せず、観測回数だけを制限する。
+ *
+ * @constant {number}
+ */
+const CFS_CONTROL_CONFIRMATION_MAX_ATTEMPTS = 24;
+
+/**
+ * CFS物理command requestのtimeout ms。
+ *
+ * @constant {number}
+ */
+const CFS_CONTROL_REQUEST_TIMEOUT_MS = 120000;
+
+/**
+ * rendererがCFS物理command全体を待つtimeout ms。
+ *
+ * 【詳細説明】
+ * - dispatcherの最大観測窓より先にrendererがtimeoutしないよう、request timeoutへ5秒の猶予を加える。
+ *
+ * @constant {number}
+ */
+const CFS_CONTROL_UI_TIMEOUT_MS = 125000;
 
 /**
  * 配列/Set/map形式のcommand kind allow-listをSetへ正規化する。
@@ -763,19 +805,176 @@ function createCfsControlSendTimeContext(hostname, request) {
 }
 
 /**
- * CFS command送信後の観測snapshotを返す。
+ * CFS topologyから現在選択中と証明できる装填source IDを収集する。
+ *
+ * 【詳細説明】
+ * - `selectionValid:true`、`selected:true`、明示loadedの3条件をすべて満たすsourceだけを採用する。
+ * - 材料metadataの残留値や未観測selectionから選択状態を推定しない。
  *
  * @private
+ * @function collectSelectedLoadedCfsSourceIds
+ * @param {object|null|undefined} materials - live shadowのmaterials state
+ * @returns {string[]} 現在選択中と証明できるsource ID一覧
+ */
+function collectSelectedLoadedCfsSourceIds(materials) {
+  const sources = Array.isArray(materials?.sources) ? materials.sources : [];
+  return sources
+    .filter((source) => {
+      const status = source?.status && typeof source.status === "object" ? source.status : {};
+      const selectionValid = source?.selectionValid ?? status.selectionValid;
+      const selected = source?.selected ?? status.selected;
+      const explicitPresence = String(source?.presence || status.presence || "").trim();
+      const stateCode = Number(status.stateCode ?? source?.stateCode);
+      const loaded = explicitPresence === "loaded" || (!explicitPresence && stateCode === 1);
+      return selectionValid === true && selected === true && loaded;
+    })
+    .map((source) => String(source?.sourceId || "").trim())
+    .filter(Boolean);
+}
+
+/**
+ * CFS commandの端末選択状態へ到達したか判定する。
+ *
+ * 【詳細説明】
+ * - loadは対象sourceが唯一選択、unloadは選択sourceが0件になった場合だけ端末状態とする。
+ * - 複数選択や別source選択は成功として扱わず、後続観測を待つ。
+ *
+ * @private
+ * @function isCfsControlTerminalSelection
+ * @param {object|null|undefined} request - Printer Core command request
+ * @param {string[]} selectedSourceIds - 現在選択中source ID一覧
+ * @returns {boolean} command固有の端末選択状態ならtrue
+ */
+function isCfsControlTerminalSelection(request, selectedSourceIds) {
+  const commandKind = String(request?.commandKind || "").trim();
+  if (commandKind === "cfs-load") {
+    const targetSourceId = String(request?.payload?.sourceId || "").trim();
+    return Boolean(targetSourceId) &&
+      selectedSourceIds.length === 1 &&
+      selectedSourceIds[0] === targetSourceId;
+  }
+  if (commandKind === "cfs-unload") {
+    return selectedSourceIds.length === 0;
+  }
+  return false;
+}
+
+/**
+ * CFS command送信後の観測snapshotを返す。
+ *
+ * 【詳細説明】
+ * - live shadowの選択状態と同一frame由来のphysical safety証跡をcommand result用stateへ投影する。
+ * - 送信時session/generationから変化した場合、またはraw printer errorを観測した場合は、
+ *   物理結果不明としてconfirmation errorを返し、それ以上の観測や再送を止める。
+ * - command後sequence、端末選択状態、feed停止、error clear、freshが揃った場合だけtrusted transition proofを返す。
+ *
+ * @private
+ * @function observeCfsControlCommandState
  * @param {string} hostname - 対象ホスト名
+ * @param {object|null|undefined} request - Printer Core command request
+ * @param {object|null|undefined} context - transport送信時context
  * @returns {object} command result用観測snapshot
  */
-function observeCfsControlCommandState(hostname) {
+function observeCfsControlCommandState(hostname, request, context) {
   const shadowRecord = monitorData.machines[hostname]?.runtimeData?.printerCoreV3Shadow || null;
-  return {
-    observedState: shadowRecord?.lastState || null,
-    observedSequence: shadowRecord?.lastSequence ?? shadowRecord?.lastState?.source?.sequence ?? null,
-    observedSessionId: shadowRecord?.sessionId || "",
+  const observedState = shadowRecord?.lastState || null;
+  const observedSequence = shadowRecord?.lastSequence ?? observedState?.source?.sequence ?? null;
+  const observedSessionId = String(shadowRecord?.sessionId || observedState?.source?.sessionId || "").trim();
+  const currentGeneration = getPrinterCoreV3ConnectionGeneration(hostname);
+  const selectedSourceIds = collectSelectedLoadedCfsSourceIds(observedState?.materials);
+  const selectedSourceId = selectedSourceIds.length === 1
+    ? selectedSourceIds[0]
+    : (selectedSourceIds.length === 0 ? null : "multiple-selected-sources");
+  const physicalSafety = createCfsPhysicalSafetyObservationForCfsControl(shadowRecord);
+  const projectedState = observedState && typeof observedState === "object"
+    ? {
+      ...observedState,
+      materials: {
+        ...(observedState.materials || {}),
+        selectedSource: {
+          sourceId: selectedSourceId,
+          sourceIds: [...selectedSourceIds],
+        },
+        cfsPhysicalSafety: {
+          feedState: physicalSafety?.feedState ?? null,
+          errorClear: physicalSafety?.errorClear === true,
+          fresh: physicalSafety?.fresh === true,
+        },
+      },
+    }
+    : null;
+  const observation = {
+    observedState: projectedState,
+    observedSequence,
+    observedSessionId,
   };
+  if (getConnectionState(hostname) !== "connected") {
+    return {
+      ...observation,
+      confirmationError: {
+        code: "confirmation-connection-lost",
+        message: "The printer connection closed after CFS command submission.",
+      },
+    };
+  }
+  if (!observedSessionId || observedSessionId !== String(context?.sessionId || "").trim()) {
+    return {
+      ...observation,
+      confirmationError: {
+        code: "confirmation-session-changed",
+        message: "The active printer session changed after CFS command submission.",
+      },
+    };
+  }
+  if (!currentGeneration || currentGeneration !== Number(context?.connectionGeneration)) {
+    return {
+      ...observation,
+      confirmationError: {
+        code: "confirmation-generation-changed",
+        message: "The printer connection generation changed after CFS command submission.",
+      },
+    };
+  }
+  if (physicalSafety?.printerErrorObserved === true && physicalSafety.errorClear !== true) {
+    return {
+      ...observation,
+      confirmationError: {
+        code: "confirmation-printer-error",
+        message: `The printer reported an error after CFS command submission: ${physicalSafety.printerErrorCode ?? "?"}/${physicalSafety.printerErrorKey ?? "?"}.`,
+      },
+    };
+  }
+  const sentSequence = Number(context?.stateSequence);
+  const currentSequence = Number(observedSequence);
+  const sequenceAdvanced = Number.isFinite(sentSequence) &&
+    Number.isFinite(currentSequence) &&
+    currentSequence > sentSequence;
+  const safetyBoundToCurrentFrame = physicalSafety?.physicalIdleEvidenceComplete === true &&
+    physicalSafety?.fresh === true &&
+    physicalSafety?.idle === true &&
+    physicalSafety?.feedStateObserved === true &&
+    physicalSafety?.feedState === 0 &&
+    physicalSafety?.printerErrorObserved === true &&
+    physicalSafety?.errorClear === true &&
+    physicalSafety?.sessionId === observedSessionId &&
+    Number(physicalSafety?.connectionGeneration) === currentGeneration &&
+    Number(physicalSafety?.lastAppliedSequence) === currentSequence;
+  if (
+    sequenceAdvanced &&
+    safetyBoundToCurrentFrame &&
+    isCfsControlTerminalSelection(request, selectedSourceIds)
+  ) {
+    return {
+      ...observation,
+      trustedCorrelationProof: {
+        evidenceSource: "k2-live-shadow-terminal-transition",
+        transitionId: `${request.commandId}:${currentSequence}`,
+        commandId: request.commandId,
+        sessionId: observedSessionId,
+      },
+    };
+  }
+  return observation;
 }
 
 /**
@@ -1038,6 +1237,64 @@ function persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput) {
 }
 
 /**
+ * terminal stateまで確認済みのCFS command予約ラッチを観測解決する。
+ *
+ * 【詳細説明】
+ * - transport前にdurable保存したsubmitted予約は、CommandResultがcompletedになっても自動では消えない。
+ * - 同一command/session/sourceへ束縛されたpost-command correlationを根拠にobserved解決し、次の物理操作を許可する。
+ * - timeout、confirmation error、未確認結果は解決せず、operator確認までfail-closedラッチを維持する。
+ *
+ * @private
+ * @function resolveCompletedCfsControlRecoveryLatch
+ * @param {string} hostname - 対象ホスト名
+ * @param {object} dispatchOutput - CFS command integrationの戻り値
+ * @returns {object} recoveryLatch diagnosticsを付加したdispatchOutput
+ */
+function resolveCompletedCfsControlRecoveryLatch(hostname, dispatchOutput) {
+  const result = dispatchOutput?.result || null;
+  const request = dispatchOutput?.request || null;
+  if (!request || result?.completed !== true) {
+    return dispatchOutput;
+  }
+  const currentStore = monitorData.physicalCommandRecoveryLatch || null;
+  const currentRecord = currentStore?.unresolvedByCommandId?.[request.commandId] || null;
+  if (!currentRecord) {
+    return dispatchOutput;
+  }
+  const postObservation = result.postCommandObservation || {};
+  const resolutionResult = resolvePhysicalCommandRecoveryLatchRecord(currentStore, {
+    commandId: request.commandId,
+    resolution: "observed-terminal-confirmed",
+    resolvedAt: new Date().toISOString(),
+    expectedDeviceId: request.deviceId,
+    expectedDigest: currentRecord.digest || null,
+    expectedCommandKind: request.commandKind,
+    expectedMaterialSourceId: request.payload?.sourceId || null,
+    resolutionSource: "printer-core-command-dispatcher",
+    operatorAcknowledged: false,
+    panelDeviceId: request.deviceId,
+    postObservation: {
+      sequence: postObservation.observedSequence ?? null,
+      digest: postObservation.correlationId || null,
+      observedAt: result.completedAt || new Date().toISOString(),
+    },
+  });
+  if (resolutionResult?.ok === true && resolutionResult.store) {
+    monitorData.physicalCommandRecoveryLatch = resolutionResult.store;
+    saveUnifiedStorage(true);
+  }
+  return {
+    ...dispatchOutput,
+    recoveryLatch: {
+      ok: resolutionResult?.ok === true,
+      status: resolutionResult?.status || "unknown",
+      commandId: request.commandId,
+      latchStatus: resolutionResult?.ok === true ? "completed" : currentRecord.status,
+    },
+  };
+}
+
+/**
  * production CFS control用のbound dispatcherを生成する。
  *
  * @private
@@ -1077,7 +1334,10 @@ function createCfsControlDispatcher(hostname) {
         releaseCfsPhysicalCommandFlightLock(flightLock);
       }
     },
-    observeState: () => observeCfsControlCommandState(hostname),
+    observeState: (request, context) => observeCfsControlCommandState(hostname, request, context),
+    confirmationInitialDelayMs: CFS_CONTROL_CONFIRMATION_INITIAL_DELAY_MS,
+    confirmationIntervalMs: CFS_CONTROL_CONFIRMATION_INTERVAL_MS,
+    confirmationMaxAttempts: CFS_CONTROL_CONFIRMATION_MAX_ATTEMPTS,
   });
 }
 
@@ -1115,6 +1375,7 @@ function createCfsControlRenderOptions(hostname) {
           transportKind: "ws9999",
           idempotencyKey: `cfs-control:${hostname}:${Date.now()}`,
           createdAt: new Date().toISOString(),
+          timeoutMs: CFS_CONTROL_REQUEST_TIMEOUT_MS,
         };
       },
     });
@@ -1123,6 +1384,7 @@ function createCfsControlRenderOptions(hostname) {
       canSendCommands: true,
       allowedActions: productionSettings.allowedActions,
       disabledReason: null,
+      commandTimeoutMs: CFS_CONTROL_UI_TIMEOUT_MS,
       validateCommandIntent(intent) {
         return validateCfsControlIntentFreshness(hostname, intent);
       },
@@ -1138,14 +1400,15 @@ function createCfsControlRenderOptions(hostname) {
        */
       async onCommand(intent) {
         const dispatchOutput = await integration.onCommand(intent);
-        return persistCfsControlRecoveryLatchIfNeeded(hostname, dispatchOutput);
+        const resolvedOutput = resolveCompletedCfsControlRecoveryLatch(hostname, dispatchOutput);
+        return persistCfsControlRecoveryLatchIfNeeded(hostname, resolvedOutput);
       },
       /**
        * 観測で確認できたCFS操作を永続復旧ラッチへ反映する。
        *
        * 【詳細説明】
-       * - `cfs-slot-select` のように次のmaterial観測でexpected stateを確認できる場合だけrendererから呼ばれる。
-       * - load/unload/feed/retractは現時点で観測だけでは物理成功を確定しないため、このhookへは到達しない。
+       * - dispatcher内の有界観測で解決できなかったcommandを、後続material観測で確認できた場合にrendererから呼ばれる。
+       * - transportのblind retryは行わず、同一command IDの予約ラッチだけを解決する。
        *
        * @param {object} request - 観測解決要求
        * @returns {object} 復旧ラッチ解決結果

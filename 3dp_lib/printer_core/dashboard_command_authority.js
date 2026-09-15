@@ -23,9 +23,9 @@
  * - {@link isBoundPrinterCommandDispatcher}：bound dispatcher由来かを判定
  * - {@link dispatchPrinterCommand}：送信時再検証、transport送信、expected-state確認を一連で実行
  *
- * @version 1.390.1674 (PR #442)
+ * @version 1.390.1675 (PR #442)
  * @since   1.390.1342 (PR #432)
- * @lastModified 2026-09-15 11:47:43
+ * @lastModified 2026-09-15 12:17:15
  * -----------------------------------------------------------
  * @todo
  * - legacy dashboard_send_command.js / dashboard_printmanager.js の送信経路へ段階的に接続する
@@ -221,6 +221,17 @@ const COMMAND_TRANSPORT_ACCEPTED_STATUSES = Object.freeze(new Set([
   "ok",
   "success",
 ]));
+
+/**
+ * 1commandで許可する端末状態観測回数の防御的上限。
+ *
+ * 【詳細説明】
+ * - composition layerの誤設定で無限観測にならないよう、明示回数をこの値以下へ制限する。
+ * - 通常のK2 CFS運用は24回を使うため、十分な余裕を残しつつ暴走だけを防ぐ。
+ *
+ * @constant {number}
+ */
+const MAX_COMMAND_CONFIRMATION_ATTEMPTS = 1000;
 
 /**
  * JSON 互換値を deep clone する。
@@ -1597,7 +1608,73 @@ function normalizeCommandObservation(observation, context) {
     fileIdentity: observation?.fileIdentity || context.fileIdentity || null,
     commandCorrelation: observation?.commandCorrelation || null,
     trustedCorrelationProof: observation?.trustedCorrelationProof || observation?.protocolCorrelation || null,
+    confirmationError: observation?.confirmationError && typeof observation.confirmationError === "object"
+      ? cloneJsonValue(observation.confirmationError)
+      : null,
   };
+}
+
+/**
+ * command後の端末状態観測ポリシーを正規化する。
+ *
+ * 【詳細説明】
+ * - 明示的な最大試行回数が無い既存dispatcherは従来どおり1回だけ観測する。
+ * - expected-stateが無いrequestやobserve hookが無い場合は反復を有効化しない。
+ * - delayはrequest timeout以下、試行回数はmodule上限以下へ制限する。
+ *
+ * @private
+ * @param {object} request - command request
+ * @param {object} options - dispatcher options
+ * @returns {{enabled:boolean,maxAttempts:number,initialDelayMs:number,intervalMs:number,waitForObservation:Function}} 正規化済み観測ポリシー
+ */
+function normalizeCommandConfirmationPolicy(request, options = {}) {
+  const requestedAttempts = Number(options.confirmationMaxAttempts);
+  const hasExplicitAttempts = Number.isFinite(requestedAttempts) && requestedAttempts > 0;
+  const canObserve = typeof options.observeState === "function";
+  const hasExpectedState = Boolean(request?.expectedStateRequired) &&
+    Array.isArray(request?.expectedState) &&
+    request.expectedState.length > 0;
+  const maxAttempts = hasExplicitAttempts
+    ? Math.min(MAX_COMMAND_CONFIRMATION_ATTEMPTS, Math.max(1, Math.floor(requestedAttempts)))
+    : 1;
+  const timeoutMs = Number.isFinite(Number(request?.timeoutMs)) && Number(request.timeoutMs) > 0
+    ? Number(request.timeoutMs)
+    : DEFAULT_PRINTER_COMMAND_TIMEOUT_MS;
+  const normalizeDelay = (value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0
+      ? Math.min(timeoutMs, Math.floor(numeric))
+      : 0;
+  };
+  return {
+    enabled: hasExplicitAttempts && canObserve && hasExpectedState,
+    maxAttempts,
+    initialDelayMs: normalizeDelay(options.confirmationInitialDelayMs),
+    intervalMs: normalizeDelay(options.confirmationIntervalMs),
+    waitForObservation: typeof options.waitForObservation === "function"
+      ? options.waitForObservation
+      : waitForCommandObservation,
+  };
+}
+
+/**
+ * 次のcommand状態観測まで指定時間待機する。
+ *
+ * 【詳細説明】
+ * - productionではtimer待機し、単体テストではbound providerから決定的なwait実装を注入できる。
+ * - 0以下は即時解決し、不要なtimerを生成しない。
+ *
+ * @private
+ * @param {number} delayMs - 待機時間ms
+ * @returns {Promise<void>} 待機完了Promise
+ */
+function waitForCommandObservation(delayMs) {
+  if (!Number.isFinite(Number(delayMs)) || Number(delayMs) <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    setTimeout(resolve, Number(delayMs));
+  });
 }
 
 /**
@@ -1724,6 +1801,10 @@ function createTrustedCommandCorrelationFromObservation(request, context, observ
  * @param {Function=} providers.observeState - trusted observation provider
  * @param {Function=} providers.nowMs - epoch ms provider
  * @param {number=} providers.contextTtlMs - context TTL ms
+ * @param {number=} providers.confirmationMaxAttempts - transport送信後の最大観測回数
+ * @param {number=} providers.confirmationInitialDelayMs - 初回観測前の待機時間ms
+ * @param {number=} providers.confirmationIntervalMs - 2回目以降の観測間隔ms
+ * @param {Function=} providers.waitForObservation - 観測待機provider `(delayMs) => Promise<void>`
  * @param {string=} providers.completedAt - 完了時刻ISO文字列
  * @returns {object} bound dispatcher
  * @example
@@ -1745,6 +1826,10 @@ export function createBoundPrinterCommandDispatcher(providers = {}) {
         observeState: providers.observeState,
         nowMs: providers.nowMs,
         contextTtlMs: providers.contextTtlMs,
+        confirmationMaxAttempts: providers.confirmationMaxAttempts,
+        confirmationInitialDelayMs: providers.confirmationInitialDelayMs,
+        confirmationIntervalMs: providers.confirmationIntervalMs,
+        waitForObservation: providers.waitForObservation,
         completedAt: providers.completedAt,
         trustedCorrelationIssuer: TRUSTED_COMMAND_CORRELATION_ISSUER,
       });
@@ -1792,6 +1877,10 @@ export function isBoundPrinterCommandDispatcher(dispatcher) {
  * @param {Function} options.getSendTimeContext - 送信直前snapshot取得hook
  * @param {Function} options.sendTransport - transport送信hook `(request, context) => Promise<*>`
  * @param {Function=} options.observeState - expected-state確認用観測hook `(request, context, response) => Promise<object>`
+ * @param {number=} options.confirmationMaxAttempts - transport送信後の最大観測回数
+ * @param {number=} options.confirmationInitialDelayMs - 初回観測前の待機時間ms
+ * @param {number=} options.confirmationIntervalMs - 2回目以降の観測間隔ms
+ * @param {Function=} options.waitForObservation - 観測待機provider `(delayMs) => Promise<void>`
  * @param {string=} options.completedAt - result完了時刻ISO文字列
  * @returns {Promise<object>} command result
  * @example
@@ -1833,41 +1922,89 @@ export async function dispatchPrinterCommand(request, options = {}) {
       completedAt: options.completedAt || null,
     });
   }
-  let observation;
-  try {
-    observation = typeof options.observeState === "function"
-      ? await options.observeState(request, context, response)
-      : null;
-  } catch (error) {
-    return createPrinterCommandResult(request, {
-      status: "confirmation-error",
+  const transportStatus = normalizeTransportStatus(response);
+  const transportAccepted = COMMAND_TRANSPORT_ACCEPTED_STATUSES.has(transportStatus);
+  const confirmationPolicy = normalizeCommandConfirmationPolicy(request, options);
+  const sentSequence = normalizeSequence(context.stateSequence);
+  let lastObservation = normalizeCommandObservation(null, context);
+  let lastCommandCorrelation = null;
+  for (let attempt = 1; attempt <= confirmationPolicy.maxAttempts; attempt += 1) {
+    const delayMs = attempt === 1
+      ? confirmationPolicy.initialDelayMs
+      : confirmationPolicy.intervalMs;
+    try {
+      if (confirmationPolicy.enabled) {
+        await confirmationPolicy.waitForObservation(delayMs);
+      }
+      const observation = typeof options.observeState === "function"
+        ? await options.observeState(request, context, response)
+        : null;
+      lastObservation = normalizeCommandObservation(observation, context);
+    } catch (error) {
+      return createPrinterCommandResult(request, {
+        status: "confirmation-error",
+        transportAccepted,
+        response,
+        error: {
+          code: "confirmation-error",
+          message: error?.message || String(error),
+        },
+        confirmationAttemptCount: attempt,
+        completedAt: options.completedAt || null,
+      });
+    }
+    if (lastObservation.confirmationError) {
+      return createPrinterCommandResult(request, {
+        status: "confirmation-error",
+        transportAccepted,
+        response,
+        error: lastObservation.confirmationError,
+        observedState: lastObservation.observedState,
+        sentSequence,
+        observedSequence: lastObservation.observedSequence,
+        observedSessionId: lastObservation.observedSessionId,
+        confirmationAttemptCount: attempt,
+        completedAt: options.completedAt || null,
+      });
+    }
+    lastCommandCorrelation = lastObservation.commandCorrelation ||
+      createTrustedCommandCorrelationFromObservation(
+        request,
+        context,
+        lastObservation,
+        sentSequence,
+        response,
+        options.trustedCorrelationIssuer
+      );
+    const result = createPrinterCommandResult(request, {
+      status: transportStatus,
       response,
-      error: {
-        code: "confirmation-error",
-        message: error?.message || String(error),
-      },
+      observedState: lastObservation.observedState,
+      sentSequence,
+      observedSequence: lastObservation.observedSequence,
+      observedSessionId: lastObservation.observedSessionId,
+      commandCorrelation: lastCommandCorrelation,
+      confirmationAttemptCount: attempt,
       completedAt: options.completedAt || null,
     });
+    if (result.completed || !confirmationPolicy.enabled || !transportAccepted) {
+      return result;
+    }
   }
-  const normalizedObservation = normalizeCommandObservation(observation, context);
-  const sentSequence = normalizeSequence(context.stateSequence);
-  const commandCorrelation = normalizedObservation.commandCorrelation ||
-    createTrustedCommandCorrelationFromObservation(
-      request,
-      context,
-      normalizedObservation,
-      sentSequence,
-      response,
-      options.trustedCorrelationIssuer
-    );
   return createPrinterCommandResult(request, {
-    status: normalizeTransportStatus(response),
+    status: "timeout",
+    transportAccepted: true,
     response,
-    observedState: normalizedObservation.observedState,
+    error: {
+      code: "confirmation-timeout",
+      message: "The command transport was accepted, but the terminal state was not observed in time.",
+    },
+    observedState: lastObservation.observedState,
     sentSequence,
-    observedSequence: normalizedObservation.observedSequence,
-    observedSessionId: normalizedObservation.observedSessionId,
-    commandCorrelation,
+    observedSequence: lastObservation.observedSequence,
+    observedSessionId: lastObservation.observedSessionId,
+    commandCorrelation: lastCommandCorrelation,
+    confirmationAttemptCount: confirmationPolicy.maxAttempts,
     completedAt: options.completedAt || null,
   });
 }
@@ -2025,11 +2162,13 @@ function evaluatePostCommandObservation(request, options = {}) {
  * @param {string=} options.status - result status
  * @param {object=} options.response - transport response
  * @param {object=} options.error - error 情報
+ * @param {boolean=} options.transportAccepted - 送信後確認error/timeout時に保持するtransport受理状態
  * @param {object=} options.observedState - confirmation に使う NormalizedPrinterState
  * @param {number=} options.sentSequence - command 送信時の state sequence
  * @param {number=} options.observedSequence - confirmation 観測時の state sequence
  * @param {string=} options.observedSessionId - confirmation 観測の session ID
  * @param {object=} options.commandCorrelation - command correlation evidence
+ * @param {number=} options.confirmationAttemptCount - 端末状態の観測試行回数
  * @param {string=} options.completedAt - 完了時刻 ISO 文字列
  * @returns {object} command result
  * @example
@@ -2038,12 +2177,13 @@ function evaluatePostCommandObservation(request, options = {}) {
 export function createPrinterCommandResult(request, options = {}) {
   const confirmation = evaluateExpectedStateConfirmation(request, options.observedState);
   const status = options.status || "unknown";
-  const transportAccepted = !options.error && COMMAND_TRANSPORT_ACCEPTED_STATUSES.has(status);
-  const hasError = Boolean(options.error) || !transportAccepted;
+  const transportAccepted = typeof options.transportAccepted === "boolean"
+    ? options.transportAccepted
+    : (!options.error && COMMAND_TRANSPORT_ACCEPTED_STATUSES.has(status));
   const postCommandObservation = evaluatePostCommandObservation(request, options);
-  const completed = transportAccepted &&
+  const completed = transportAccepted && !options.error &&
     (!request.expectedStateRequired || (confirmation.confirmed && postCommandObservation.confirmed));
-  return {
+  const result = {
     schemaVersion: PRINTER_COMMAND_SCHEMA_VERSION,
     commandId: request.commandId,
     deviceId: request.deviceId,
@@ -2058,6 +2198,10 @@ export function createPrinterCommandResult(request, options = {}) {
     postCommandObservation,
     completedAt: options.completedAt || null,
   };
+  if (Number.isFinite(Number(options.confirmationAttemptCount))) {
+    result.confirmationAttemptCount = Number(options.confirmationAttemptCount);
+  }
+  return result;
 }
 
 /**

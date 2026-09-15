@@ -122,21 +122,23 @@
 - Consumes: single transport submission and fresh shadow observations.
 - Produces: load terminal=`target selected + feedState 0 + error clear`; unload terminal=`selected none + feedState 0 + error clear`.
 
-- [ ] **Step 1: Write failing confirmation tests**
+- [x] **Step 1: Write failing confirmation tests**
 
   即時未完了から後続観測で成功、timeoutでunresolved latch、途中error/feed busy、session/generation change、command送信回数1を固定する。
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
   Run: `npx vitest run tests/unit/printer_core_cfs_command_integration.test.js tests/unit/dashboard_panel_init_cfs_control_hook.test.js tests/unit/printer_core_command_authority.test.js`
 
-- [ ] **Step 3: Implement bounded read-only observation**
+- [x] **Step 3: Implement bounded read-only observation**
 
   `observeState`だけを一定間隔で反復し、transportを再呼び出さない。terminal condition成立時だけtrusted transition proofを返し、timeoutは未確認結果としてrecovery latchへ残す。
 
-- [ ] **Step 4: Run GREEN tests**
+- [x] **Step 4: Run GREEN tests**
 
   Run: `npx vitest run tests/unit/printer_core_cfs_command_integration.test.js tests/unit/dashboard_panel_init_cfs_control_hook.test.js tests/unit/printer_core_command_authority.test.js`
+
+  Result: 3 files / 102 tests PASS、targeted ESLint PASS、`git diff --check` PASS。
 
 ### Task 5: Activation Registry And Documentation
 
