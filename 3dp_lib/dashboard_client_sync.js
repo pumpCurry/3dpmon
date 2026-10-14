@@ -38,6 +38,7 @@ import {
   PLACEHOLDER_HOSTNAME
 } from "./dashboard_data.js";
 import { normalizeTimeZone, wallNowMs } from "./dashboard_time.js";
+import { itemKeeperRelayPublicSettings } from "./dashboard_itemkeeper_relay_public.js";
 
 /** dashboard_ui の updateStoredDataToDOM を遅延解決（重い UI 連鎖を import 時に巻き込まない） */
 let _updateStoredDataToDOM = null;
@@ -565,7 +566,9 @@ function _refreshFilamentPreviews() {
  */
 function _applyItemkeeperSettings(ik) {
   if (!ik || typeof ik !== "object") return;
-  monitorData.appSettings.itemkeeper = ik;
+  // Defense in depth: even a malformed/old relay snapshot may not persist
+  // sender-only client credentials in a readonly/satellite mirror.
+  monitorData.appSettings.itemkeeper = itemKeeperRelayPublicSettings(ik);
   try { window.itemKeeperIntegration?.loadSettings?.(); } catch { /* noop */ }
   try { window.itemKeeperIntegration?.refreshOpenModal?.(); } catch { /* noop */ }
 }
