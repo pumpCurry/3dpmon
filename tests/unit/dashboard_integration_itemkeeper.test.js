@@ -638,3 +638,47 @@ describe("リレー子ガード／親逆反映 (relay mirror)", () => {
     expect(mockMonitorData.appSettings.itemkeeper.attachFilamentHistory).toBe(true);
   });
 });
+
+describe("R19-b / X-05: 413 recent:50 fallthrough is a partial-delivery counterexample", () => {
+  it("sends 150 original entries, then only last 50 after 413 while reporting ok", async () => {
+    const oldFetch = globalThis.fetch;
+    const oldCS = globalThis.CompressionStream;
+    try {
+      mockMonitorData.appSettings.connectionTargets = [
+        { dest:"127.0.0.1:9999",hostname:"lab",label:"Lab Printer" }
+      ];
+      mockMonitorData.machines.lab = {
+        storedData: {},
+        printStore:{history: Array.from({length:150},(_,i)=>job({
+          id: 100000+i,
+          finishTime: "2026-06-08T15:47:30.000Z",
+          printfinish: 1,
+          materialUsedMm: 1
+        }))}
+      };
+      const ik=newIK({enabled:true,endpoint:"https://example.invalid/api/ingest/print-events",
+                      clientId:"test-client",secret:"test-only",historyScope:"all"});
+      vi.spyOn(ik,"_maybeGzip").mockImplementation(async str=>({body:str,gzipped:false}));
+      globalThis.fetch=vi.fn()
+        .mockResolvedValueOnce({ok:false,status:413})
+        .mockResolvedValueOnce({ok:true,status:200});
+      const initial=ik.buildSnapshot("print.finished","lab");
+      expect(initial.devices[0].jobs).toHaveLength(150);
+      const r=await ik._post("https://example.invalid/api/ingest/print-events",
+                              "print.finished",initial,{host:"lab",retriesLeft:0});
+      expect(r.ok).toBe(true);
+      const deliveries=globalThis.fetch.mock.calls.map((call)=>JSON.parse(call[1].body));
+      expect(deliveries).toHaveLength(2);
+      expect(deliveries[0].devices[0].jobs).toHaveLength(150);
+      expect(deliveries[1].devices[0].jobs).toHaveLength(50);
+      const fullIds = new Set(deliveries[0].devices[0].jobs.map(x=>x.jobId));
+      const retryIds = new Set(deliveries[1].devices[0].jobs.map(x=>x.jobId));
+      expect([...fullIds].filter(id=>!retryIds.has(id))).toHaveLength(100);
+      // "ok" means the reduced request got 2xx, not delivery of full 150.
+      expect(r).toEqual({ok:true,status:200});
+    } finally {
+      globalThis.fetch=oldFetch;
+      globalThis.CompressionStream=oldCS;
+    }
+  });
+});
