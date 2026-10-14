@@ -148,7 +148,14 @@ export class ItemKeeperIntegration {
    */
   applyRemoteSettings(ik) {
     if (!ik || typeof ik !== "object") return;
-    this.settings = { ...DEFAULTS, ...ik };
+    // Parent-only outbound client credential authority: a satellite/readonly
+    // relay-settings request must never replace the protected sender identity.
+    const current = monitorData.appSettings[SETTINGS_KEY] || this.settings || DEFAULTS;
+    this.settings = {
+      ...DEFAULTS, ...ik,
+      clientId: current.clientId || "",
+      secret: current.secret || ""
+    };
     this.settings.encoding = "none"; // Phase1 は none 固定
     this.persist();
   }
