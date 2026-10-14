@@ -34,6 +34,7 @@ import { monitorData, PLACEHOLDER_HOSTNAME } from "./dashboard_data.js";
 import { sendCommand, getHttpPort } from "./dashboard_connection.js";
 import { extractHost } from "./dashboard_target_identity.js";
 import { wallNowMs } from "./dashboard_time.js";
+import { itemKeeperRelayPublicSettings } from "./dashboard_itemkeeper_relay_public.js";
 
 /** ブリッジ初期化済みフラグ */
 let _initialized = false;
@@ -770,7 +771,7 @@ function _buildDelta() {
   if (ikHash !== _prevIkHash) {
     _prevIkHash = ikHash;
     sharedDelta = sharedDelta || {};
-    sharedDelta.appSettingsItemkeeper = monitorData.appSettings.itemkeeper || {};
+    sharedDelta.appSettingsItemkeeper = itemKeeperRelayPublicSettings(monitorData.appSettings.itemkeeper);
     hasChanges = true;
   }
 
@@ -869,7 +870,7 @@ function _buildFullSnapshot() {
       connectionTargets: monitorData.appSettings.connectionTargets || [],
       // ★ ItemKeeper 連携設定を子へミラー（親が唯一の設定元・送信元）。
       //   子(readonly=閲覧専用ミラー / satellite=編集可だが変更は relay-settings で親へ逆反映)。
-      itemkeeper: monitorData.appSettings.itemkeeper || {},
+      itemkeeper: itemKeeperRelayPublicSettings(monitorData.appSettings.itemkeeper),
       // ★ レビュー(時計衛生): 業務タイムゾーン(親権威)を子へミラー（日次/月次集計の既定ゾーン）。
       businessTimeZone: monitorData.appSettings.businessTimeZone ?? null,
       // 旧履歴移行の固定基準ゾーンも子へミラー（親の tz-less 旧履歴を子が同一解釈するため）。
